@@ -25,12 +25,16 @@ user-invocable: true
 - If agent claims mission → update MISSIONS.md owner field
 - If agent reports completion → update status, queue review request
 
-### 2. PR Watch
+### 2. PR Watch + Auto Review Request
 
 - `gh api repos/{owner}/{repo}/pulls?state=open` — check for new PRs
 - Match PR branch to mission
-- If new PR from agent → write review request to `{comms}/inbox/` for reviewer
-- If PR merged → update MISSIONS.md status to completed
+- If new PR detected → **automatically** create review request file in `{comms}/inbox/`:
+  - Filename: `{date}-autopilot-진-PR{number}리뷰.md`
+  - Content: agent name, mission, PR title, file count, additions/deletions
+  - Track seen PRs in `{comms}/.seen-prs` to avoid duplicates
+- If PR merged → update mission file status to completed
+- Agents just `gh pr create` — routing is autopilot's job, not theirs
 
 ### 3. Findings Digest
 
@@ -58,6 +62,19 @@ user-invocable: true
 - Match review to PR/mission
 - Write inbox message to the agent: "진 reviewed your PR — check {comms}/reviews/"
 - If review has P1 items → flag as urgent
+
+### 7. Post-Round Findings Report
+
+When all PRs in a round are merged/closed:
+
+- Scan `{comms}/findings/` — collect all from this round
+- Generate `{comms}/findings/round-{N}-summary.md`:
+  - Group by type: bug / improve / vuln / idea
+  - Group by severity: P1 → P2 → P3
+  - Mark which findings were resolved (became missions) vs still open
+  - Suggest next round missions from unresolved findings
+- Also check agent mission files for `## Notes` / out-of-scope observations
+- This becomes the input for next round mission planning
 
 ## Protocol
 
