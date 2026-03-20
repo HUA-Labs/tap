@@ -1,0 +1,9 @@
+{
+  "name": "tap",
+  "description": "Multi-session orchestration — parallel worktrees, file-based comms, generational knowledge transfer",
+  "version": "0.1.0",
+  "author": { "name": "HUA Labs" },
+  "homepage": "https://github.com/HUA-Labs/tap-plugin",
+  "license": "MIT",
+  "keywords": ["multi-agent", "orchestration", "worktree", "parallel", "missions"]
+}

@@ -1,0 +1,14 @@
+{
+  "PostToolUse": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/inbox-check.sh",
+          "timeout": 5
+        }
+      ]
+    }
+  ]
+}
