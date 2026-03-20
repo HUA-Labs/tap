@@ -4,7 +4,29 @@
 
 tap is not just a tool. It's a coordination system: parallel worktrees, file-based communication, generational knowledge transfer, and scope isolation — all working together so multiple Claude Code agents can collaborate on a codebase without stepping on each other.
 
-Built from three generations of real multi-session orchestration at HUA Labs.
+Built from three generations of real multi-session orchestration — 16 agents, 27 missions, 8 PRs per round, zero merge conflicts.
+
+```
+Gen 1: "This actually works"
+Gen 2: "This works even better with these rules"
+Gen 3: "Let's make it installable so anyone can use it"
+```
+
+---
+
+## Results (Real Production Use)
+
+In a single session (~4 hours):
+
+- **8 parallel agents** across 2 rounds
+- **8 PRs** created, reviewed, and merged
+- **4 security vulnerabilities** found and fixed (cross-agent discovery)
+- **127 tests** added
+- **19 undocumented hooks** classified
+- **Registry audit automation** built (one agent's finding became another's mission)
+- **0 merge conflicts** between parallel agents
+
+The key: an agent auditing hooks found security issues in utils. An agent syncing docs proposed automation. The next round's agents picked up exactly where they left off via handoff documents. **Cross-validation happened naturally** because agents could only record findings, not fix things outside their scope.
 
 ---
 
@@ -245,6 +267,22 @@ tap-plugin/
     ├── handoff.md              # Handoff document template
     └── retro.md                # Retrospective template
 ```
+
+---
+
+## Why "tap"?
+
+탑(塔) — Korean/Chinese for "tower." The control tower that coordinates parallel sessions.
+
+Also: **t**ask **a**nd **p**rotocol. Or just "tap into parallel missions."
+
+---
+
+## Contributing
+
+Built by [HUA Labs](https://github.com/HUA-Labs). Issues and PRs welcome.
+
+The best way to contribute? Use tap, run a generation, and submit your retro as a PR. Every generation's lessons make the next one better.
 
 ---
 
