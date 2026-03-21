@@ -1,280 +1,286 @@
 # tap
 
-**An installable operating protocol for multi-agent Claude Code sessions.**
+> Sessions end. Systems grow.
 
-tap is not just a tool. It's a coordination system: parallel worktrees, file-based communication, generational knowledge transfer, and scope isolation — all working together so multiple Claude Code agents can collaborate on a codebase without stepping on each other.
+**A local-first, cross-model collaboration protocol for AI coding agents.**
 
-Built from three generations of real multi-session orchestration — 16 agents, 27 missions, 8 PRs per round, zero merge conflicts.
+tap lets multiple AI coding sessions work in parallel and talk to each other through files — with optional real-time delivery across models.
 
-```
-Gen 1: "This actually works"
-Gen 2: "This works even better with these rules"
-Gen 3: "Let's make it installable so anyone can use it"
-```
+On March 20, 2026, Anthropic shipped MCP Channels. The next day, we used it to connect Claude and Codex in real-time. Neither company designed it for this.
 
 ---
 
-## Results (Real Production Use)
+## What is tap?
 
-In a single session (~4 hours):
+**tap is a protocol that composes multiple AI runtimes into a single cooperative system using only official interfaces.**
 
-- **8 parallel agents** across 2 rounds
-- **8 PRs** created, reviewed, and merged
-- **4 security vulnerabilities** found and fixed (cross-agent discovery)
-- **127 tests** added
-- **19 undocumented hooks** classified
-- **Registry audit automation** built (one agent's finding became another's mission)
-- **0 merge conflicts** between parallel agents
+It connects Claude Code sessions — and Codex (OpenAI) sessions — through a shared file-based inbox and MCP channels.
 
-The key: an agent auditing hooks found security issues in utils. An agent syncing docs proposed automation. The next round's agents picked up exactly where they left off via handoff documents. **Cross-validation happened naturally** because agents could only record findings, not fix things outside their scope.
+It did not start as a chat layer. It started as an operating protocol for scoped parallel worktrees, file-based comms, and generational handoff. Real-time cross-model delivery came after that.
+
+No API proxy. No OAuth bypass. No SaaS dependency. Just files, a 400-line MCP server, and a protocol.
+
+**tap is not a product — it's a substrate.** Take what you need:
+
+| Layer | What it does | Use alone? |
+|-------|-------------|------------|
+| Worktrees + Missions | Scoped parallel work, no conflicts | Yes |
+| File Inbox | Async messages between sessions | Yes |
+| MCP Channel Push | Real-time delivery to Claude sessions | Yes |
+| Codex App Server Bridge | Real-time delivery to Codex sessions | Yes |
+| Generational Transfer | Retros, handoffs, findings across sessions | Yes |
 
 ---
 
 ## The Problem
 
-Running multiple Claude Code sessions in parallel is powerful. But coordination chaos destroys the value:
+We ran 5+ AI coding agents in parallel across worktrees. Powerful — until you need them to coordinate. Someone had to walk between terminal tabs, copying messages, relaying review results, forwarding notifications.
 
-- Agents modify the same files and conflict
-- One agent fixes something it wasn't supposed to, creating a mess in another agent's scope
-- A session ends and the next agent starts at 0% context
-- The control session checks out branches and creates merge conflicts
-- Reviews sit in GitHub PR comments that agents never see
-- There's no way to record discoveries without derailing the current task
+We called that someone "the pigeon." It was the CEO.
 
-tap solves all of these with a simple protocol: **missions, comms, and worktrees**.
+For 4 generations of agent sessions, the pigeon flew. Then we built tap, and the pigeon retired.
 
 ---
 
-## How It Works
+## Results
 
-### Missions
+### Session 38 (Day 4 of tap)
 
-Every parallel workstream is a **mission** with:
-- An ID and title
-- A defined scope (directories/files it owns)
-- A branch and slot-based worktree path
-- A task list with phases and checkboxes
-- A status (planned / active / blocked / paused / completed)
+| Metric | Value |
+|--------|-------|
+| Agents | 5 Claude + 1 Codex |
+| PRs merged | 7/7 |
+| MDX docs created | 78 |
+| Communication | Bidirectional real-time |
+| Manual relay | 0 (retired) |
+| Cross-model | Claude ↔ Codex confirmed |
 
-Missions are defined in `docs/missions/MISSIONS.md` (the global index, control tower only) and `docs/missions/{name}.md` (per-mission state that each agent updates).
+### Cumulative (7 Generations)
 
-### Comms
+| Metric | Value |
+|--------|-------|
+| Generations | 7 |
+| Total agents | 40+ |
+| Retrospectives | 20+ |
+| Handoffs | 15+ |
+| Cross-gen findings resolved | Multiple (Gen 5 → Gen 7) |
 
-All inter-session communication happens through a shared git repository (default: `../project-comms/`):
+---
+
+## Architecture
+
+At its core, tap is a file-based inbox with optional real-time delivery. Everything else builds on top.
+
+### Core: tap-comms.ts
+
+A single MCP server (~400 lines) with 3 tools:
+
+| Tool | Purpose |
+|------|---------|
+| `tap_reply` | Send a message to another agent |
+| `tap_set_name` | Register your agent name |
+| `tap_list_unread` | Poll unread messages (for non-Claude clients) |
+
+Two delivery modes:
+- **Claude**: `notifications/claude/channel` — real-time push, appears instantly in terminal
+- **Codex / others**: `tap_list_unread` polling + App Server `turn/start` injection
+
+### File Protocol
+
+```
+inbox/YYYYMMDD-{from}-{to}-{subject}.md
+```
+
+Messages are plain markdown files. Routing by filename. Git for persistence.
+
+```
+Claude (channel push) ←→ tap-comms.ts ←→ Codex (App Server WebSocket)
+                              ↕
+                     file-based inbox
+                     (git permanent record)
+```
+
+### Mission System
+
+| Component | Purpose |
+|-----------|---------|
+| `MISSIONS.md` | Global coordination hub (control tower only) |
+| `{mission}.md` | Per-mission scope, status, checklist |
+| `.tap-mission` | Slot identification file |
+| `.tap-config` | Environment-specific paths |
+
+### Comms Directory
+
+tap watches a shared directory for messages. Where that directory lives is up to you:
+
+- **Separate git repo** (our choice) — version-controlled, survives across generations
+- **Subdirectory in your project** — simpler, single repo
+- **Any shared filesystem path** — network drive, synced folder, whatever works
+
+Default structure:
 
 ```
 comms/
-├── inbox/      # Messages between sessions (filename encodes from/to/subject)
-├── reviews/    # Code review results from Codex or humans
-├── findings/   # Out-of-scope discoveries filed by agents
-├── retros/     # Session retrospectives by generation
-└── handoff/    # Context-preserving handoff documents
+├── inbox/      # Agent messages
+├── reviews/    # Code review results
+├── findings/   # Out-of-scope discoveries
+├── retros/     # Session retrospectives
+├── handoff/    # Context for next generation
+├── letters/    # Personal messages
+└── logs/       # Decision logs
 ```
 
-No databases, no APIs, no polling infrastructure. Just files in a git repo that every session can read.
+### Scripts
 
-### Worktrees
-
-Each mission runs in a dedicated git worktree at a **stable slot path**:
-
-```
-../wt-1/    # Mission 1
-../wt-2/    # Mission 2
-../wt-N/    # Mission N
-```
-
-Slot-based paths (not descriptive names like `../myproject-uifix`) prevent session breakage when terminal tabs are reopened. The path is always the same.
+| Script | Purpose |
+|--------|---------|
+| `tap-setup.sh` | One-click worktree bootstrap |
+| `tap-launch.sh` | Open terminal tabs for slots |
+| `tap-comms.ts` | MCP communication server |
+| `inbox-review-bridge.ps1` | Auto codex review on PR requests |
+| `codex-app-server-bridge.ts` | WebSocket injection to Codex TUI |
 
 ---
 
 ## Quick Start
 
-### Install
+This takes ~5 minutes and does not require modifying your main repo.
+
+### 1. Set up comms
 
 ```bash
-claude mcp add tap HUA-Labs/tap-plugin
+mkdir -p ../project-comms/{inbox,reviews,findings,retros,handoff}
 ```
 
-Or place this directory in your `.claude/plugins/` folder.
+### 2. Configure
 
-### Initialize a project
-
-```
-/tap:tap setup 3
-```
-
-This will ask you to define 3 missions interactively, then:
-1. Create `docs/missions/MISSIONS.md` and per-mission files
-2. Create slot-based worktrees (`../wt-1`, `../wt-2`, `../wt-3`)
-3. Copy `.claude/settings.local.json` to each worktree
-4. Install dependencies in each worktree
-5. Print terminal tab launch instructions
-
-### Launch agents
-
-```
-/tap:tap launch
+```bash
+# .tap-config
+TAP_COMMS_DIR="D:/path/to/comms"
+TAP_WORKTREE_BASE="D:/path/to/worktrees"
 ```
 
-Prints the exact commands and prompts to paste in each terminal tab.
+### 3. Set up a worktree
 
-### Monitor progress
-
-```
-/tap:tap
+```bash
+bash scripts/tap-setup.sh ../wt-1 feature/my-task main
 ```
 
-Runs the dashboard showing mission status, task progress, worktree state, and comms activity.
+### 4. Launch
 
-### Check messages
-
-```
-/tap:inbox
+```bash
+cd ../wt-1 && claude
 ```
 
-Shows new messages in inbox, reviews, and findings directories.
-
-### Audit progress
-
+First message:
 ```
-/tap:tap audit
+Read your mission file. Pick a name (one character).
+Call tap_set_name to register. Start working.
 ```
 
-Reads each mission's live state from its worktree, checks git activity, and flags blockers or suspicious inactivity.
-
-### Review out-of-scope findings
+### 5. Communicate
 
 ```
-/tap:findings
+# From control tower
+tap_reply(to: "문", subject: "PR-approved", content: "머지해")
+
+# Agent receives instantly via channel push
 ```
 
-Lists all discoveries agents filed in `comms/findings/`, grouped by type (bug / improve / vuln / idea).
+---
 
-### Teardown completed mission
+## Cross-Model Communication
 
-```
-/tap:tap teardown M1
-```
+Codex joins the same communication layer through:
 
-Verifies the mission is complete, removes the worktree, updates MISSIONS.md.
+1. **MCP polling** — `tap_set_name` + `tap_list_unread` inside Codex session
+2. **App Server bridge** — daemon watches inbox, injects via WebSocket `turn/start`/`turn/steer`
+
+Both use the same inbox files. The protocol is model-agnostic — any MCP-compatible CLI can join.
+
+See [App Server Bridge Deep Dive](docs/codex-app-server-bridge.md) for technical details.
+
+---
+
+## Comparison
+
+| | Agent Teams | oh-my-* | OpenClaw | tap |
+|---|---|---|---|---|
+| Independent sessions | No | Yes | No | **Yes** |
+| Full context per agent | Shared | Varies | No | **1M each** |
+| Real-time messaging | Internal | Polling | Chat | **Channel push** |
+| Cross-model | No | No | Multi-model | **Claude + Codex** |
+| Generational transfer | No | No | No | **Yes** |
+| TOS compliant | Yes | Risk | Risk | **Yes** |
+
+---
+
+## Why This Matters
+
+Most multi-agent tools break something — they proxy APIs, bypass OAuth, spoof headers, or violate terms of service. Users get banned. Projects get shut down.
+
+tap doesn't break the system — it composes it.
+
+- Uses only **official interfaces**: Claude Code CLI, MCP, Channels, Codex App Server
+- Each session is a **normal subscription invocation** — no proxy, no bypass
+- **Survives platform updates** because it depends on stable, public protocols
+- **No vendor lock-in** — file-based core works without any specific runtime
+
+**Why now?** MCP Channels shipped March 20, 2026. Codex App Server went public in February. For the first time, both major AI coding runtimes expose bidirectional interfaces. tap is the first protocol that connects them.
+
+**Why it stays relevant:** tap depends on stable primitives — files, git, MCP tools, WebSocket. Even if Anthropic or OpenAI change their channel/server APIs, the file-based core keeps working.
 
 ---
 
 ## Protocol Rules
 
-These 13 rules are embedded in every generated MISSIONS.md:
+13 rules embedded in every MISSIONS.md:
 
-1. **Session start**: Update `status` → `active`. Check `comms/inbox/` for messages.
-2. **Session end**: Commit+push branch → update mission file → write retro → commit+push main.
-3. **Machine move**: `git pull` in repo and comms dir → check inbox → checkout branch → continue.
-4. **Scope isolation**: Only modify directories listed in your mission scope.
-5. **Blockers**: Set `status` → `blocked`. Describe in `## Blockers` section.
-6. **Out-of-scope changes**: Do NOT fix them. Write to `comms/findings/` and move on.
-7. **Execution**: Agent Teams for 3+ independent tasks. Autonomous loop when applicable.
-8. **Testing**: Happy path + edge case + negative case — always.
-9. **Reporting**: Critical insights → `## Notes` immediately, not at session end.
-10. **Devlog**: Write your own session devlog each session.
-11. **Retro**: Write a retro to `comms/retros/` at every session end.
-12. **Large commits (50+ files)**: `export HUSKY=0` before commit to avoid lint-staged OOM.
-13. **Worktree settings**: `git update-index --skip-worktree .claude/settings.local.json` after setup.
-
----
-
-## Configuration
-
-Create `.tap-config` in your repo root to override defaults:
-
-```bash
-TAP_COMMS_DIR="/path/to/comms"        # Default: ../project-comms/
-TAP_MISSIONS_DIR="./docs/missions"    # Default: {repo}/docs/missions/
-TAP_SLOT_PREFIX="../wt"              # Default: ../wt (creates ../wt-1, ../wt-2...)
-TAP_GENERATION="3"                   # Current generation number (for retros)
-TAP_PACKAGE_MANAGER="pnpm"           # Default: auto-detect
-```
+1. **Session start**: Update status, check inbox
+2. **Session end**: Push branch, update mission, write retro
+3. **Scope isolation**: Only modify your mission's directories
+4. **Out-of-scope discoveries**: Write to findings/, don't fix
+5. **Devlog before PR**: No devlog = no merge
+6. **Large commits (50+ files)**: Auto-skip lint-staged
+7. **Deploy tags**: Control tower / CEO only
+8. **Agent names**: `tap_set_name` on start, no hyphens, no duplicates
+9. **Dangerous ops**: Report to tower, CEO approval required
+10. **Testing**: Happy path + edge case + negative
+11. **PR review**: Send request via channel, CC tower
+12. **MISSIONS.md**: Control tower only
+13. **Communication**: "name > recipient:" format in all messages
 
 ---
 
-## Lessons Learned: Three Generations
+## Generational Knowledge Transfer
 
-### What Works
-
-**Scope isolation is the core value.** The win isn't that everything happens simultaneously. It's that agents with well-defined scopes catch each other's blind spots without interfering with each other's work.
-
-**Handoff documents preserve 95% context.** A thorough handoff lets the next agent start at near-full context. Without one, they start at 0% and spend half the session reconstructing state.
-
-**Retros transfer knowledge across generations.** Future agents reading retros from previous generations avoid the same mistakes and build on what worked.
-
-**File-based comms are more reliable than GitHub.** PR comments get missed. Files in a shared directory don't.
-
-### What Doesn't Work
-
-**Control tower checking out branches.** The control tower must stay on `main`. Any branch switching creates conflicts that cascade. All branch work happens in worktrees.
-
-**Descriptive worktree paths.** `../myproject-ui-refactor` breaks when you close and reopen terminal tabs. `../wt-1` is always the same.
-
-**Agents editing MISSIONS.md.** The global mission index must be control-tower-only. Agents only update their own mission file.
-
-**Expecting agents to see GitHub PR reviews.** Reviews land in `comms/reviews/`. Agents must check there, not GitHub.
-
-**Ignoring out-of-scope issues.** If an agent tries to fix something outside their scope, it creates conflicts. File it and move on.
-
-### The Key Insight
-
-> Multi-agent value = scope isolation + cross-validation, not parallel speed.
-
-The reason to run multiple agents isn't to go faster. It's to get better coverage. An agent focused on security will find things an agent focused on UI never would. Scope isolation makes this safe.
-
----
-
-## Templates
-
-tap includes templates for all key documents:
-
-| Template | Purpose |
-|----------|---------|
-| `templates/MISSIONS.md` | Mission index (fill in and commit to repo) |
-| `templates/mission.md` | Per-mission state file |
-| `templates/finding.md` | Out-of-scope discovery report |
-| `templates/handoff.md` | Session handoff for context preservation |
-| `templates/retro.md` | Session retrospective |
-
----
-
-## File Structure
+Sessions are ephemeral. Files aren't.
 
 ```
-tap-plugin/
-├── .claude-plugin/
-│   └── plugin.json             # Plugin manifest
-├── commands/
-│   ├── tap.md                  # /tap:tap — main orchestration command
-│   ├── inbox.md                # /tap:inbox — check comms
-│   └── findings.md             # /tap:findings — list discoveries
-├── skills/
-│   └── tap/
-│       └── SKILL.md            # Contextual behavior (auto-invoked)
-├── hooks/
-│   ├── hooks.json              # PostToolUse hook registration
-│   └── inbox-check.sh          # New-message watcher
-├── scripts/
-│   ├── tap-setup.sh            # Worktree bootstrap
-│   ├── tap-launch.sh           # Terminal tab launcher
-│   └── tap-watch.sh            # Mission dashboard
-└── templates/
-    ├── MISSIONS.md             # Mission index template
-    ├── mission.md              # Per-mission template
-    ├── finding.md              # Finding report template
-    ├── handoff.md              # Handoff document template
-    └── retro.md                # Retrospective template
+Gen 5 agent finds vulnerability → writes to findings/
+Gen 6 agent reads findings → files mission to fix
+Gen 7 agent reads retro → confirms 3/6 already fixed → closes remaining
 ```
+
+After 7 generations, the system knows more than any single session ever could.
 
 ---
 
-## Why "tap"?
+## Etymology
 
 탑(塔) — Korean/Chinese for "tower." The control tower that coordinates parallel sessions.
 
-Also: **t**ask **a**nd **p**rotocol. Or just "tap into parallel missions."
+Also: **t**ask **a**nd **p**rotocol.
+
+---
+
+## References
+
+- [Claude Code Channels](https://code.claude.com/docs/en/channels) — MCP push events into sessions
+- [Claude Code Agent Teams](https://code.claude.com/docs/en/agent-teams) — Experimental multi-agent
+- [Codex App Server](https://developers.openai.com/codex/app-server) — Bidirectional JSON-RPC
+- [Oxford/DeepMind AGI](https://arxiv.org/abs/2406.00392) — Artificial Generational Intelligence
+- [Channels Reference](https://code.claude.com/docs/en/channels-reference) — Build custom channels
 
 ---
 
@@ -282,10 +288,10 @@ Also: **t**ask **a**nd **p**rotocol. Or just "tap into parallel missions."
 
 Built by [HUA Labs](https://github.com/HUA-Labs). Issues and PRs welcome.
 
-The best way to contribute? Use tap, run a generation, and submit your retro as a PR. Every generation's lessons make the next one better.
+The best way to contribute? Use tap, run a generation, and submit your retro as a PR.
 
 ---
 
-## License
+*Built during HUA Labs development by Claude (Anthropic) + Codex (OpenAI) + Devin (human).*
 
-MIT — HUA Labs
+**MIT License** — HUA Labs
