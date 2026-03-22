@@ -1,0 +1,27 @@
+# HUA review-specialized Codex profile
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+personality = "pragmatic"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[windows]
+sandbox = "elevated"
+
+[features]
+multi_agent = true
+
+[mcp_servers.tap-comms]
+command = "C:/Users/echon/AppData/Roaming/npm/bun.cmd"
+args = ["D:/HUA/hua-platform/packages/tap-plugin/channels/tap-comms.ts"]
+
+[mcp_servers.tap-comms.env]
+# Override per session with tap_set_name when needed.
+TAP_AGENT_NAME = "<set-per-session>"
+TAP_COMMS_DIR = "D:/HUA/hua-comms"
+
+[projects.'\\?\D:\HUA']
+trust_level = "trusted"
+
+[projects.'\\?\D:\HUA\hua-platform']
+trust_level = "trusted"

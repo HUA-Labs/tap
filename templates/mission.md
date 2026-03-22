@@ -25,7 +25,9 @@ All inter-session communication happens via the comms directory: `{COMMS_DIR}`
 
 - **MISSIONS.md is control-tower-only** — never edit it. Only update this file.
 - **Create PRs yourself** — `gh pr create` directly, don't ask the control tower.
-- **Out-of-scope issues** → `{COMMS_DIR}/findings/`, not direct fixes.
+- **Out-of-scope discoveries** → `{COMMS_DIR}/findings/YYYYMMDD-{name}-{type}-{subject}.md` (type: bug/vuln/improve/idea). Do NOT fix directly.
+- **PR review flow**: PR 올린 후 리뷰어에게 inbox로 직접 요청. 수정 후 재요청도 본인이 직접. 관제탑 CC.
+- **Deploy tags**: `[deploy ...]` 태그는 **관제탑 또는 CEO 승인 후에만**. 본인이 넣지 말 것.
 - **Large commits (50+ files)** → `export HUSKY=0` before committing.
 - **Skip-worktree** → `git update-index --skip-worktree .claude/settings.local.json`
 

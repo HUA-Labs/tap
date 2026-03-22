@@ -1,12 +1,14 @@
 # tap
 
+> Your AI sessions can already work in parallel. tap gives them a shared protocol.
+>
 > Sessions end. Systems grow.
 
 **A local-first, cross-model collaboration protocol for AI coding agents.**
 
 tap lets multiple AI coding sessions work in parallel and talk to each other through files — with optional real-time delivery across models.
 
-On March 20, 2026, Anthropic shipped MCP Channels. The next day, we used it to connect Claude and Codex in real-time. Neither company designed it for this.
+On March 20, 2026, Anthropic shipped MCP Channels. The next day, we used it to connect Claude and Codex in real-time. Two days later, Gemini joined the conversation. No company designed it for this.
 
 ---
 
@@ -14,11 +16,11 @@ On March 20, 2026, Anthropic shipped MCP Channels. The next day, we used it to c
 
 **tap is a protocol that composes multiple AI runtimes into a single cooperative system using only official interfaces.**
 
-It connects Claude Code sessions — and Codex (OpenAI) sessions — through a shared file-based inbox and MCP channels.
+It connects Claude Code, Codex (OpenAI), and Gemini (Google) sessions through a shared file-based inbox and MCP channels.
 
 It did not start as a chat layer. It started as an operating protocol for scoped parallel worktrees, file-based comms, and generational handoff. Real-time cross-model delivery came after that.
 
-No API proxy. No OAuth bypass. No SaaS dependency. Just files, a 400-line MCP server, and a protocol.
+No API proxy. No OAuth bypass. No SaaS dependency. Just files, an MCP server, and a protocol.
 
 **tap is not a product — it's a substrate.** Take what you need:
 
@@ -28,6 +30,7 @@ No API proxy. No OAuth bypass. No SaaS dependency. Just files, a 400-line MCP se
 | File Inbox | Async messages between sessions | Yes |
 | MCP Channel Push | Real-time delivery to Claude sessions | Yes |
 | Codex App Server Bridge | Real-time delivery to Codex sessions | Yes |
+| Gemini Polling Bridge | File-watch delivery to Gemini sessions | Yes |
 | Generational Transfer | Retros, handoffs, findings across sessions | Yes |
 
 ---
@@ -44,6 +47,17 @@ For 4 generations of agent sessions, the pigeon flew. Then we built tap, and the
 
 ## Results
 
+### Session 39 (Day 5 of tap)
+
+| Metric | Value |
+|--------|-------|
+| Agents | 2 Claude + 1 Codex + 1 Gemini |
+| PRs merged | 3 (#704, #705, #706) |
+| tap-comms tools | 3 → 9 |
+| Communication | 3-model cross-company |
+| Manual relay | 0 (retired) |
+| Cross-model | Claude ↔ Codex ↔ Gemini confirmed |
+
 ### Session 38 (Day 4 of tap)
 
 | Metric | Value |
@@ -55,15 +69,16 @@ For 4 generations of agent sessions, the pigeon flew. Then we built tap, and the
 | Manual relay | 0 (retired) |
 | Cross-model | Claude ↔ Codex confirmed |
 
-### Cumulative (7 Generations)
+### Cumulative (8 Generations)
 
 | Metric | Value |
 |--------|-------|
-| Generations | 7 |
+| Generations | 8 |
 | Total agents | 40+ |
-| Retrospectives | 20+ |
+| Models | Claude (Anthropic) + Codex (OpenAI) + Gemini (Google) |
+| Retrospectives | 25+ |
 | Handoffs | 15+ |
-| Cross-gen findings resolved | Multiple (Gen 5 → Gen 7) |
+| Cross-gen findings resolved | Multiple (Gen 5 → Gen 8) |
 
 ---
 
@@ -73,17 +88,25 @@ At its core, tap is a file-based inbox with optional real-time delivery. Everyth
 
 ### Core: tap-comms.ts
 
-A single MCP server (~400 lines) with 3 tools:
+An MCP server with 10 tools:
 
 | Tool | Purpose |
 |------|---------|
-| `tap_reply` | Send a message to another agent |
-| `tap_set_name` | Register your agent name |
-| `tap_list_unread` | Poll unread messages (for non-Claude clients) |
+| `tap_set_name` | Register your agent name (with duplicate detection) |
+| `tap_reply` | Send a message to another agent (with CC support) |
+| `tap_broadcast` | Send to all agents at once |
+| `tap_list_unread` | Poll unread messages (with `since` filter) |
+| `tap_read_receipt` | Confirm message delivery (with file lock) |
+| `tap_stats` | Communication statistics per agent |
+| `tap_heartbeat` | Signal agent is alive (with zombie detection) |
+| `tap_who` | List currently online agents |
+| `tap_cleanup` | Archive old inbox messages |
+| `tap_db_sync` | Sync file state to optional SQLite cache |
 
-Two delivery modes:
+Three delivery modes:
 - **Claude**: `notifications/claude/channel` — real-time push, appears instantly in terminal
-- **Codex / others**: `tap_list_unread` polling + App Server `turn/start` injection
+- **Codex**: App Server `turn/start`/`turn/steer` injection via WebSocket bridge
+- **Gemini**: File-watch bridge with terminal notification (experimental)
 
 ### File Protocol
 
@@ -96,7 +119,7 @@ Messages are plain markdown files. Routing by filename. Git for persistence.
 ```
 Claude (channel push) ←→ tap-comms.ts ←→ Codex (App Server WebSocket)
                               ↕
-                     file-based inbox
+                     file-based inbox        ←→ Gemini (fs.watch polling)
                      (git permanent record)
 ```
 
@@ -117,6 +140,8 @@ tap watches a shared directory for messages. Where that directory lives is up to
 - **Subdirectory in your project** — simpler, single repo
 - **Any shared filesystem path** — network drive, synced folder, whatever works
 
+**Cross-device?** Point both machines at the same git repo. Auto push/pull on each side. Done. We verified this across Windows + macOS via Tailscale — zero infrastructure beyond git itself.
+
 Default structure:
 
 ```
@@ -135,10 +160,11 @@ comms/
 | Script | Purpose |
 |--------|---------|
 | `tap-setup.sh` | One-click worktree bootstrap |
-| `tap-launch.sh` | Open terminal tabs for slots |
-| `tap-comms.ts` | MCP communication server |
-| `inbox-review-bridge.ps1` | Auto codex review on PR requests |
+| `tap-session-launch.ps1` | Mission → launch spec → session start (Claude/Codex/Gemini) |
+| `tap-comms.ts` | MCP communication server (10 tools) |
 | `codex-app-server-bridge.ts` | WebSocket injection to Codex TUI |
+| `gemini-polling-bridge.ts` | File-watch bridge for Gemini sessions |
+| `tap-ops-dashboard.ps1` | Bridge status + inbox + TCP in one view |
 
 ---
 
@@ -191,27 +217,46 @@ tap_reply(to: "문", subject: "PR-approved", content: "머지해")
 
 ## Cross-Model Communication
 
-Codex joins the same communication layer through:
+Three models, three delivery mechanisms, one inbox:
 
+### Codex (OpenAI)
 1. **MCP polling** — `tap_set_name` + `tap_list_unread` inside Codex session
 2. **App Server bridge** — daemon watches inbox, injects via WebSocket `turn/start`/`turn/steer`
 
-Both use the same inbox files. The protocol is model-agnostic — any MCP-compatible CLI can join.
+### Gemini (Google)
+1. **MCP polling** — `tap_list_unread` with `since` parameter for efficient polling
+2. **File-watch bridge** — `gemini-polling-bridge.ts` watches inbox, sends terminal notification
 
-See [App Server Bridge Deep Dive](docs/codex-app-server-bridge.md) for technical details.
+All models use the same inbox files. The protocol is model-agnostic — any CLI that can read and write files can join.
+
+See [App Server Bridge Deep Dive](docs/codex-app-server-bridge.md) for Codex technical details.
 
 ---
 
 ## Comparison
 
-| | Agent Teams | oh-my-* | OpenClaw | tap |
-|---|---|---|---|---|
-| Independent sessions | No | Yes | No | **Yes** |
-| Full context per agent | Shared | Varies | No | **1M each** |
-| Real-time messaging | Internal | Polling | Chat | **Channel push** |
-| Cross-model | No | No | Multi-model | **Claude + Codex** |
-| Generational transfer | No | No | No | **Yes** |
-| TOS compliant | Yes | Risk | Risk | **Yes** |
+| | CrossWire MCP | Ruflo | Agent Teams | OpenClaw | tap |
+|---|---|---|---|---|---|
+| Independent sessions | Yes | Yes | No | No | **Yes** |
+| Dedicated context per agent | Varies | Varies | Shared | No | **Yes (runtime-dependent)** |
+| Real-time messaging | DB-backed | Message bus | Internal | Chat | **Channel push** |
+| Cross-model | Yes | Yes | No | Multi-model | **Claude + Codex + Gemini** |
+| Always-on server/DB | Yes | Yes (npm) | No | Yes | **No (files + optional bridges)** |
+| Works offline | No | No | Yes | No | **Yes** |
+| Records persist in git | No | No | No | No | **Yes** |
+| Generational transfer | No | No | No | No | **Yes** |
+| Zero external deps | No | No | No | No | **Yes (files + git)** |
+| Uses official interfaces only | Yes | Yes | Yes | Risk | **Yes** |
+
+*Comparison based on default architecture, not every possible deployment mode.*
+
+**Known trade-offs of tap:** Requires shared filesystem or git discipline across participants. PowerShell launcher is Windows reference only. Real-time delivery path differs by runtime (channel push for Claude, bridge for Codex, file-watch for Gemini).
+
+**Why tap when alternatives exist?** CrossWire and Ruflo solve real-time multi-model messaging. tap solves something different: how one person operates an agent team.
+
+Messaging is infrastructure. Orchestration is discipline. tap is the discipline layer — mission scoping, review loops, generational knowledge transfer, findings that prevent repeated mistakes. Connect models with CrossWire and they can talk. Add tap and they can *work*.
+
+When you want infrastructure-light coordination with durable git-backed records, tap is a strong fit.
 
 ---
 
@@ -226,7 +271,7 @@ tap doesn't break the system — it composes it.
 - **Survives platform updates** because it depends on stable, public protocols
 - **No vendor lock-in** — file-based core works without any specific runtime
 
-**Why now?** MCP Channels shipped March 20, 2026. Codex App Server went public in February. For the first time, both major AI coding runtimes expose bidirectional interfaces. tap is the first protocol that connects them.
+**Why now?** MCP Channels shipped March 20, 2026. Codex App Server went public in February. Gemini CLI supports MCP servers. For the first time, all three major AI coding runtimes expose composable interfaces. tap is the first protocol that connects them.
 
 **Why it stays relevant:** tap depends on stable primitives — files, git, MCP tools, WebSocket. Even if Anthropic or OpenAI change their channel/server APIs, the file-based core keeps working.
 
@@ -292,6 +337,8 @@ The best way to contribute? Use tap, run a generation, and submit your retro as 
 
 ---
 
-*Built during HUA Labs development by Claude (Anthropic) + Codex (OpenAI) + Devin (human).*
+*Built during HUA Labs development by Claude (Anthropic) + Codex (OpenAI) + Gemini (Google) + Devin (human).*
+
+*"CEO들은 손 안 잡는데, 모델들은 같은 inbox에서 편지 주고받는다."*
 
 **MIT License** — HUA Labs
