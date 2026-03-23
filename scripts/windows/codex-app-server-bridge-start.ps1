@@ -95,7 +95,7 @@ function Resolve-RepoRoot {
   }
 
   if ($PSScriptRoot) {
-    return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
   }
 
   return (Get-Location).Path
@@ -233,7 +233,7 @@ if ($runningMeta -and $Restart) {
   }
 }
 
-$bridgeScript = Join-Path $resolvedRepoRoot "scripts\codex-app-server-bridge.ts"
+$bridgeScript = Join-Path $resolvedRepoRoot "bridges\codex-app-server-bridge.ts"
 if (-not (Test-Path $bridgeScript)) {
   throw "Bridge script not found: $bridgeScript"
 }
