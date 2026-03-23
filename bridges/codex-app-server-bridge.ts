@@ -29,6 +29,7 @@ interface Options {
   busyMode: BusyMode;
   threadId: string | null;
   ephemeral: boolean;
+  dispatchTimeoutMinutes: number;
 }
 
 interface InboxRoute {
@@ -73,10 +74,14 @@ interface HeartbeatRecord {
   lastSuccessfulAppServerMethod: string | null;
   consecutiveFailureCount: number;
   busyMode: BusyMode;
+  dispatchTimedOut: boolean;
+  lastDispatchAt: string | null;
 }
 
 interface BridgeHealthState {
   consecutiveFailureCount: number;
+  dispatchTimedOut: boolean;
+  lastDispatchAt: string | null;
 }
 
 interface RequestRecord {
@@ -123,6 +128,7 @@ Options:
   --busy-mode=wait|steer
   --thread-id=<id>
   --ephemeral
+  --dispatch-timeout-minutes=<n>
   --help
 `);
 }
@@ -165,6 +171,7 @@ function parseArgs(argv: string[]): {
   busyMode?: BusyMode;
   threadId?: string;
   ephemeral: boolean;
+  dispatchTimeoutMinutes?: number;
 } {
   const parsed = {
     processExistingMessages: false,
@@ -322,6 +329,17 @@ function parseArgs(argv: string[]): {
       continue;
     }
 
+    if (flag.startsWith("--dispatch-timeout-minutes")) {
+      parsed.dispatchTimeoutMinutes = parseNumber(
+        readFlagValue(argv, index, "--dispatch-timeout-minutes"),
+        "--dispatch-timeout-minutes",
+      );
+      if (consumesNext) {
+        index += 1;
+      }
+      continue;
+    }
+
     throw new Error(`Unknown argument: ${flag}`);
   }
 
@@ -334,6 +352,38 @@ function timestamp(): string {
 
 function logStatus(message: string): void {
   console.log(`[${timestamp()}] ${message}`);
+}
+
+function writeCommsBroadcast(
+  options: Options,
+  message: string,
+  subject: string,
+): void {
+  const inboxDir = join(options.commsDir, "inbox");
+  if (!existsSync(inboxDir)) return;
+
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const fileName = `${date}-bridge-전체-${subject}.md`;
+  const filePath = join(inboxDir, fileName);
+
+  const body = [
+    "# Bridge Alert",
+    "",
+    `- **Agent**: ${options.agentName}`,
+    `- **Time**: ${now.toISOString()}`,
+    `- **App Server**: ${options.appServerUrl}`,
+    "",
+    message,
+    "",
+  ].join("\n");
+
+  try {
+    writeFileSync(filePath, body, "utf8");
+    logStatus(`comms broadcast: ${message}`);
+  } catch {
+    logStatus(`comms broadcast failed (could not write to ${filePath})`);
+  }
 }
 
 function ensureDir(target: string): string {
@@ -1202,6 +1252,8 @@ function writeHeartbeat(
       client?.lastSuccessfulAppServerMethod ?? null,
     consecutiveFailureCount: health.consecutiveFailureCount,
     busyMode: options.busyMode,
+    dispatchTimedOut: health.dispatchTimedOut,
+    lastDispatchAt: health.lastDispatchAt,
   };
 
   writeFileSync(
@@ -1369,6 +1421,7 @@ function buildOptions(argv: string[]): Options {
     busyMode: parsed.busyMode ?? "steer",
     threadId: parsed.threadId?.trim() || null,
     ephemeral: parsed.ephemeral,
+    dispatchTimeoutMinutes: parsed.dispatchTimeoutMinutes ?? 3,
   };
 }
 
@@ -1411,14 +1464,20 @@ async function main(): Promise<void> {
   let savedThreadId = savedThread?.threadId ?? null;
   const health: BridgeHealthState = {
     consecutiveFailureCount: 0,
+    dispatchTimedOut: false,
+    lastDispatchAt: null,
   };
 
   while (true) {
     try {
       if (!options.dryRun) {
         if (!client || !client.connected) {
+          logStatus("ws: connecting...");
+          // Notify recovery if we were previously failing
+          const wasDown = health.consecutiveFailureCount > 0;
           client = new AppServerClient(options.appServerUrl, logStatus);
           await client.connect();
+          logStatus("ws: connected");
 
           const threadId = await client.ensureThread(
             options.threadId,
@@ -1433,14 +1492,48 @@ async function main(): Promise<void> {
             options.ephemeral,
           );
           savedThreadId = threadId;
+
+          if (wasDown) {
+            writeCommsBroadcast(
+              options,
+              `${options.agentName} 세션 복귀 — 연결 복원됨`,
+              "session-recovered",
+            );
+          }
         }
       }
 
       const dispatched = await runScan(options, cutoff, client);
-      if (dispatched && client && options.waitAfterDispatchSeconds > 0) {
-        await waitForTurnDrain(options, client, health);
+      if (dispatched) {
+        health.lastDispatchAt = new Date().toISOString();
+        health.dispatchTimedOut = false;
+
+        if (client && options.waitAfterDispatchSeconds > 0) {
+          const timeoutMs = options.dispatchTimeoutMinutes * 60_000;
+          const drainResult = await Promise.race([
+            waitForTurnDrain(options, client, health).then(
+              () => "drained" as const,
+            ),
+            delay(timeoutMs).then(() => "timeout" as const),
+          ]);
+
+          if (drainResult === "timeout") {
+            health.dispatchTimedOut = true;
+            logStatus(
+              `dispatch timeout: ${options.dispatchTimeoutMinutes}min with no turn completion`,
+            );
+            writeCommsBroadcast(
+              options,
+              `${options.agentName} 세션 응답 없음 — ${options.dispatchTimeoutMinutes}분 경과`,
+              "session-timeout",
+            );
+            health.consecutiveFailureCount += 1;
+          }
+        }
       }
-      health.consecutiveFailureCount = 0;
+      if (!health.dispatchTimedOut) {
+        health.consecutiveFailureCount = 0;
+      }
       writeHeartbeat(options, client, health);
 
       if (options.runOnce) {
@@ -1449,16 +1542,29 @@ async function main(): Promise<void> {
 
       await delay(options.pollSeconds * 1_000);
     } catch (error) {
-      logStatus(`bridge error: ${String(error)}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logStatus(`bridge error: ${errorMsg}`);
       health.consecutiveFailureCount += 1;
+      health.dispatchTimedOut = false;
       writeHeartbeat(options, client, health);
+
+      // Notify on first failure only (avoid inbox spam)
+      if (health.consecutiveFailureCount === 1) {
+        writeCommsBroadcast(
+          options,
+          `${options.agentName} 세션 응답 없음 — 연결 실패 (${errorMsg})`,
+          "session-down",
+        );
+      }
 
       if (options.runOnce) {
         throw error;
       }
 
+      logStatus("ws: disconnecting after error");
       client?.disconnect().catch(() => undefined);
       client = null;
+      logStatus(`ws: reconnecting in ${options.reconnectSeconds}s`);
       await delay(options.reconnectSeconds * 1_000);
     }
   }
