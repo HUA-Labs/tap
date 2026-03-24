@@ -1,9 +1,61 @@
 {
-  "name": "@hua-labs/tap-plugin",
+  "name": "@hua-labs/tap",
   "version": "0.1.0",
-  "private": true,
-  "description": "MCP server plugin for tap-comms multi-session orchestration",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1"
+  "description": "Zero-dependency CLI for cross-model AI agent communication setup",
+  "bin": {
+    "tap-comms": "./bin/tap-comms.mjs"
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "keywords": [
+    "tap",
+    "comms",
+    "ai-agent",
+    "cross-model",
+    "mcp",
+    "claude",
+    "codex",
+    "gemini",
+    "cli"
+  ],
+  "author": "HUA Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HUA-Labs/hua-packages.git"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
