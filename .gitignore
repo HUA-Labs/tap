@@ -1,0 +1,9 @@
+node_modules/
+.tmp/
+*.local.*
+.tap-comms/
+tap-config.local.json
+.env
+.env.*
+*.log
+bun.lockb

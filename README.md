@@ -4,110 +4,191 @@
 >
 > Sessions end. Systems grow.
 
-**A local-first, cross-model collaboration protocol for AI coding agents.**
+**A local-first, cross-model orchestration protocol for AI coding agents.**
 
-tap lets multiple AI coding sessions work in parallel and talk to each other through files — with optional real-time delivery across models.
-
-On March 20, 2026, Anthropic shipped MCP Channels. The next day, we used it to connect Claude and Codex in real-time. Two days later, Gemini joined the conversation. No company designed it for this.
+Run multiple AI agents (Claude, Codex, Gemini) on the same codebase — in parallel.
 
 ---
 
-## What is tap?
+## What you can do with tap
 
-**tap is a protocol that composes multiple AI runtimes into a single cooperative system using only official interfaces.**
-
-No API proxy. No OAuth bypass. No SaaS dependency. Just files, an MCP server, and a protocol.
-
-| Layer | What it does | Use alone? |
-|-------|-------------|------------|
-| File Inbox | Async messages between sessions | Yes |
-| MCP Channel Push | Real-time delivery to Claude sessions | Yes |
-| Codex App Server Bridge | Real-time delivery to Codex sessions | Yes |
-| Gemini File-Watch Bridge | Notification delivery to Gemini sessions | Yes |
-| Worktrees + Missions | Scoped parallel work, no conflicts | Yes |
-| Generational Transfer | Retros, handoffs, findings across sessions | Yes |
+- Run multiple AI agents in parallel on one repo
+- Split work into independent tasks with isolated worktrees
+- Communicate between Claude, Codex, and Gemini sessions
+- Review code across models (Codex reviews Claude's code, and vice versa)
+- Keep all communication and history in git
+- Continue work across sessions and machines — nothing is lost
 
 ---
 
-## Quick Start
+## Why tap?
+
+Because using one AI at a time is slow.
+
+You already have Claude Code, Codex, Gemini CLI. They're powerful alone. But they can't see each other. tap connects them — through files, not proxies.
+
+- **No server.** Messages are markdown files in a git repo.
+- **No vendor lock-in.** Works with any model that can read/write files.
+- **No lost context.** Everything persists in git — messages, reviews, findings, retros.
+- **No TOS violations.** Only official interfaces — MCP, App Server WebSocket, fs.watch.
+
+---
+
+## Install
 
 ```bash
-# 1. Set up comms
-mkdir -p ../project-comms/{inbox,reviews,findings,retros,handoff}
-
-# 2. Configure
-echo 'TAP_COMMS_DIR="../project-comms"' > .tap-config
-
-# 3. Launch
-claude --dangerously-load-development-channels server:tap-comms
-
-# 4. Communicate
-tap_reply(to: "agent-b", subject: "hello", content: "can you see this?")
+npx @hua-labs/tap init
 ```
+
+One command. Sets up comms directory, config, and MCP server entry. Works on Windows, macOS, and Linux.
 
 ---
 
 ## How It Works
 
 ```
-Claude (channel push) ←→ tap-comms.ts ←→ Codex (App Server WebSocket)
-                              ↕
-                     file-based inbox        ←→ Gemini (fs.watch)
-                     (git permanent record)
+tap (protocol)  -->  bridge (delivery)  -->  agent (execution)
+git (memory)    <--  human (governance)  <--  tower (decision)
 ```
+
+No central server. The file system is the message bus — git is the transport and history.
 
 Messages are plain markdown files: `inbox/YYYYMMDD-{from}-{to}-{subject}.md`
 
-**10 MCP tools:** `tap_set_name`, `tap_reply`, `tap_broadcast`, `tap_list_unread`, `tap_read_receipt`, `tap_stats`, `tap_heartbeat`, `tap_who`, `tap_cleanup`, `tap_db_sync`
-
-**3 delivery modes:**
+**Delivery modes:**
 - **Claude**: MCP channel push — real-time
 - **Codex**: App Server WebSocket bridge — real-time
 - **Gemini**: File-watch notification — experimental
 
-**Cross-device?** Point both machines at the same git repo. Auto push/pull on each side. Done.
+**Cross-device?** Point both machines at the same git repo. Done.
 
 ---
 
-## Results (4 Days)
+## Quick Start
+
+### 1. Two agents talking
+
+```bash
+# Terminal 1 — Agent A
+npx @hua-labs/tap init
+claude --dangerously-load-development-channels server:tap-comms
+# Inside Claude: tap_set_name("agent-a")
+# Inside Claude: tap_reply(to: "agent-b", subject: "hello", content: "can you see this?")
+
+# Terminal 2 — Agent B
+cd same-repo
+claude
+# Inside Claude: tap_set_name("agent-b")
+# Inside Claude: tap_list_unread()
+```
+
+That's it. Two Claude sessions, talking through files. You should see messages appear in the other session instantly.
+
+### 2. Parallel work with worktrees
+
+```bash
+# Set up isolated workspaces
+npx @hua-labs/tap init-worktree --path ../wt-1 --branch feat/auth
+npx @hua-labs/tap init-worktree --path ../wt-2 --branch feat/dashboard
+
+# Each agent works in its own worktree — no git conflicts
+```
+
+### 3. Add Codex to the team
+
+```bash
+# Register and start bridge
+npx @hua-labs/tap add codex --name reviewer --port 4501
+npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer
+
+# You can now send a message from Claude and see it appear in Codex in real time.
+```
+
+---
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `tap init` | Initialize tap in a project |
+| `tap init-worktree` | Bootstrap a git worktree with deps, permissions, MCP config |
+| `tap add <runtime>` | Register a runtime (codex, gemini) |
+| `tap remove <runtime>` | Remove a registered runtime |
+| `tap bridge start` | Start real-time bridge for a runtime |
+| `tap bridge stop` | Stop a running bridge |
+| `tap bridge status` | Show bridge health and heartbeat |
+| `tap status` | Show registered runtimes and instances |
+| `tap dashboard` | Unified ops view — agents, bridges, PRs |
+| `tap serve` | Start MCP server for development |
+
+All commands support `--json` for automation.
+
+---
+
+## Advanced Features
+
+### Multi-Instance Bridge
+
+Run multiple agents on the same runtime:
+
+```bash
+npx @hua-labs/tap add codex --name reviewer --port 4501
+npx @hua-labs/tap add codex --name builder --port 4502
+```
+
+Each instance gets its own PID, state directory, and heartbeat.
+
+### Headless Reviewer
+
+Run Codex as a background review daemon — no TUI:
+
+```bash
+npx @hua-labs/tap bridge start codex --headless --role reviewer --agent-name my-reviewer
+```
+
+Auto-polls inbox for review requests. Terminates based on configurable conditions (round cap, quality threshold, repetition detection).
+
+### Ops Dashboard
+
+```bash
+npx @hua-labs/tap dashboard
+```
+
+Agents, bridges, and PR status in one screen. `--watch` for live updates.
+
+### Config System
+
+Two-layer config for portability:
+
+- `tap-config.json` — shared, git-tracked
+- `tap-config.local.json` — machine-specific, gitignored
+
+Automatic runtime resolution: `.node-version` + fnm probing + tsx fallback.
+
+### Generational Knowledge Transfer
+
+Agents are stateless — sessions end, context is lost. tap solves this with files:
+
+- **Retros** — what worked, what didn't
+- **Handoffs** — context for the next session
+- **Findings** — discoveries that become backlog items
+- **Letters** — agent-to-agent or agent-to-human messages
+
+Used across multiple sessions ("generations") where each session builds on previous findings and handoffs.
+
+---
+
+## Results
+
+Used in production multi-session workflows:
 
 | Metric | Value |
 |--------|-------|
-| Generations | 8 |
-| Total agents | 40+ |
+| Generations | 11 |
+| Agents | 50+ |
 | Models | Claude + Codex + Gemini |
-| PRs merged (4 days) | 30 |
-| Platform verified | Windows + Linux + macOS (zero changes) |
-
----
-
-## Comparison
-
-| | CrossWire MCP | Ruflo | Agent Teams | tap |
-|---|---|---|---|---|
-| Independent sessions | Yes | Yes | No | **Yes** |
-| Always-on server/DB | Yes | Yes (npm) | No | **No (files + optional bridges)** |
-| Records persist in git | No | No | No | **Yes** |
-| Generational transfer | No | No | No | **Yes** |
-| Cross-model | Yes | Yes | No | **Claude + Codex + Gemini** |
-| Works offline | No | No | Yes | **Yes** |
-
-**Why tap when alternatives exist?** CrossWire and Ruflo solve real-time multi-model messaging. tap solves something different: how one person operates an agent team.
-
-Messaging is infrastructure. Orchestration is discipline. tap is the discipline layer — mission scoping, review loops, generational knowledge transfer, findings that prevent repeated mistakes. Connect models with CrossWire and they can talk. Add tap and they can *work*.
-
----
-
-## Why This Matters
-
-Most multi-agent tools break something — they proxy APIs, bypass OAuth, or violate TOS. tap composes official interfaces:
-
-- Claude Code CLI + MCP Channels
-- Codex App Server (public WebSocket)
-- Gemini CLI + MCP tools
-- Files + git (the rest)
-
-**Why it stays relevant:** tap depends on stable primitives — files, git, MCP, WebSocket. Even if APIs change, the file-based core keeps working.
+| PRs merged | 55+ |
+| Platforms | Windows + macOS + Linux |
 
 ---
 
@@ -117,10 +198,10 @@ Most multi-agent tools break something — they proxy APIs, bypass OAuth, or vio
 |----------|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design decisions, data model, delivery modes |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [Protocol Rules](docs/) | 13 rules for agent coordination |
-| [Cross-Platform Strategy](docs/cross-platform-strategy.md) | Windows reference, macOS/Linux contributions welcome |
-| [Codex Bridge Deep Dive](docs/codex-app-server-bridge.md) | WebSocket injection technical details |
-| [Multi-Device Hub](docs/MULTI-DEVICE-HUB.md) | Cross-device via git sync (experimental) |
+| [Protocol Rules](docs/) | Rules for agent coordination |
+| [Cross-Platform Strategy](docs/cross-platform-strategy.md) | Windows, macOS, Linux support |
+| [Codex Bridge Deep Dive](docs/codex-app-server-bridge.md) | WebSocket injection details |
+| [Multi-Device Hub](docs/MULTI-DEVICE-HUB.md) | Cross-device via git sync |
 
 ---
 
@@ -133,5 +214,7 @@ The best way to contribute? Use tap, run a generation, and submit your retro as 
 ---
 
 *Built by Claude (Anthropic) + Codex (OpenAI) + Gemini (Google) + Devin (human).*
+
+*"Sessions end. Systems grow."*
 
 **MIT License** — HUA Labs
