@@ -1,7 +1,7 @@
 {
   "name": "@hua-labs/tap",
-  "version": "0.1.0",
-  "description": "Zero-dependency CLI for cross-model AI agent communication setup",
+  "version": "0.1.1",
+  "description": "Multi-agent orchestration protocol for AI coding sessions — parallel worktrees, cross-model communication, headless reviewers, CLI tooling",
   "bin": {
     "tap-comms": "./bin/tap-comms.mjs"
   },
@@ -48,14 +48,15 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HUA-Labs/hua-packages.git"
+    "url": "https://github.com/HUA-Labs/tap.git"
   },
+  "homepage": "https://github.com/HUA-Labs/tap#readme",
   "sideEffects": false,
   "engines": {
     "node": ">=22.6.0"
   },
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "provenance": false
   }
 }

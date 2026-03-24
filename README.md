@@ -1,5 +1,8 @@
 # tap
 
+[![npm version](https://img.shields.io/npm/v/@hua-labs/tap.svg)](https://www.npmjs.com/package/@hua-labs/tap)
+[![license](https://img.shields.io/npm/l/@hua-labs/tap.svg)](LICENSE)
+
 > Your AI sessions can already work in parallel. tap gives them a shared protocol.
 >
 > Sessions end. Systems grow.
