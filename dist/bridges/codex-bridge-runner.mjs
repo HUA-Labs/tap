@@ -1003,6 +1003,41 @@ function maybeStartHeadlessLoop(repoRoot, commsDir, stateDir) {
     console.error("[headless-loop] Failed to start:", err);
   });
 }
+function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileExists = fs8.existsSync) {
+  const moduleDir = path7.dirname(fileURLToPath2(runnerUrl));
+  const candidates = [
+    // 1. Bundled standalone/npm install
+    path7.join(moduleDir, "codex-app-server-bridge.mjs"),
+    // 2. Source run from monorepo package
+    path7.join(moduleDir, "codex-app-server-bridge.ts"),
+    // 3. Built monorepo package dist
+    path7.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "dist",
+      "bridges",
+      "codex-app-server-bridge.mjs"
+    ),
+    // 4. Monorepo source wrapper
+    path7.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "src",
+      "bridges",
+      "codex-app-server-bridge.ts"
+    ),
+    // 5. Legacy monorepo root script
+    path7.join(repoRoot, "scripts", "codex-app-server-bridge.ts")
+  ];
+  for (const candidate of candidates) {
+    if (fileExists(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
 function buildBridgeScriptArgs(scriptPath, options) {
   const args = [
     scriptPath,
@@ -1046,15 +1081,11 @@ async function main() {
   } : resolveNodeRuntime(config.runtimeCommand, repoRoot);
   const command = resolved.command;
   const agentName = process.env.TAP_AGENT_NAME?.trim() || process.env.CODEX_TAP_AGENT_NAME?.trim() || void 0;
-  const scriptPath = path7.join(
-    repoRoot,
-    "scripts",
-    "codex-app-server-bridge.ts"
-  );
-  if (!fs8.existsSync(scriptPath)) {
+  const scriptPath = resolveBridgeDaemonScript(repoRoot);
+  if (!scriptPath) {
     throw new Error(
-      `Bridge script not found: ${scriptPath}
-Ensure scripts/codex-app-server-bridge.ts exists in repo root.`
+      `Bridge script not found for repo root ${repoRoot}.
+Expected a packaged dist/bridges/codex-app-server-bridge.mjs or monorepo bridge script.`
     );
   }
   const args = [];
@@ -1116,6 +1147,7 @@ if (isDirectExecution()) {
   });
 }
 export {
-  buildBridgeScriptArgs
+  buildBridgeScriptArgs,
+  resolveBridgeDaemonScript
 };
 //# sourceMappingURL=codex-bridge-runner.mjs.map

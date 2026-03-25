@@ -2,13 +2,15 @@
  * State/Control API — programmatic access to tap state.
  * GUI and autopilot consume these functions instead of shelling out to CLI.
  *
- * M105: JSON contract for getDashboardSnapshot, streamEvents.
+ * M105 P1: getDashboardSnapshot, streamEvents (read-only)
+ * M105 P2: startAgents, stopAgents (write — wraps tap up/down)
  */
 
 import { collectDashboardSnapshot } from "../engine/dashboard.js";
 import type { DashboardSnapshot } from "../engine/dashboard.js";
 import { findRepoRoot } from "../utils.js";
 import { resolveConfig } from "../config/index.js";
+import type { CommandResult } from "../types.js";
 
 export interface StateApiOptions {
   repoRoot?: string;
@@ -62,6 +64,63 @@ export async function* streamEvents(
     });
   }
 }
+
+// ── Write API ───────────────────────────────────────────────────
+
+export interface AgentControlOptions {
+  /** Extra CLI args forwarded to `tap up` (e.g. `["--no-auth"]`) */
+  args?: string[];
+}
+
+export interface AgentControlResult {
+  ok: boolean;
+  message: string;
+  snapshot: DashboardSnapshot;
+  commandResult: CommandResult;
+}
+
+/**
+ * Start all registered bridge daemons.
+ * Equivalent to `tap up [...args]`.
+ *
+ * Always operates on the cwd-based repo (same as CLI commands).
+ * Use read-only APIs (getDashboardSnapshot) for cross-repo queries.
+ */
+export async function startAgents(
+  options?: AgentControlOptions,
+): Promise<AgentControlResult> {
+  const { upCommand } = await import("../commands/up.js");
+  const result = await upCommand(options?.args ?? []);
+  const repoRoot = findRepoRoot();
+  const snapshot = collectDashboardSnapshot(repoRoot);
+  return {
+    ok: result.ok,
+    message: result.message,
+    snapshot,
+    commandResult: result,
+  };
+}
+
+/**
+ * Stop all running bridge daemons.
+ * Equivalent to `tap down`.
+ *
+ * Always operates on the cwd-based repo (same as CLI commands).
+ */
+export async function stopAgents(): Promise<AgentControlResult> {
+  const { downCommand } = await import("../commands/down.js");
+  const result = await downCommand([]);
+  const repoRoot = findRepoRoot();
+  const snapshot = collectDashboardSnapshot(repoRoot);
+  return {
+    ok: result.ok,
+    message: result.message,
+    snapshot,
+    commandResult: result,
+  };
+}
+
+// ── Config ──────────────────────────────────────────────────────
 
 /**
  * Resolve tap configuration for API consumers.

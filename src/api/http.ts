@@ -14,7 +14,13 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { getDashboardSnapshot, streamEvents, getConfig } from "./state.js";
+import {
+  getDashboardSnapshot,
+  streamEvents,
+  getConfig,
+  startAgents,
+  stopAgents,
+} from "./state.js";
 import type { StateApiOptions } from "./state.js";
 
 export interface HttpServerOptions extends StateApiOptions {
@@ -24,7 +30,7 @@ export interface HttpServerOptions extends StateApiOptions {
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "http://localhost:3000",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
@@ -106,28 +112,50 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
         return;
       }
 
-      if (req.method !== "GET") {
-        jsonResponse(res, { error: "Method not allowed" }, 405);
-        return;
-      }
-
       try {
-        switch (pathname) {
-          case "/api/snapshot":
-            handleSnapshot(res, apiOptions);
-            break;
-          case "/api/events":
-            await handleEvents(req, res, apiOptions);
-            break;
-          case "/api/config":
-            handleConfig(res, apiOptions);
-            break;
-          case "/health":
-            handleHealth(res);
-            break;
-          default:
-            jsonResponse(res, { error: "Not found" }, 404);
+        // GET endpoints
+        if (req.method === "GET") {
+          switch (pathname) {
+            case "/api/snapshot":
+              handleSnapshot(res, apiOptions);
+              return;
+            case "/api/events":
+              await handleEvents(req, res, apiOptions);
+              return;
+            case "/api/config":
+              handleConfig(res, apiOptions);
+              return;
+            case "/health":
+              handleHealth(res);
+              return;
+          }
         }
+
+        // POST endpoints (write API)
+        // Require application/json Content-Type to prevent CSRF via browser forms
+        // (HTML forms cannot send application/json, forcing preflight on cross-origin)
+        if (req.method === "POST") {
+          const contentType = req.headers["content-type"] ?? "";
+          if (!contentType.includes("application/json")) {
+            jsonResponse(
+              res,
+              { error: "Content-Type must be application/json" },
+              415,
+            );
+            return;
+          }
+
+          switch (pathname) {
+            case "/api/start":
+              jsonResponse(res, await startAgents());
+              return;
+            case "/api/stop":
+              jsonResponse(res, await stopAgents());
+              return;
+          }
+        }
+
+        jsonResponse(res, { error: "Not found" }, 404);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         jsonResponse(res, { error: message }, 500);

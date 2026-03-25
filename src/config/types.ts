@@ -13,6 +13,8 @@ export interface TapSharedConfig {
   runtimeCommand?: string;
   /** App server WebSocket URL for bridge connections. */
   appServerUrl?: string;
+  /** GitHub URL for the comms repository (used by `tap comms pull/push`). */
+  commsRepoUrl?: string;
 }
 
 /**

@@ -218,6 +218,7 @@ export type CommandName =
   | "bridge"
   | "up"
   | "down"
+  | "comms"
   | "dashboard"
   | "doctor"
   | "unknown";
@@ -232,6 +233,7 @@ export type CommandCode =
   // Benign no-op
   | "TAP_NO_OP"
   | "TAP_ALREADY_INITIALIZED"
+  | "TAP_INIT_CLONE_FAILED"
   // User/environment errors
   | "TAP_NOT_INITIALIZED"
   | "TAP_RUNTIME_UNKNOWN"
@@ -255,6 +257,11 @@ export type CommandCode =
   | "TAP_BRIDGE_SCRIPT_MISSING"
   | "TAP_UP_OK"
   | "TAP_DOWN_OK"
+  | "TAP_COMMS_PULL_OK"
+  | "TAP_COMMS_PULL_FAILED"
+  | "TAP_COMMS_PUSH_OK"
+  | "TAP_COMMS_PUSH_FAILED"
+  | "TAP_COMMS_NOT_REPO"
   | "TAP_SERVE_NO_SERVER"
   | "TAP_SERVE_BUN_REQUIRED"
   // Review (headless)

@@ -6,6 +6,7 @@ interface BridgeScriptArgsOptions {
     stateDir?: string;
     agentName?: string;
 }
+declare function resolveBridgeDaemonScript(repoRoot: string, runnerUrl?: string, fileExists?: (candidate: string) => boolean): string | null;
 declare function buildBridgeScriptArgs(scriptPath: string, options: BridgeScriptArgsOptions): string[];
 
-export { buildBridgeScriptArgs };
+export { buildBridgeScriptArgs, resolveBridgeDaemonScript };

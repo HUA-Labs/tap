@@ -6,6 +6,7 @@ export default defineConfig({
     "src/cli.ts",
     "src/mcp-server.ts",
     "src/bridges/codex-app-server-auth-gateway.ts",
+    "src/bridges/codex-app-server-bridge.ts",
     "src/bridges/codex-bridge-runner.ts",
   ],
   format: ["esm"],

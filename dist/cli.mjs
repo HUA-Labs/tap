@@ -1,6 +1,7 @@
 // src/commands/init.ts
 import * as fs6 from "fs";
 import * as path6 from "path";
+import { execSync } from "child_process";
 
 // src/state.ts
 import * as fs3 from "fs";
@@ -186,7 +187,7 @@ function loadJsonFile(filePath) {
     return null;
   }
 }
-function loadSharedConfig(repoRoot) {
+function loadSharedConfig2(repoRoot) {
   return loadJsonFile(path2.join(repoRoot, SHARED_CONFIG_FILE));
 }
 function loadLocalConfig(repoRoot) {
@@ -210,7 +211,7 @@ function loadLegacyShellConfig(repoRoot) {
 }
 function resolveConfig(overrides = {}, startDir) {
   const repoRoot = findRepoRoot2(startDir);
-  const shared = loadSharedConfig(repoRoot) ?? {};
+  const shared = loadSharedConfig2(repoRoot) ?? {};
   const local = loadLocalConfig(repoRoot) ?? {};
   const legacy = loadLegacyShellConfig(repoRoot) ?? {};
   const sources = {
@@ -291,6 +292,12 @@ function resolveConfig(overrides = {}, startDir) {
     config: { repoRoot, commsDir, stateDir, runtimeCommand, appServerUrl },
     sources
   };
+}
+function saveSharedConfig(repoRoot, config) {
+  const filePath = path2.join(repoRoot, SHARED_CONFIG_FILE);
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs2.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs2.renameSync(tmp, filePath);
 }
 function resolvePath(repoRoot, p) {
   const normalized = normalizeTapPath(p);
@@ -753,6 +760,64 @@ async function initCommand(args) {
     };
   }
   logHeader("@hua-labs/tap init");
+  const commsRepoIdx = args.indexOf("--comms-repo");
+  const commsRepoUrl = commsRepoIdx !== -1 && args[commsRepoIdx + 1] ? args[commsRepoIdx + 1] : void 0;
+  if (commsRepoUrl) {
+    if (fs6.existsSync(commsDir) && fs6.readdirSync(commsDir).length > 0) {
+      const gitDir = path6.join(commsDir, ".git");
+      if (fs6.existsSync(gitDir)) {
+        log(`Comms directory exists: ${commsDir}`);
+        logSuccess("Comms directory is already a git repo \u2014 linking only");
+      } else {
+        logError(`Comms directory exists but is not a git repo: ${commsDir}`);
+        return {
+          ok: false,
+          command: "init",
+          code: "TAP_INIT_CLONE_FAILED",
+          message: `Comms directory "${commsDir}" exists but is not a git repo. Remove it or use --force to reinitialize.`,
+          warnings: [],
+          data: { commsDir, commsRepoUrl }
+        };
+      }
+    } else {
+      log(`Cloning comms repo: ${commsRepoUrl}`);
+      try {
+        execSync(`git clone "${commsRepoUrl}" "${commsDir}"`, {
+          stdio: "pipe",
+          encoding: "utf-8"
+        });
+        logSuccess(`Cloned comms repo to ${commsDir}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`Failed to clone comms repo: ${msg}`);
+        return {
+          ok: false,
+          command: "init",
+          code: "TAP_INIT_CLONE_FAILED",
+          message: `Failed to clone comms repo: ${msg}`,
+          warnings: [],
+          data: { commsRepoUrl }
+        };
+      }
+    }
+  }
+  {
+    const sharedConfig = loadSharedConfig2(repoRoot) ?? {};
+    let configChanged = false;
+    if (commsRepoUrl) {
+      sharedConfig.commsRepoUrl = commsRepoUrl;
+      configChanged = true;
+    }
+    const commsDirRelative = path6.relative(repoRoot, commsDir);
+    if (commsDirRelative && commsDirRelative !== "tap-comms") {
+      sharedConfig.commsDir = commsDirRelative;
+      configChanged = true;
+    }
+    if (configChanged) {
+      saveSharedConfig(repoRoot, sharedConfig);
+      logSuccess("Saved comms config to tap-config.json");
+    }
+  }
   log(`Comms directory: ${commsDir}`);
   for (const dir of COMMS_DIRS) {
     const dirPath = path6.join(commsDir, dir);
@@ -829,7 +894,7 @@ ${entry}
 // src/adapters/claude.ts
 import * as fs8 from "fs";
 import * as path8 from "path";
-import { execSync } from "child_process";
+import { execSync as execSync2 } from "child_process";
 
 // src/adapters/common.ts
 import * as fs7 from "fs";
@@ -972,7 +1037,7 @@ function findMcpJsonPath(ctx) {
 }
 function findClaudeCommand() {
   try {
-    execSync("claude --version", { stdio: "pipe" });
+    execSync2("claude --version", { stdio: "pipe" });
     return "claude";
   } catch {
     return null;
@@ -1834,13 +1899,13 @@ import * as fs13 from "fs";
 import * as net from "net";
 import * as path13 from "path";
 import { randomBytes } from "crypto";
-import { spawn, spawnSync as spawnSync2, execSync as execSync3 } from "child_process";
+import { spawn, spawnSync as spawnSync2, execSync as execSync4 } from "child_process";
 import { fileURLToPath as fileURLToPath4 } from "url";
 
 // src/runtime/resolve-node.ts
 import * as fs12 from "fs";
 import * as path12 from "path";
-import { execSync as execSync2 } from "child_process";
+import { execSync as execSync3 } from "child_process";
 function readNodeVersion(repoRoot) {
   const nvFile = path12.join(repoRoot, ".node-version");
   if (!fs12.existsSync(nvFile)) return null;
@@ -1883,7 +1948,7 @@ function probeFnmNode(desiredVersion) {
     );
     if (!fs12.existsSync(candidate)) continue;
     try {
-      const v = execSync2(`"${candidate}" --version`, {
+      const v = execSync3(`"${candidate}" --version`, {
         encoding: "utf-8",
         timeout: 5e3
       }).trim();
@@ -1897,7 +1962,7 @@ function probeFnmNode(desiredVersion) {
 }
 function detectNodeMajorVersion(command) {
   try {
-    const version2 = execSync2(`"${command}" --version`, {
+    const version2 = execSync3(`"${command}" --version`, {
       encoding: "utf-8",
       timeout: 5e3
     }).trim();
@@ -1911,7 +1976,7 @@ function checkStripTypesSupport(command) {
   const major = detectNodeMajorVersion(command);
   if (major !== null && major >= 22) return true;
   try {
-    execSync2(`"${command}" --experimental-strip-types -e ""`, {
+    execSync3(`"${command}" --experimental-strip-types -e ""`, {
       timeout: 5e3,
       stdio: "pipe"
     });
@@ -2469,7 +2534,7 @@ async function terminateProcess(pid, platform) {
   }
   try {
     if (platform === "win32") {
-      execSync3(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
+      execSync4(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
     } else {
       process.kill(pid, "SIGTERM");
       await delay(2e3);
@@ -4543,7 +4608,7 @@ async function bridgeCommand(args) {
 // src/engine/dashboard.ts
 import * as fs15 from "fs";
 import * as path15 from "path";
-import { execSync as execSync4 } from "child_process";
+import { execSync as execSync5 } from "child_process";
 function collectAgents(commsDir) {
   const heartbeatsPath = path15.join(commsDir, "heartbeats.json");
   if (!fs15.existsSync(heartbeatsPath)) return [];
@@ -4622,7 +4687,7 @@ function collectBridges(repoRoot) {
 }
 function collectPRs() {
   try {
-    const output = execSync4(
+    const output = execSync5(
       "gh pr list --state all --limit 10 --json number,title,author,state,url",
       { encoding: "utf-8", timeout: 1e4, stdio: ["pipe", "pipe", "pipe"] }
     );
@@ -4869,7 +4934,7 @@ async function serveCommand(args) {
 // src/commands/init-worktree.ts
 import * as fs16 from "fs";
 import * as path17 from "path";
-import { execSync as execSync5 } from "child_process";
+import { execSync as execSync6 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
   tap-comms init-worktree [options]
@@ -4893,7 +4958,7 @@ function warn(warnings, message) {
 }
 function run(cmd, opts) {
   try {
-    return execSync5(cmd, {
+    return execSync6(cmd, {
       cwd: opts?.cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -4910,7 +4975,7 @@ function toAbsolute(p) {
 }
 function probeBun(candidate) {
   try {
-    const out = execSync5(`"${candidate}" --version`, {
+    const out = execSync6(`"${candidate}" --version`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5e3
@@ -4924,7 +4989,7 @@ function findBun() {
   const candidates = process.platform === "win32" ? ["bun.exe", "bun"] : ["bun"];
   for (const name of candidates) {
     try {
-      const out = execSync5(
+      const out = execSync6(
         process.platform === "win32" ? `where ${name}` : `which ${name}`,
         { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 5e3 }
       ).trim();
@@ -5376,7 +5441,7 @@ async function dashboardCommand(args) {
 import {
   existsSync as existsSync16,
   mkdirSync as mkdirSync10,
-  readdirSync as readdirSync3,
+  readdirSync as readdirSync4,
   readFileSync as readFileSync14,
   statSync as statSync2,
   unlinkSync as unlinkSync3
@@ -5388,7 +5453,7 @@ var FAIL = "fail";
 function countFiles(dir, ext = ".md") {
   if (!existsSync16(dir)) return 0;
   try {
-    return readdirSync3(dir).filter((f) => f.endsWith(ext)).length;
+    return readdirSync4(dir).filter((f) => f.endsWith(ext)).length;
   } catch {
     return 0;
   }
@@ -5398,7 +5463,7 @@ function recentFileCount(dir, withinMs) {
   const cutoff = Date.now() - withinMs;
   let count = 0;
   try {
-    for (const f of readdirSync3(dir)) {
+    for (const f of readdirSync4(dir)) {
       if (!f.endsWith(".md")) continue;
       try {
         if (statSync2(join17(dir, f)).mtimeMs > cutoff) count++;
@@ -5408,6 +5473,21 @@ function recentFileCount(dir, withinMs) {
   } catch {
   }
   return count;
+}
+function loadBridgeRuntimeHeartbeat(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+  const heartbeatPath = join17(runtimeStateDir, "heartbeat.json");
+  if (!existsSync16(heartbeatPath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync14(heartbeatPath, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 function checkComms(commsDir) {
   const checks = [];
@@ -5492,6 +5572,7 @@ function checkInstances(repoRoot, stateDir) {
       const running = isBridgeRunning(stateDir, id);
       const bridgeState = loadBridgeState(stateDir, id);
       const heartbeatAge = getHeartbeatAge(stateDir, id);
+      const runtimeHeartbeat = loadBridgeRuntimeHeartbeat(bridgeState);
       let status;
       let message;
       let fix;
@@ -5534,6 +5615,11 @@ function checkInstances(repoRoot, stateDir) {
       } else {
         status = WARN;
         message = "Not running";
+      }
+      const lastRuntimeError = runtimeHeartbeat?.lastError?.trim();
+      if (lastRuntimeError) {
+        status = status === FAIL ? FAIL : WARN;
+        message = `${message}; bridge last error: ${lastRuntimeError}`;
       }
       checks.push({ name: `bridge: ${id}`, status, message, fix });
     } else {
@@ -5737,6 +5823,158 @@ async function doctorCommand(args) {
   };
 }
 
+// src/commands/comms.ts
+import { execSync as execSync7 } from "child_process";
+import * as fs17 from "fs";
+import * as path18 from "path";
+var COMMS_HELP = `
+Usage:
+  tap-comms comms <subcommand>
+
+Subcommands:
+  pull    Pull latest changes from comms remote repo
+  push    Commit and push comms changes to remote repo
+
+Examples:
+  npx @hua-labs/tap comms pull
+  npx @hua-labs/tap comms push
+`.trim();
+function isGitRepo(dir) {
+  return fs17.existsSync(path18.join(dir, ".git"));
+}
+function commsPull(commsDir) {
+  logHeader("tap comms pull");
+  if (!isGitRepo(commsDir)) {
+    logError(`${commsDir} is not a git repository`);
+    return {
+      ok: false,
+      command: "comms",
+      code: "TAP_COMMS_NOT_REPO",
+      message: `Comms directory is not a git repo. Use 'tap init --comms-repo <url>' to set up.`,
+      warnings: [],
+      data: { commsDir }
+    };
+  }
+  try {
+    const output = execSync7("git pull --rebase", {
+      cwd: commsDir,
+      encoding: "utf-8",
+      stdio: "pipe"
+    });
+    logSuccess("Comms pull complete");
+    if (output.trim()) log(output.trim());
+    return {
+      ok: true,
+      command: "comms",
+      code: "TAP_COMMS_PULL_OK",
+      message: "Comms pull complete",
+      warnings: [],
+      data: { commsDir }
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Pull failed: ${msg}`);
+    return {
+      ok: false,
+      command: "comms",
+      code: "TAP_COMMS_PULL_FAILED",
+      message: `Pull failed: ${msg}`,
+      warnings: [],
+      data: { commsDir }
+    };
+  }
+}
+function commsPush(commsDir) {
+  logHeader("tap comms push");
+  if (!isGitRepo(commsDir)) {
+    logError(`${commsDir} is not a git repository`);
+    return {
+      ok: false,
+      command: "comms",
+      code: "TAP_COMMS_NOT_REPO",
+      message: `Comms directory is not a git repo. Use 'tap init --comms-repo <url>' to set up.`,
+      warnings: [],
+      data: { commsDir }
+    };
+  }
+  try {
+    execSync7("git add -A", { cwd: commsDir, stdio: "pipe" });
+    const status = execSync7("git status --porcelain", {
+      cwd: commsDir,
+      encoding: "utf-8",
+      stdio: "pipe"
+    }).trim();
+    if (!status) {
+      log("Nothing to push \u2014 comms directory is clean");
+      return {
+        ok: true,
+        command: "comms",
+        code: "TAP_COMMS_PUSH_OK",
+        message: "Nothing to push",
+        warnings: [],
+        data: { commsDir, changed: false }
+      };
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    execSync7(`git commit -m "chore(comms): sync ${timestamp}"`, {
+      cwd: commsDir,
+      stdio: "pipe"
+    });
+    execSync7("git push", { cwd: commsDir, stdio: "pipe" });
+    logSuccess("Comms push complete");
+    return {
+      ok: true,
+      command: "comms",
+      code: "TAP_COMMS_PUSH_OK",
+      message: "Comms push complete",
+      warnings: [],
+      data: { commsDir, changed: true }
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Push failed: ${msg}`);
+    return {
+      ok: false,
+      command: "comms",
+      code: "TAP_COMMS_PUSH_FAILED",
+      message: `Push failed: ${msg}`,
+      warnings: [],
+      data: { commsDir }
+    };
+  }
+}
+async function commsCommand(args) {
+  const subcommand = args[0];
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    log(COMMS_HELP);
+    return {
+      ok: true,
+      command: "comms",
+      code: "TAP_NO_OP",
+      message: COMMS_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
+  const repoRoot = findRepoRoot();
+  const commsDir = resolveCommsDir(args, repoRoot);
+  switch (subcommand) {
+    case "pull":
+      return commsPull(commsDir);
+    case "push":
+      return commsPush(commsDir);
+    default:
+      return {
+        ok: false,
+        command: "comms",
+        code: "TAP_INVALID_ARGUMENT",
+        message: `Unknown comms subcommand: ${subcommand}. Use pull or push.`,
+        warnings: [],
+        data: {}
+      };
+  }
+}
+
 // src/output.ts
 function emitResult(result, jsonMode) {
   if (jsonMode) {
@@ -5777,6 +6015,7 @@ Commands:
   bridge <sub> [inst]   Manage bridges (start, stop, status)
   up                    Start all registered bridge daemons
   down                  Stop all running bridge daemons
+  comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
   doctor                Diagnose tap infrastructure health
   serve                 Start tap-comms MCP server (stdio)
@@ -5804,6 +6043,7 @@ function normalizeCommandName(command) {
     case "bridge":
     case "up":
     case "down":
+    case "comms":
     case "dashboard":
     case "doctor":
     case "serve":
@@ -5860,6 +6100,9 @@ async function main() {
         break;
       case "down":
         result = await downCommand(commandArgs);
+        break;
+      case "comms":
+        result = await commsCommand(commandArgs);
         break;
       case "dashboard":
         result = await dashboardCommand(commandArgs);

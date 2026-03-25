@@ -76,6 +76,48 @@ interface BridgeScriptArgsOptions {
   agentName?: string;
 }
 
+export function resolveBridgeDaemonScript(
+  repoRoot: string,
+  runnerUrl: string = import.meta.url,
+  fileExists: (candidate: string) => boolean = fs.existsSync,
+): string | null {
+  const moduleDir = path.dirname(fileURLToPath(runnerUrl));
+  const candidates = [
+    // 1. Bundled standalone/npm install
+    path.join(moduleDir, "codex-app-server-bridge.mjs"),
+    // 2. Source run from monorepo package
+    path.join(moduleDir, "codex-app-server-bridge.ts"),
+    // 3. Built monorepo package dist
+    path.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "dist",
+      "bridges",
+      "codex-app-server-bridge.mjs",
+    ),
+    // 4. Monorepo source wrapper
+    path.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "src",
+      "bridges",
+      "codex-app-server-bridge.ts",
+    ),
+    // 5. Legacy monorepo root script
+    path.join(repoRoot, "scripts", "codex-app-server-bridge.ts"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fileExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 export function buildBridgeScriptArgs(
   scriptPath: string,
   options: BridgeScriptArgsOptions,
@@ -150,15 +192,11 @@ async function main(): Promise<void> {
     undefined;
 
   // Locate bridge script
-  const scriptPath = path.join(
-    repoRoot,
-    "scripts",
-    "codex-app-server-bridge.ts",
-  );
-  if (!fs.existsSync(scriptPath)) {
+  const scriptPath = resolveBridgeDaemonScript(repoRoot);
+  if (!scriptPath) {
     throw new Error(
-      `Bridge script not found: ${scriptPath}\n` +
-        `Ensure scripts/codex-app-server-bridge.ts exists in repo root.`,
+      `Bridge script not found for repo root ${repoRoot}.\n` +
+        `Expected a packaged dist/bridges/codex-app-server-bridge.mjs or monorepo bridge script.`,
     );
   }
 

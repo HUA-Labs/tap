@@ -71,6 +71,35 @@ function recentFileCount(dir: string, withinMs: number): number {
   return count;
 }
 
+function loadBridgeRuntimeHeartbeat(
+  bridgeState:
+    | {
+        runtimeStateDir?: string | null;
+      }
+    | null
+    | undefined,
+): {
+  lastError?: string | null;
+} | null {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+
+  const heartbeatPath = join(runtimeStateDir, "heartbeat.json");
+  if (!existsSync(heartbeatPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(heartbeatPath, "utf-8")) as {
+      lastError?: string | null;
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Checks ──────────────────────────────────────────────────────────────
 
 function checkComms(commsDir: string): Check[] {
@@ -176,6 +205,7 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
       const running = isBridgeRunning(stateDir, id);
       const bridgeState = loadBridgeState(stateDir, id);
       const heartbeatAge = getHeartbeatAge(stateDir, id);
+      const runtimeHeartbeat = loadBridgeRuntimeHeartbeat(bridgeState);
 
       let status: "pass" | "warn" | "fail";
       let message: string;
@@ -225,6 +255,12 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
       } else {
         status = WARN;
         message = "Not running";
+      }
+
+      const lastRuntimeError = runtimeHeartbeat?.lastError?.trim();
+      if (lastRuntimeError) {
+        status = status === FAIL ? FAIL : WARN;
+        message = `${message}; bridge last error: ${lastRuntimeError}`;
       }
 
       checks.push({ name: `bridge: ${id}`, status, message, fix });

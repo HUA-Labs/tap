@@ -9,6 +9,7 @@ import { serveCommand } from "./commands/serve.js";
 import { initWorktreeCommand } from "./commands/init-worktree.js";
 import { dashboardCommand } from "./commands/dashboard.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { commsCommand } from "./commands/comms.js";
 import { version } from "./version.js";
 import { extractJsonFlag, emitResult, exitCode } from "./output.js";
 import { setJsonMode } from "./utils.js";
@@ -29,6 +30,7 @@ Commands:
   bridge <sub> [inst]   Manage bridges (start, stop, status)
   up                    Start all registered bridge daemons
   down                  Stop all running bridge daemons
+  comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
   doctor                Diagnose tap infrastructure health
   serve                 Start tap-comms MCP server (stdio)
@@ -57,6 +59,7 @@ function normalizeCommandName(command: string | undefined): CommandName {
     case "bridge":
     case "up":
     case "down":
+    case "comms":
     case "dashboard":
     case "doctor":
     case "serve":
@@ -118,6 +121,9 @@ async function main(): Promise<void> {
         break;
       case "down":
         result = await downCommand(commandArgs);
+        break;
+      case "comms":
+        result = await commsCommand(commandArgs);
         break;
       case "dashboard":
         result = await dashboardCommand(commandArgs);

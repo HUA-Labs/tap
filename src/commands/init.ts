@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execSync } from "node:child_process";
 import { createInitialState, saveState, stateExists } from "../state.js";
 import {
   findRepoRoot,
@@ -7,6 +8,7 @@ import {
   log,
   logSuccess,
   logWarn,
+  logError,
   logHeader,
 } from "../utils.js";
 import { version } from "../version.js";
@@ -17,7 +19,11 @@ import {
 } from "../permissions.js";
 import type { CommandResult } from "../types.js";
 import type { PermissionMode } from "../permissions.js";
-import { resolveConfig } from "../config/index.js";
+import {
+  resolveConfig,
+  saveSharedConfig,
+  loadSharedConfig,
+} from "../config/index.js";
 
 const COMMS_DIRS = [
   "inbox",
@@ -56,6 +62,72 @@ export async function initCommand(args: string[]): Promise<CommandResult> {
   }
 
   logHeader("@hua-labs/tap init");
+
+  // Clone comms repo if --comms-repo provided
+  const commsRepoIdx = args.indexOf("--comms-repo");
+  const commsRepoUrl =
+    commsRepoIdx !== -1 && args[commsRepoIdx + 1]
+      ? args[commsRepoIdx + 1]
+      : undefined;
+
+  if (commsRepoUrl) {
+    if (fs.existsSync(commsDir) && fs.readdirSync(commsDir).length > 0) {
+      const gitDir = path.join(commsDir, ".git");
+      if (fs.existsSync(gitDir)) {
+        log(`Comms directory exists: ${commsDir}`);
+        logSuccess("Comms directory is already a git repo — linking only");
+      } else {
+        logError(`Comms directory exists but is not a git repo: ${commsDir}`);
+        return {
+          ok: false,
+          command: "init",
+          code: "TAP_INIT_CLONE_FAILED",
+          message: `Comms directory "${commsDir}" exists but is not a git repo. Remove it or use --force to reinitialize.`,
+          warnings: [],
+          data: { commsDir, commsRepoUrl },
+        };
+      }
+    } else {
+      log(`Cloning comms repo: ${commsRepoUrl}`);
+      try {
+        execSync(`git clone "${commsRepoUrl}" "${commsDir}"`, {
+          stdio: "pipe",
+          encoding: "utf-8",
+        });
+        logSuccess(`Cloned comms repo to ${commsDir}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`Failed to clone comms repo: ${msg}`);
+        return {
+          ok: false,
+          command: "init",
+          code: "TAP_INIT_CLONE_FAILED",
+          message: `Failed to clone comms repo: ${msg}`,
+          warnings: [],
+          data: { commsRepoUrl },
+        };
+      }
+    }
+  }
+
+  // Persist comms config (commsDir + optional repoUrl) for tap comms pull/push
+  {
+    const sharedConfig = loadSharedConfig(repoRoot) ?? {};
+    let configChanged = false;
+    if (commsRepoUrl) {
+      sharedConfig.commsRepoUrl = commsRepoUrl;
+      configChanged = true;
+    }
+    const commsDirRelative = path.relative(repoRoot, commsDir);
+    if (commsDirRelative && commsDirRelative !== "tap-comms") {
+      sharedConfig.commsDir = commsDirRelative;
+      configChanged = true;
+    }
+    if (configChanged) {
+      saveSharedConfig(repoRoot, sharedConfig);
+      logSuccess("Saved comms config to tap-config.json");
+    }
+  }
 
   // Create comms directory structure
   log(`Comms directory: ${commsDir}`);

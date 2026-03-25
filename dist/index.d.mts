@@ -164,8 +164,8 @@ interface TapStateV1 {
     packageVersion: string;
     runtimes: Partial<Record<RuntimeName, RuntimeState>>;
 }
-type CommandName = "init" | "init-worktree" | "add" | "remove" | "status" | "serve" | "bridge" | "up" | "down" | "dashboard" | "doctor" | "unknown";
-type CommandCode = "TAP_INIT_OK" | "TAP_ADD_OK" | "TAP_REMOVE_OK" | "TAP_STATUS_OK" | "TAP_SERVE_OK" | "TAP_NO_OP" | "TAP_ALREADY_INITIALIZED" | "TAP_NOT_INITIALIZED" | "TAP_RUNTIME_UNKNOWN" | "TAP_RUNTIME_NOT_FOUND" | "TAP_CONFIG_INVALID" | "TAP_LOCAL_SERVER_MISSING" | "TAP_INVALID_ARGUMENT" | "TAP_INSTANCE_NOT_FOUND" | "TAP_INSTANCE_AMBIGUOUS" | "TAP_PORT_CONFLICT" | "TAP_PATCH_FAILED" | "TAP_VERIFY_FAILED" | "TAP_ROLLBACK_FAILED" | "TAP_BRIDGE_START_OK" | "TAP_BRIDGE_START_FAILED" | "TAP_BRIDGE_STOP_OK" | "TAP_BRIDGE_STATUS_OK" | "TAP_BRIDGE_NOT_RUNNING" | "TAP_BRIDGE_SCRIPT_MISSING" | "TAP_UP_OK" | "TAP_DOWN_OK" | "TAP_SERVE_NO_SERVER" | "TAP_SERVE_BUN_REQUIRED" | "TAP_REVIEW_START_OK" | "TAP_REVIEW_TERMINATED" | "TAP_INTERNAL_ERROR";
+type CommandName = "init" | "init-worktree" | "add" | "remove" | "status" | "serve" | "bridge" | "up" | "down" | "comms" | "dashboard" | "doctor" | "unknown";
+type CommandCode = "TAP_INIT_OK" | "TAP_ADD_OK" | "TAP_REMOVE_OK" | "TAP_STATUS_OK" | "TAP_SERVE_OK" | "TAP_NO_OP" | "TAP_ALREADY_INITIALIZED" | "TAP_INIT_CLONE_FAILED" | "TAP_NOT_INITIALIZED" | "TAP_RUNTIME_UNKNOWN" | "TAP_RUNTIME_NOT_FOUND" | "TAP_CONFIG_INVALID" | "TAP_LOCAL_SERVER_MISSING" | "TAP_INVALID_ARGUMENT" | "TAP_INSTANCE_NOT_FOUND" | "TAP_INSTANCE_AMBIGUOUS" | "TAP_PORT_CONFLICT" | "TAP_PATCH_FAILED" | "TAP_VERIFY_FAILED" | "TAP_ROLLBACK_FAILED" | "TAP_BRIDGE_START_OK" | "TAP_BRIDGE_START_FAILED" | "TAP_BRIDGE_STOP_OK" | "TAP_BRIDGE_STATUS_OK" | "TAP_BRIDGE_NOT_RUNNING" | "TAP_BRIDGE_SCRIPT_MISSING" | "TAP_UP_OK" | "TAP_DOWN_OK" | "TAP_COMMS_PULL_OK" | "TAP_COMMS_PULL_FAILED" | "TAP_COMMS_PUSH_OK" | "TAP_COMMS_PUSH_FAILED" | "TAP_COMMS_NOT_REPO" | "TAP_SERVE_NO_SERVER" | "TAP_SERVE_BUN_REQUIRED" | "TAP_REVIEW_START_OK" | "TAP_REVIEW_TERMINATED" | "TAP_INTERNAL_ERROR";
 interface CommandResult<T = Record<string, unknown>> {
     ok: boolean;
     command: CommandName;
@@ -197,6 +197,8 @@ interface TapSharedConfig {
     runtimeCommand?: string;
     /** App server WebSocket URL for bridge connections. */
     appServerUrl?: string;
+    /** GitHub URL for the comms repository (used by `tap comms pull/push`). */
+    commsRepoUrl?: string;
 }
 /**
  * Local config (tap-config.local.json) — gitignored, machine-specific overrides.
@@ -300,7 +302,8 @@ declare function collectDashboardSnapshot(repoRoot?: string, commsDirOverride?: 
  * State/Control API — programmatic access to tap state.
  * GUI and autopilot consume these functions instead of shelling out to CLI.
  *
- * M105: JSON contract for getDashboardSnapshot, streamEvents.
+ * M105 P1: getDashboardSnapshot, streamEvents (read-only)
+ * M105 P2: startAgents, stopAgents (write — wraps tap up/down)
  */
 
 interface StateApiOptions {
@@ -327,6 +330,31 @@ interface EventStreamOptions extends StateApiOptions {
  * Stops when the AbortSignal fires or the consumer breaks out.
  */
 declare function streamEvents(options?: EventStreamOptions): AsyncGenerator<DashboardSnapshot>;
+interface AgentControlOptions {
+    /** Extra CLI args forwarded to `tap up` (e.g. `["--no-auth"]`) */
+    args?: string[];
+}
+interface AgentControlResult {
+    ok: boolean;
+    message: string;
+    snapshot: DashboardSnapshot;
+    commandResult: CommandResult;
+}
+/**
+ * Start all registered bridge daemons.
+ * Equivalent to `tap up [...args]`.
+ *
+ * Always operates on the cwd-based repo (same as CLI commands).
+ * Use read-only APIs (getDashboardSnapshot) for cross-repo queries.
+ */
+declare function startAgents(options?: AgentControlOptions): Promise<AgentControlResult>;
+/**
+ * Stop all running bridge daemons.
+ * Equivalent to `tap down`.
+ *
+ * Always operates on the cwd-based repo (same as CLI commands).
+ */
+declare function stopAgents(): Promise<AgentControlResult>;
 /**
  * Resolve tap configuration for API consumers.
  * Returns paths and settings without requiring CLI args.
@@ -403,4 +431,4 @@ declare function resolveNodeRuntime(configCommand: string, repoRoot: string): Re
  */
 declare function buildRuntimeEnv(repoRoot: string, baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 
-export { type AdapterContext, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startHttpServer, stateExists, streamEvents, updateBridgeHeartbeat, version };
+export { type AdapterContext, type AgentControlOptions, type AgentControlResult, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startAgents, startHttpServer, stateExists, stopAgents, streamEvents, updateBridgeHeartbeat, version };

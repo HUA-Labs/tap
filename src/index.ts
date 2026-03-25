@@ -73,8 +73,19 @@ export type {
 export { collectDashboardSnapshot } from "./engine/dashboard.js";
 
 // State/Control API (M105)
-export type { StateApiOptions, EventStreamOptions } from "./api/state.js";
-export { getDashboardSnapshot, streamEvents, getConfig } from "./api/state.js";
+export type {
+  StateApiOptions,
+  EventStreamOptions,
+  AgentControlOptions,
+  AgentControlResult,
+} from "./api/state.js";
+export {
+  getDashboardSnapshot,
+  streamEvents,
+  getConfig,
+  startAgents,
+  stopAgents,
+} from "./api/state.js";
 export type { HttpServerOptions } from "./api/http.js";
 export { startHttpServer } from "./api/http.js";
 
