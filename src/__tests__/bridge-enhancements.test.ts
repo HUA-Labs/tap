@@ -6,6 +6,7 @@ import {
   rotateLog,
   updateBridgeHeartbeat,
   getHeartbeatAge,
+  getBridgeHeartbeatTimestamp,
   saveBridgeState,
   loadBridgeState,
 } from "../engine/bridge.js";
@@ -116,6 +117,39 @@ describe("updateBridgeHeartbeat", () => {
 });
 
 describe("getHeartbeatAge", () => {
+  it("prefers runtime heartbeat from the instance-specific daemon state dir", () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge-codex",
+    );
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify(
+        {
+          updatedAt: new Date(Date.now() - 5 * 1000).toISOString(),
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state: BridgeState = {
+      pid: process.pid,
+      statePath: path.join(stateDir, "pids", "bridge-codex.json"),
+      lastHeartbeat: "2026-01-01T00:00:00.000Z",
+      runtimeStateDir,
+    };
+    saveBridgeState(stateDir, "codex", state);
+
+    const age = getHeartbeatAge(stateDir, "codex");
+    expect(age).not.toBeNull();
+    expect(age!).toBeGreaterThanOrEqual(4);
+    expect(age!).toBeLessThanOrEqual(10);
+  });
+
   it("returns age in seconds for valid heartbeat", () => {
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const state: BridgeState = {
@@ -158,5 +192,31 @@ describe("getHeartbeatAge", () => {
     const age = getHeartbeatAge(stateDir, "codex");
     expect(age).not.toBeNull();
     expect(age!).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("getBridgeHeartbeatTimestamp", () => {
+  it("returns the daemon heartbeat timestamp when runtime state dir is present", () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge-codex",
+    );
+    const updatedAt = "2026-03-25T12:34:56.000Z";
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({ updatedAt }, null, 2),
+      "utf-8",
+    );
+
+    saveBridgeState(stateDir, "codex", {
+      pid: process.pid,
+      statePath: path.join(stateDir, "pids", "bridge-codex.json"),
+      lastHeartbeat: "2026-01-01T00:00:00.000Z",
+      runtimeStateDir,
+    });
+
+    expect(getBridgeHeartbeatTimestamp(stateDir, "codex")).toBe(updatedAt);
   });
 });

@@ -6,6 +6,12 @@ import {
   getBridgeStatus,
   loadBridgeState,
   getHeartbeatAge,
+  getBridgeHeartbeatTimestamp,
+  saveBridgeState,
+  stopManagedAppServer,
+  resolveAppServerUrl,
+  checkAppServerHealth,
+  findNextAvailableAppServerPort,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
 import { getAdapter } from "../adapters/index.js";
@@ -24,6 +30,9 @@ import type {
   HeadlessConfig,
   AgentRole,
   CommandResult,
+  AppServerState,
+  BridgeState,
+  TapState,
 } from "../types.js";
 
 function formatAge(seconds: number): string {
@@ -38,6 +47,7 @@ Usage:
 
 Subcommands:
   start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
+  start --all       Start all registered app-server instances
   stop  <instance>  Stop bridge for an instance
   stop              Stop all running bridges
   status            Show bridge status for all instances
@@ -45,6 +55,8 @@ Subcommands:
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
+                                   Saved to state — only needed on first start
+  --all                            Start all registered app-server instances
   --busy-mode <steer|wait>         How to handle active turns (default: steer)
   --poll-seconds <n>               Inbox poll interval (default: 5)
   --reconnect-seconds <n>          Reconnect delay after disconnect (default: 5)
@@ -52,14 +64,125 @@ Options:
   --thread-id <id>                 Resume specific thread
   --ephemeral                      Use ephemeral thread (no persistence)
   --process-existing-messages      Process all existing inbox messages
+  --no-server                      Skip app-server auto-start and connect only
+  --no-auth                        Skip auth gateway (app-server listens directly, localhost only)
+
+Port Assignment:
+  Ports are auto-assigned from 4501 on first bridge start if not set via --port
+  during 'tap add'. Auto-assigned ports are saved to state for future starts.
 
 Examples:
   npx @hua-labs/tap bridge start codex --agent-name myAgent
+  npx @hua-labs/tap bridge start --all
+  npx @hua-labs/tap bridge start codex --agent-name myAgent --no-server
   npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer --busy-mode steer
   npx @hua-labs/tap bridge stop codex
   npx @hua-labs/tap bridge stop
   npx @hua-labs/tap bridge status
 `.trim();
+
+function formatAppServerState(appServer: AppServerState): string {
+  const ownership = appServer.managed ? "managed" : "external";
+  const pid = appServer.pid != null ? ` pid:${appServer.pid}` : "";
+  const health = appServer.healthy ? "healthy" : "unhealthy";
+  const auth =
+    appServer.auth != null
+      ? `, auth gateway:${appServer.auth.gatewayPid ?? "-"} -> ${appServer.auth.upstreamUrl}`
+      : "";
+  return `${health}, ${ownership}${pid}, ${appServer.url}${auth}`;
+}
+
+function redactProtectedUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.has("tap_token")) {
+      parsed.searchParams.set("tap_token", "***");
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url.replace(/tap_token=[^&]+/g, "tap_token=***");
+  }
+}
+
+function loadCurrentBridgeState(
+  stateDir: string,
+  instanceId: InstanceId,
+  fallback: BridgeState | null | undefined,
+): BridgeState | null {
+  return loadBridgeState(stateDir, instanceId) ?? fallback ?? null;
+}
+
+function getSharedAppServerUsers(
+  state: TapState,
+  stateDir: string,
+  currentInstanceId: InstanceId,
+  appServerUrl: string,
+): InstanceId[] {
+  const shared: InstanceId[] = [];
+
+  for (const [id, inst] of Object.entries(state.instances)) {
+    if (id === currentInstanceId || !inst?.installed) {
+      continue;
+    }
+
+    const instanceId = id as InstanceId;
+    if (getBridgeStatus(stateDir, instanceId) !== "running") {
+      continue;
+    }
+
+    const bridgeState = loadCurrentBridgeState(
+      stateDir,
+      instanceId,
+      inst.bridge,
+    );
+    if (bridgeState?.appServer?.url === appServerUrl) {
+      shared.push(instanceId);
+    }
+  }
+
+  return shared;
+}
+
+function transferManagedAppServerOwnership(
+  state: TapState,
+  stateDir: string,
+  recipientId: InstanceId,
+  appServer: AppServerState,
+): boolean {
+  const recipient = state.instances[recipientId];
+  if (!recipient) {
+    return false;
+  }
+
+  const bridgeState = loadCurrentBridgeState(
+    stateDir,
+    recipientId,
+    recipient.bridge,
+  );
+  if (!bridgeState) {
+    return false;
+  }
+
+  const transferredAppServer: AppServerState = {
+    ...appServer,
+    managed: true,
+    healthy: true,
+    lastCheckedAt: new Date().toISOString(),
+    lastHealthyAt: appServer.lastHealthyAt ?? new Date().toISOString(),
+  };
+
+  const updatedBridge: BridgeState = {
+    ...bridgeState,
+    appServer: transferredAppServer,
+  };
+
+  saveBridgeState(stateDir, recipientId, updatedBridge);
+  state.instances[recipientId] = {
+    ...recipient,
+    bridge: updatedBridge,
+  };
+  return true;
+}
 
 // ─── Subcommand: start ─────────────────────────────────────────
 
@@ -69,7 +192,7 @@ async function bridgeStart(
   flags: Record<string, string | boolean | undefined> = {},
 ): Promise<CommandResult> {
   const repoRoot = findRepoRoot();
-  const state = loadState(repoRoot);
+  let state = loadState(repoRoot);
 
   if (!state) {
     return {
@@ -95,7 +218,7 @@ async function bridgeStart(
   }
 
   const instanceId = resolved.instanceId;
-  const instance = state.instances[instanceId];
+  let instance = state.instances[instanceId];
 
   if (!instance?.installed) {
     return {
@@ -126,6 +249,17 @@ async function bridgeStart(
     };
   }
 
+  // Resolve agent name: explicit flag > stored in state > env
+  const resolvedAgentName = agentName ?? instance.agentName ?? undefined;
+
+  // Persist agent-name to state if explicitly provided
+  if (agentName && agentName !== instance.agentName) {
+    instance = { ...instance, agentName };
+    const updatedState = updateInstanceState(state, instanceId, instance);
+    saveState(repoRoot, updatedState);
+    state = updatedState;
+  }
+
   const ctx = createAdapterContext(state.commsDir, repoRoot);
   const bridgeScript = adapter.resolveBridgeScript?.(ctx);
 
@@ -145,14 +279,44 @@ async function bridgeStart(
   // Resolve runtime command + appServerUrl from config
   const { config: resolvedConfig } = resolveConfig({}, repoRoot);
   const runtimeCommand = resolvedConfig.runtimeCommand;
-  const appServerUrl = resolvedConfig.appServerUrl;
+  const manageAppServer =
+    instance.runtime === "codex" && flags["no-server"] !== true;
+
+  // Auto-assign port only for managed app-server mode (local instances).
+  // External servers (--no-server) keep the configured appServerUrl as-is.
+  let effectivePort = instance.port;
+  if (effectivePort == null && manageAppServer) {
+    effectivePort = await findNextAvailableAppServerPort(
+      state,
+      resolvedConfig.appServerUrl,
+      4501,
+      instanceId,
+    );
+    instance = { ...instance, port: effectivePort };
+    const updatedState = updateInstanceState(state, instanceId, instance);
+    saveState(repoRoot, updatedState);
+    state = updatedState;
+  }
+
+  const appServerUrl = resolveAppServerUrl(
+    resolvedConfig.appServerUrl,
+    effectivePort ?? undefined,
+  );
 
   logHeader(`@hua-labs/tap bridge start ${instanceId}`);
   log(`Bridge script: ${bridgeScript}`);
   log(`Bridge mode:   ${mode}`);
   log(`Runtime cmd:   ${runtimeCommand}`);
   log(`App server:    ${appServerUrl}`);
-  if (instance.port) log(`Port:          ${instance.port}`);
+  if (effectivePort != null) log(`Port:          ${effectivePort}`);
+  if (resolvedAgentName) log(`Agent name:    ${resolvedAgentName}`);
+  const noAuth = flags["no-auth"] === true;
+  if (!manageAppServer && instance.runtime === "codex") {
+    log("Auto server:   disabled (--no-server)");
+  }
+  if (noAuth && manageAppServer) {
+    log("Auth gateway:  disabled (--no-auth)");
+  }
   // Show headless status from instance config or --headless flag (resolved below)
   const willBeHeadless =
     flags["headless"] === true || instance.headless?.enabled;
@@ -165,6 +329,27 @@ async function bridgeStart(
   }
 
   try {
+    // Startup validation: health check before bridge start
+    if (!manageAppServer && instance.runtime === "codex") {
+      log("Checking app-server health...");
+      const healthy = await checkAppServerHealth(appServerUrl);
+      if (healthy) {
+        logSuccess("App server reachable");
+      } else {
+        logError(`App server not reachable at ${appServerUrl}`);
+        return {
+          ok: false,
+          command: "bridge",
+          instanceId,
+          runtime: instance.runtime,
+          code: "TAP_BRIDGE_START_FAILED",
+          message: `App server not reachable at ${appServerUrl}. Start it first: codex app-server --listen ${appServerUrl}`,
+          warnings: [],
+          data: {},
+        };
+      }
+    }
+
     // Parse bridge operational flags from CLI
 
     // --busy-mode validation (PS1 parity: ValidateSet("wait", "steer"))
@@ -238,11 +423,13 @@ async function bridgeStart(
       commsDir: ctx.commsDir,
       bridgeScript,
       platform: ctx.platform,
-      agentName,
+      agentName: resolvedAgentName,
       runtimeCommand,
       appServerUrl,
       repoRoot,
-      port: instance.port ?? undefined,
+      port: effectivePort ?? undefined,
+      manageAppServer,
+      noAuth,
       headless,
       busyMode,
       pollSeconds,
@@ -255,6 +442,26 @@ async function bridgeStart(
 
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
     log(`Log: ${path.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
+    if (bridge.appServer) {
+      log(`App server:   ${formatAppServerState(bridge.appServer)}`);
+      if (bridge.appServer.logPath) {
+        log(`Server log:   ${bridge.appServer.logPath}`);
+      }
+      if (bridge.appServer.auth) {
+        log(
+          `Protected:    ${redactProtectedUrl(bridge.appServer.auth.protectedUrl)}`,
+        );
+        if (bridge.appServer.auth.gatewayLogPath) {
+          log(`Gateway log:  ${bridge.appServer.auth.gatewayLogPath}`);
+        }
+        // TUI must connect to upstream (no token needed) — gateway blocks unauthenticated clients
+        log(`TUI connect:  ${bridge.appServer.auth.upstreamUrl}`);
+      }
+      if (bridge.appServer.managed && !bridge.appServer.auth) {
+        // --no-auth mode: TUI connects to the same URL as the bridge
+        log(`TUI connect:  ${bridge.appServer.url}`);
+      }
+    }
 
     // Update state with bridge info
     const updated = { ...instance, bridge };
@@ -269,7 +476,7 @@ async function bridgeStart(
       code: "TAP_BRIDGE_START_OK",
       message: `Bridge for ${instanceId} started (PID: ${bridge.pid})`,
       warnings: [],
-      data: { pid: bridge.pid },
+      data: { pid: bridge.pid, appServer: bridge.appServer ?? null },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -285,6 +492,95 @@ async function bridgeStart(
       data: {},
     };
   }
+}
+
+// ─── Subcommand: start --all ───────────────────────────────────
+
+async function bridgeStartAll(
+  flags: Record<string, string | boolean | undefined> = {},
+): Promise<CommandResult> {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const instanceIds = Object.keys(state.instances) as InstanceId[];
+  const appServerInstances = instanceIds.filter((id) => {
+    const inst = state.instances[id];
+    if (!inst?.installed) return false;
+    const adapter = getAdapter(inst.runtime);
+    return adapter.bridgeMode() === "app-server";
+  });
+
+  if (appServerInstances.length === 0) {
+    return {
+      ok: true,
+      command: "bridge",
+      code: "TAP_NO_OP",
+      message: "No app-server instances found to start.",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  logHeader("@hua-labs/tap bridge start --all");
+  log(
+    `Found ${appServerInstances.length} app-server instance(s): ${appServerInstances.join(", ")}`,
+  );
+  log("");
+
+  const started: string[] = [];
+  const failed: string[] = [];
+  const warnings: string[] = [];
+
+  for (const instanceId of appServerInstances) {
+    const inst = state.instances[instanceId];
+    const storedName = inst?.agentName ?? undefined;
+
+    if (!storedName) {
+      const msg = `${instanceId}: skipped — no stored agent-name. Set it first: tap bridge start ${instanceId} --agent-name <name>`;
+      log(msg);
+      warnings.push(msg);
+      continue;
+    }
+
+    log(`Starting ${instanceId} (agent: ${storedName})...`);
+    const result = await bridgeStart(instanceId, storedName, flags);
+
+    if (result.ok) {
+      started.push(instanceId);
+      logSuccess(`${instanceId} started`);
+    } else {
+      failed.push(instanceId);
+      logError(`${instanceId}: ${result.message}`);
+    }
+    log("");
+  }
+
+  const message =
+    started.length > 0
+      ? `Started ${started.length}/${appServerInstances.length} bridge(s): ${started.join(", ")}` +
+        (failed.length > 0 ? `. Failed: ${failed.join(", ")}` : "")
+      : `No bridges started. Failed: ${failed.join(", ")}`;
+
+  return {
+    ok: failed.length === 0 && started.length > 0,
+    command: "bridge",
+    code:
+      started.length > 0 ? "TAP_BRIDGE_START_OK" : "TAP_BRIDGE_START_FAILED",
+    message,
+    warnings,
+    data: { started, failed },
+  };
 }
 
 // ─── Subcommand: stop ──────────────────────────────────────────
@@ -318,6 +614,13 @@ async function bridgeStopOne(identifier: string): Promise<CommandResult> {
 
   const instanceId = resolved.instanceId;
   const ctx = createAdapterContext(state.commsDir, repoRoot);
+  const instance = state.instances[instanceId];
+  const bridgeState = loadCurrentBridgeState(
+    ctx.stateDir,
+    instanceId,
+    instance?.bridge,
+  );
+  const appServer = bridgeState?.appServer ?? null;
 
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
 
@@ -327,17 +630,62 @@ async function bridgeStopOne(identifier: string): Promise<CommandResult> {
     platform: ctx.platform,
   });
 
+  let appServerStopped = false;
+  let appServerTransferredTo: InstanceId | null = null;
+
   if (stopped) {
     logSuccess(`Bridge for ${instanceId} stopped`);
+  } else {
+    log(`No running bridge for ${instanceId}`);
+  }
 
-    // Clear bridge from state
-    const instance = state.instances[instanceId];
-    if (instance) {
-      const updated = { ...instance, bridge: null };
-      const newState = updateInstanceState(state, instanceId, updated);
-      saveState(repoRoot, newState);
+  if (appServer?.managed) {
+    const sharedUsers = getSharedAppServerUsers(
+      state,
+      ctx.stateDir,
+      instanceId,
+      appServer.url,
+    );
+
+    if (sharedUsers.length > 0) {
+      const recipient = sharedUsers[0];
+      if (
+        transferManagedAppServerOwnership(
+          state,
+          ctx.stateDir,
+          recipient,
+          appServer,
+        )
+      ) {
+        appServerTransferredTo = recipient;
+        log(`Managed app-server ownership moved to ${recipient}`);
+      } else {
+        log(
+          `Managed app-server left running at ${appServer.url} because ownership transfer failed`,
+        );
+      }
+    } else {
+      appServerStopped = await stopManagedAppServer(appServer, ctx.platform);
+      if (appServerStopped) {
+        const gatewayNote =
+          appServer.auth?.gatewayPid != null
+            ? `, gateway PID: ${appServer.auth.gatewayPid}`
+            : "";
+        logSuccess(
+          `Managed app-server stopped (PID: ${appServer.pid ?? "-"}${gatewayNote})`,
+        );
+      }
     }
+  }
 
+  // Clear bridge from state
+  if (instance) {
+    const updated = { ...instance, bridge: null };
+    const newState = updateInstanceState(state, instanceId, updated);
+    saveState(repoRoot, newState);
+  }
+
+  if (stopped) {
     return {
       ok: true,
       command: "bridge",
@@ -345,18 +693,11 @@ async function bridgeStopOne(identifier: string): Promise<CommandResult> {
       code: "TAP_BRIDGE_STOP_OK",
       message: `Bridge for ${instanceId} stopped`,
       warnings: [],
-      data: {},
+      data: {
+        appServerStopped,
+        appServerTransferredTo,
+      },
     };
-  }
-
-  log(`No running bridge for ${instanceId}`);
-
-  // Clear stale bridge metadata from state even if process was already dead
-  const instance = state.instances[instanceId];
-  if (instance?.bridge) {
-    const updated = { ...instance, bridge: null };
-    const newState = updateInstanceState(state, instanceId, updated);
-    saveState(repoRoot, newState);
   }
 
   return {
@@ -366,7 +707,10 @@ async function bridgeStopOne(identifier: string): Promise<CommandResult> {
     code: "TAP_BRIDGE_NOT_RUNNING",
     message: `No running bridge for ${instanceId}`,
     warnings: [],
-    data: {},
+    data: {
+      appServerStopped,
+      appServerTransferredTo,
+    },
   };
 }
 
@@ -388,12 +732,26 @@ async function bridgeStopAll(): Promise<CommandResult> {
   const ctx = createAdapterContext(state.commsDir, repoRoot);
   const instanceIds = Object.keys(state.instances) as InstanceId[];
   const stopped: string[] = [];
+  const managedAppServers = new Map<string, AppServerState>();
 
   logHeader("@hua-labs/tap bridge stop (all)");
 
   let stateChanged = false;
 
   for (const instanceId of instanceIds) {
+    const bridgeState = loadCurrentBridgeState(
+      ctx.stateDir,
+      instanceId,
+      state.instances[instanceId]?.bridge,
+    );
+    const appServer = bridgeState?.appServer;
+    if (appServer?.managed && appServer.pid != null) {
+      managedAppServers.set(
+        `${appServer.url}:${appServer.pid}:${appServer.auth?.gatewayPid ?? "-"}`,
+        appServer,
+      );
+    }
+
     const didStop = await stopBridge({
       instanceId,
       stateDir: ctx.stateDir,
@@ -410,6 +768,20 @@ async function bridgeStopAll(): Promise<CommandResult> {
     if (instance?.bridge) {
       state.instances[instanceId] = { ...instance, bridge: null };
       stateChanged = true;
+    }
+  }
+
+  const stoppedAppServers: number[] = [];
+  for (const appServer of managedAppServers.values()) {
+    if (await stopManagedAppServer(appServer, ctx.platform)) {
+      stoppedAppServers.push(appServer.pid!);
+      const gatewayNote =
+        appServer.auth?.gatewayPid != null
+          ? `, gateway PID ${appServer.auth.gatewayPid}`
+          : "";
+      logSuccess(
+        `Stopped app-server PID ${appServer.pid} (${appServer.url}${gatewayNote})`,
+      );
     }
   }
 
@@ -431,7 +803,7 @@ async function bridgeStopAll(): Promise<CommandResult> {
     code: stopped.length > 0 ? "TAP_BRIDGE_STOP_OK" : "TAP_BRIDGE_NOT_RUNNING",
     message,
     warnings: [],
-    data: { stopped },
+    data: { stopped, stoppedAppServers },
   };
 }
 
@@ -463,6 +835,7 @@ function bridgeStatusAll(): CommandResult {
       pid: number | null;
       port: number | null;
       lastHeartbeat: string | null;
+      appServer: AppServerState | null;
     }
   > = {};
 
@@ -488,6 +861,7 @@ function bridgeStatusAll(): CommandResult {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        appServer: null,
       };
       continue;
     }
@@ -497,7 +871,7 @@ function bridgeStatusAll(): CommandResult {
     const age = getHeartbeatAge(stateDir, instanceId);
 
     const pid = bridgeState?.pid ?? null;
-    const heartbeat = bridgeState?.lastHeartbeat ?? null;
+    const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
     const pidStr = pid ? String(pid) : "-";
     const portStr = inst.port ? String(inst.port) : "-";
     const ageStr = age !== null ? formatAge(age) : "-";
@@ -512,6 +886,17 @@ function bridgeStatusAll(): CommandResult {
     log(
       `${instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${statusColor.padEnd(10)} ${pidStr.padEnd(8)} ${portStr.padEnd(6)} ${ageStr}`,
     );
+    if (bridgeState?.appServer) {
+      log(`  App server: ${formatAppServerState(bridgeState.appServer)}`);
+      if (bridgeState.appServer.logPath) {
+        log(`  Server log: ${bridgeState.appServer.logPath}`);
+      }
+      if (bridgeState.appServer.auth) {
+        log(
+          `  Protected: ${redactProtectedUrl(bridgeState.appServer.auth.protectedUrl)}`,
+        );
+      }
+    }
 
     bridges[instanceId] = {
       status,
@@ -519,6 +904,7 @@ function bridgeStatusAll(): CommandResult {
       pid,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      appServer: bridgeState?.appServer ?? null,
     };
   }
 
@@ -605,6 +991,7 @@ function bridgeStatusOne(identifier: string): CommandResult {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        appServer: null,
       },
     };
   }
@@ -614,17 +1001,47 @@ function bridgeStatusOne(identifier: string): CommandResult {
   const status = getBridgeStatus(stateDir, instanceId);
   const bridgeState = loadBridgeState(stateDir, instanceId);
   const age = getHeartbeatAge(stateDir, instanceId);
+  const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
 
   log(`Status:      ${status}`);
 
   if (bridgeState) {
     log(`PID:         ${bridgeState.pid}`);
     log(
-      `Heartbeat:   ${bridgeState.lastHeartbeat}${age !== null ? ` (${formatAge(age)})` : ""}`,
+      `Heartbeat:   ${heartbeat ?? "-"}${age !== null ? ` (${formatAge(age)})` : ""}`,
     );
     log(
       `Log:         ${path.join(stateDir, "logs", `bridge-${instanceId}.log`)}`,
     );
+    if (bridgeState.appServer) {
+      log(`App server:  ${bridgeState.appServer.url}`);
+      log(`Server PID:  ${bridgeState.appServer.pid ?? "-"}`);
+      log(
+        `Server mode: ${bridgeState.appServer.managed ? "managed" : "external"}`,
+      );
+      log(
+        `Health:      ${bridgeState.appServer.healthy ? "healthy" : "unhealthy"}`,
+      );
+      log(`Checked:     ${bridgeState.appServer.lastCheckedAt}`);
+      if (bridgeState.appServer.logPath) {
+        log(`Server log:  ${bridgeState.appServer.logPath}`);
+      }
+      if (bridgeState.appServer.auth) {
+        log(`Auth:        ${bridgeState.appServer.auth.mode}`);
+        log(
+          `Protected:   ${redactProtectedUrl(bridgeState.appServer.auth.protectedUrl)}`,
+        );
+        log(`Upstream:    ${bridgeState.appServer.auth.upstreamUrl}`);
+        log(`TUI connect: ${bridgeState.appServer.auth.upstreamUrl}`);
+        log(`Gateway PID: ${bridgeState.appServer.auth.gatewayPid ?? "-"}`);
+        if (bridgeState.appServer.auth.gatewayLogPath) {
+          log(`Gateway log: ${bridgeState.appServer.auth.gatewayLogPath}`);
+        }
+      } else if (bridgeState.appServer.managed) {
+        log(`Auth:        none (--no-auth)`);
+        log(`TUI connect: ${bridgeState.appServer.url}`);
+      }
+    }
   }
 
   log("");
@@ -642,7 +1059,8 @@ function bridgeStatusOne(identifier: string): CommandResult {
       bridgeMode: inst.bridgeMode,
       pid: bridgeState?.pid ?? null,
       port: inst.port,
-      lastHeartbeat: bridgeState?.lastHeartbeat ?? null,
+      lastHeartbeat: heartbeat,
+      appServer: bridgeState?.appServer ?? null,
     },
   };
 }
@@ -670,13 +1088,29 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
 
   switch (subcommand) {
     case "start": {
+      const wantsAll = flags["all"] === true || identifierArg === "--all";
+      const hasInstance = identifierArg && identifierArg !== "--all";
+
+      if (wantsAll && hasInstance) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message: `Cannot combine <instance> with --all. Use either:\n  tap bridge start ${identifierArg}\n  tap bridge start --all`,
+          warnings: [],
+          data: {},
+        };
+      }
+      if (wantsAll) {
+        return bridgeStartAll(flags);
+      }
       if (!identifierArg) {
         return {
           ok: false,
           command: "bridge",
           code: "TAP_INVALID_ARGUMENT",
           message:
-            "Missing instance. Usage: npx @hua-labs/tap bridge start <instance>",
+            "Missing instance. Usage: npx @hua-labs/tap bridge start <instance> or --all",
           warnings: [],
           data: {},
         };

@@ -16,6 +16,8 @@ export interface AdapterContext {
   repoRoot: string;
   stateDir: string; // .tap-comms/
   platform: Platform;
+  /** Instance ID for TAP_AGENT_ID env injection. Set by 'tap add'. */
+  instanceId?: string;
 }
 
 // ─── Probe ──────────────────────────────────────────────────────
@@ -118,10 +120,34 @@ export interface HeadlessConfig {
 
 // ─── State ──────────────────────────────────────────────────────
 
+export interface AppServerAuthState {
+  mode: "query-token";
+  protectedUrl: string;
+  upstreamUrl: string;
+  tokenPath: string;
+  gatewayPid: number | null;
+  gatewayLogPath: string | null;
+}
+
+export interface AppServerState {
+  url: string;
+  pid: number | null;
+  managed: boolean;
+  healthy: boolean;
+  lastCheckedAt: string; // ISO
+  lastHealthyAt: string | null; // ISO
+  logPath: string | null;
+  manualCommand: string;
+  auth?: AppServerAuthState | null;
+}
+
 export interface BridgeState {
   pid: number;
   statePath: string;
   lastHeartbeat: string; // ISO
+  appServer?: AppServerState | null;
+  /** Instance-specific daemon state dir (thread/heartbeat/processed markers). */
+  runtimeStateDir?: string | null;
 }
 
 /** Runtime instance state. Supports multiple instances per runtime (e.g. codex-reviewer, codex-builder). */
@@ -190,7 +216,10 @@ export type CommandName =
   | "status"
   | "serve"
   | "bridge"
+  | "up"
+  | "down"
   | "dashboard"
+  | "doctor"
   | "unknown";
 
 export type CommandCode =
@@ -224,6 +253,8 @@ export type CommandCode =
   | "TAP_BRIDGE_STATUS_OK"
   | "TAP_BRIDGE_NOT_RUNNING"
   | "TAP_BRIDGE_SCRIPT_MISSING"
+  | "TAP_UP_OK"
+  | "TAP_DOWN_OK"
   | "TAP_SERVE_NO_SERVER"
   | "TAP_SERVE_BUN_REQUIRED"
   // Review (headless)

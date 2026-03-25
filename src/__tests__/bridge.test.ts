@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
@@ -10,8 +11,10 @@ import {
   isBridgeRunning,
   getBridgeStatus,
   startBridge,
+  getBridgeRuntimeStateDir,
+  findNextAvailableAppServerPort,
 } from "../engine/bridge.js";
-import type { BridgeState } from "../types.js";
+import type { BridgeState, TapState } from "../types.js";
 
 let tmpDir: string;
 let stateDir: string;
@@ -189,6 +192,73 @@ describe("multiple instances coexist", () => {
   });
 });
 
+describe("runtime state dir", () => {
+  it("derives an instance-specific daemon state dir", () => {
+    expect(getBridgeRuntimeStateDir("D:/repo", "codex-reviewer")).toBe(
+      path.join("D:/repo", ".tmp", "codex-app-server-bridge-codex-reviewer"),
+    );
+  });
+});
+
+describe("findNextAvailableAppServerPort", () => {
+  it("skips ports already occupied on loopback", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Failed to allocate an occupied test port");
+      }
+
+      const occupiedPort = address.port;
+      const state: TapState = {
+        schemaVersion: 2,
+        createdAt: "",
+        updatedAt: "",
+        commsDir: "",
+        repoRoot: "",
+        packageVersion: "0.2.0",
+        instances: {
+          codex: {
+            instanceId: "codex",
+            runtime: "codex",
+            agentName: null,
+            port: null,
+            installed: true,
+            configPath: "",
+            bridgeMode: "app-server",
+            restartRequired: false,
+            ownedArtifacts: [],
+            backupPath: "",
+            lastAppliedHash: "",
+            lastVerifiedAt: null,
+            bridge: null,
+            headless: null,
+            warnings: [],
+          },
+        },
+      };
+
+      const nextPort = await findNextAvailableAppServerPort(
+        state,
+        `ws://127.0.0.1:${occupiedPort}`,
+        occupiedPort,
+        "codex",
+      );
+
+      expect(nextPort).toBe(occupiedPort + 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
 describe("startBridge agent name requirement", () => {
   it("throws when no agent name is available", async () => {
     // Clear env vars
@@ -230,9 +300,13 @@ describe("startBridge agent name requirement", () => {
       bridgeScript: "/nonexistent/bridge.js",
       platform: "win32",
       agentName: "testAgent",
+      repoRoot: tmpDir,
     });
 
     expect(result.pid).toBeGreaterThan(0);
+    expect(result.runtimeStateDir).toBe(
+      path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+    );
 
     // Clean up spawned process
     try {

@@ -2,6 +2,7 @@ import { loadState, saveState, getInstalledInstances } from "../state.js";
 import { isBridgeRunning } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
 import { findRepoRoot, log, logHeader, logWarn } from "../utils.js";
+import { version } from "../version.js";
 import type { InstanceState, CommandResult } from "../types.js";
 
 function resolveStatus(inst: InstanceState, stateDir: string): string {
@@ -55,7 +56,7 @@ export async function statusCommand(_args: string[]): Promise<CommandResult> {
 
   logHeader("@hua-labs/tap status");
 
-  log(`Version:    ${state.packageVersion}`);
+  log(`Version:    ${version}`);
   log(`Comms dir:  ${state.commsDir}`);
   log(`Repo root:  ${state.repoRoot}`);
   log(`Schema:     v${state.schemaVersion}`);
@@ -133,7 +134,7 @@ export async function statusCommand(_args: string[]): Promise<CommandResult> {
     message: `${installed.length} instance(s) installed`,
     warnings: [],
     data: {
-      version: state.packageVersion,
+      version,
       commsDir: state.commsDir,
       repoRoot: state.repoRoot,
       instances,

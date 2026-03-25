@@ -1,7 +1,7 @@
 {
   "name": "@hua-labs/tap",
-  "version": "0.1.1",
-  "description": "Multi-agent orchestration protocol for AI coding sessions — parallel worktrees, cross-model communication, headless reviewers, CLI tooling",
+  "version": "0.2.0",
+  "description": "Zero-dependency CLI for cross-model AI agent communication setup",
   "bin": {
     "tap-comms": "./bin/tap-comms.mjs"
   },
@@ -27,7 +27,11 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@types/node": "^24.6.0",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
@@ -50,13 +54,12 @@
     "type": "git",
     "url": "https://github.com/HUA-Labs/tap.git"
   },
-  "homepage": "https://github.com/HUA-Labs/tap#readme",
   "sideEffects": false,
   "engines": {
     "node": ">=22.6.0"
   },
   "publishConfig": {
     "access": "public",
-    "provenance": false
+    "provenance": true
   }
 }

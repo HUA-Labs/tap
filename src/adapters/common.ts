@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { AdapterContext } from "../types.js";
 
 export interface CommandProbe {
@@ -85,6 +86,30 @@ export function findLocalTapCommsSource(ctx: AdapterContext): string | null {
   return null;
 }
 
+export function findBundledTapCommsSource(
+  metaUrl: string = import.meta.url,
+): string | null {
+  const moduleDir = path.dirname(fileURLToPath(metaUrl));
+  const candidates = [
+    path.join(moduleDir, "mcp-server.mjs"),
+    path.join(moduleDir, "..", "mcp-server.mjs"),
+    path.join(moduleDir, "..", "mcp-server.ts"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+export function findTapCommsServerEntry(
+  ctx: AdapterContext,
+  metaUrl: string = import.meta.url,
+): string | null {
+  return findBundledTapCommsSource(metaUrl) ?? findLocalTapCommsSource(ctx);
+}
+
 export function findPreferredBunCommand(): string | null {
   const home = getHomeDir();
   const candidates =
@@ -111,43 +136,52 @@ export function findPreferredBunCommand(): string | null {
 
 export function buildManagedMcpServerSpec(
   ctx: AdapterContext,
+  instanceId?: string,
 ): ManagedMcpServerSpec {
-  const sourcePath = findLocalTapCommsSource(ctx);
+  const sourcePath = findTapCommsServerEntry(ctx);
   const bunCommand = findPreferredBunCommand();
   const warnings: string[] = [];
   const issues: string[] = [];
 
-  if (sourcePath && bunCommand) {
-    return {
-      command: bunCommand,
-      args: [toForwardSlashPath(sourcePath)],
-      env: {
-        TAP_AGENT_NAME: "<set-per-session>",
-        TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
-      },
-      sourcePath,
-      warnings,
-      issues,
-    };
+  const env: Record<string, string> = {
+    TAP_AGENT_NAME: "<set-per-session>",
+    TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
+  };
+  if (instanceId) {
+    env.TAP_AGENT_ID = instanceId;
   }
 
   if (!sourcePath) {
     issues.push(
-      "tap-comms MCP server source not found. v1 requires a repo-local tap-plugin/channels installation.",
+      "tap-comms MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available.",
+    );
+    return { command: null, args: [], env, sourcePath, warnings, issues };
+  }
+
+  // Prefer bun for .ts source files; for compiled .mjs, node works too
+  const isBundled = sourcePath.endsWith(".mjs");
+  let command: string | null = bunCommand;
+
+  if (!command && isBundled) {
+    command = process.execPath; // node — .mjs is compiled JS
+    warnings.push(
+      "bun not found; using node to run the compiled MCP server. Install bun for better performance.",
     );
   }
 
-  if (!bunCommand) {
-    issues.push("bun is required to run the repo-local tap-comms MCP server.");
+  if (!command) {
+    issues.push(
+      "bun is required to run the repo-local tap-comms MCP server (.ts source). Install bun: https://bun.sh",
+    );
+    return { command: null, args: [], env, sourcePath, warnings, issues };
   }
 
   return {
-    command: null,
-    args: [],
-    env: {
-      TAP_AGENT_NAME: "<set-per-session>",
-      TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
-    },
+    command: isBundled && command === process.execPath
+      ? toForwardSlashPath(command)
+      : command,
+    args: [toForwardSlashPath(sourcePath)],
+    env,
     sourcePath,
     warnings,
     issues,

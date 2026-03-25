@@ -1,12 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   resolveConfig,
   SHARED_CONFIG_FILE,
   LOCAL_CONFIG_FILE,
 } from "../config/index.js";
+import { resolveAppServerUrl } from "../engine/bridge.js";
 import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
 
 // ─── Repo root discovery (fallback for unbundled runs) ─────────
@@ -66,31 +67,69 @@ function maybeStartHeadlessLoop(
 
 // ─── Main ──────────────────────────────────────────────────────
 
+interface BridgeScriptArgsOptions {
+  repoRoot: string;
+  commsDir: string;
+  appServerUrl: string;
+  gatewayTokenFile?: string;
+  stateDir?: string;
+  agentName?: string;
+}
+
+export function buildBridgeScriptArgs(
+  scriptPath: string,
+  options: BridgeScriptArgsOptions,
+): string[] {
+  const args = [
+    scriptPath,
+    `--repo-root=${options.repoRoot}`,
+    `--comms-dir=${options.commsDir}`,
+    `--app-server-url=${options.appServerUrl}`,
+  ];
+
+  if (options.agentName) {
+    args.push(`--agent-name=${options.agentName}`);
+  }
+
+  if (options.gatewayTokenFile) {
+    args.push(`--gateway-token-file=${options.gatewayTokenFile}`);
+  }
+
+  if (options.stateDir) {
+    args.push(`--state-dir=${options.stateDir}`);
+  }
+
+  return args;
+}
+
 async function main(): Promise<void> {
   const repoRootHint = findRepoRootFromRunner() ?? undefined;
   const { config } = resolveConfig({}, repoRootHint);
 
   const repoRoot = config.repoRoot;
   const commsDir = config.commsDir;
-  let appServerUrl = config.appServerUrl;
-
-  // Multi-instance: override port from TAP_BRIDGE_PORT env var
-  const instancePort = process.env.TAP_BRIDGE_PORT;
-  if (instancePort) {
-    try {
-      const url = new URL(appServerUrl);
-      url.port = instancePort;
-      appServerUrl = url.toString().replace(/\/$/, "");
-    } catch {
-      // Invalid URL — fall through to config default
-    }
-  }
+  const instancePortRaw = process.env.TAP_BRIDGE_PORT;
+  const instancePort = instancePortRaw
+    ? Number.parseInt(instancePortRaw, 10)
+    : undefined;
+  const envAppServerUrl = process.env.CODEX_APP_SERVER_URL?.trim();
+  const gatewayTokenFile = process.env.TAP_GATEWAY_TOKEN_FILE?.trim();
+  const appServerUrl =
+    envAppServerUrl ||
+    resolveAppServerUrl(
+      config.appServerUrl,
+      Number.isFinite(instancePort) ? instancePort : undefined,
+    );
 
   // Multi-instance: derive instance-specific state dir
+  // Honor TAP_STATE_DIR env (set by config resolver) before falling back to .tmp/
   const instanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
-  const stateDir = instanceId
-    ? path.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
-    : undefined;
+  const envStateDir = process.env.TAP_STATE_DIR;
+  const stateDir = envStateDir
+    ? envStateDir
+    : instanceId
+      ? path.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
+      : undefined;
 
   // Honor pre-resolved node from parent (2-stage spawn: engine → runner → daemon)
   // TAP_STRIP_TYPES preserves metadata so bun doesn't get --experimental-strip-types.
@@ -105,6 +144,10 @@ async function main(): Promise<void> {
     : resolveNodeRuntime(config.runtimeCommand, repoRoot);
 
   const command = resolved.command;
+  const agentName =
+    process.env.TAP_AGENT_NAME?.trim() ||
+    process.env.CODEX_TAP_AGENT_NAME?.trim() ||
+    undefined;
 
   // Locate bridge script
   const scriptPath = path.join(
@@ -125,14 +168,15 @@ async function main(): Promise<void> {
     args.push("--experimental-strip-types");
   }
   args.push(
-    scriptPath,
-    `--repo-root=${repoRoot}`,
-    `--comms-dir=${commsDir}`,
-    `--app-server-url=${appServerUrl}`,
+    ...buildBridgeScriptArgs(scriptPath, {
+      repoRoot,
+      commsDir,
+      appServerUrl,
+      gatewayTokenFile,
+      stateDir,
+      agentName,
+    }),
   );
-  if (stateDir) {
-    args.push(`--state-dir=${stateDir}`);
-  }
 
   // Forward bridge operational flags from env (set by engine/bridge.ts)
   const busyMode = process.env.TAP_BUSY_MODE;
@@ -181,7 +225,15 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+function isDirectExecution(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+}
+
+if (isDirectExecution()) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

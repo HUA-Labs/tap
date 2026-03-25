@@ -3,9 +3,12 @@ import { addCommand } from "./commands/add.js";
 import { statusCommand } from "./commands/status.js";
 import { removeCommand } from "./commands/remove.js";
 import { bridgeCommand } from "./commands/bridge.js";
+import { upCommand } from "./commands/up.js";
+import { downCommand } from "./commands/down.js";
 import { serveCommand } from "./commands/serve.js";
 import { initWorktreeCommand } from "./commands/init-worktree.js";
 import { dashboardCommand } from "./commands/dashboard.js";
+import { doctorCommand } from "./commands/doctor.js";
 import { version } from "./version.js";
 import { extractJsonFlag, emitResult, exitCode } from "./output.js";
 import { setJsonMode } from "./utils.js";
@@ -24,7 +27,10 @@ Commands:
   remove <instance>     Remove an instance and rollback config
   status                Show installed instances and bridge status
   bridge <sub> [inst]   Manage bridges (start, stop, status)
+  up                    Start all registered bridge daemons
+  down                  Stop all running bridge daemons
   dashboard             Show unified ops dashboard
+  doctor                Diagnose tap infrastructure health
   serve                 Start tap-comms MCP server (stdio)
   version               Show version
 
@@ -49,7 +55,10 @@ function normalizeCommandName(command: string | undefined): CommandName {
     case "remove":
     case "status":
     case "bridge":
+    case "up":
+    case "down":
     case "dashboard":
+    case "doctor":
     case "serve":
       return command;
     default:
@@ -104,8 +113,17 @@ async function main(): Promise<void> {
       case "bridge":
         result = await bridgeCommand(commandArgs);
         break;
+      case "up":
+        result = await upCommand(commandArgs);
+        break;
+      case "down":
+        result = await downCommand(commandArgs);
+        break;
       case "dashboard":
         result = await dashboardCommand(commandArgs);
+        break;
+      case "doctor":
+        result = await doctorCommand(commandArgs);
         break;
       case "serve": {
         // serve takes over stdio for MCP protocol — don't emit result on stdout

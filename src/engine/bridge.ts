@@ -1,13 +1,20 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
-import { spawn, execSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { spawn, spawnSync, execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type {
   RuntimeName,
   InstanceId,
   BridgeState,
+  AppServerState,
+  AppServerAuthState,
   HeadlessConfig,
   Platform,
+  TapState,
 } from "../types.js";
+import { probeCommand } from "../adapters/common.js";
 import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
 
 export interface BridgeStartOptions {
@@ -32,6 +39,9 @@ export interface BridgeStartOptions {
   threadId?: string;
   ephemeral?: boolean;
   processExistingMessages?: boolean;
+  manageAppServer?: boolean;
+  /** Skip auth gateway — app-server listens directly on the public port (localhost only). */
+  noAuth?: boolean;
 }
 
 export interface BridgeStopOptions {
@@ -40,12 +50,993 @@ export interface BridgeStopOptions {
   platform: Platform;
 }
 
+interface EnsureCodexAppServerOptions {
+  instanceId: InstanceId;
+  stateDir: string;
+  repoRoot: string;
+  platform: Platform;
+  appServerUrl: string;
+  existingAppServer?: AppServerState | null;
+  noAuth?: boolean;
+}
+
+interface ManagedAppServerGatewayOptions {
+  instanceId: InstanceId;
+  stateDir: string;
+  repoRoot: string;
+  platform: Platform;
+  publicUrl: string;
+}
+
+interface WebSocketLike {
+  addEventListener(
+    type: "open" | "error" | "close",
+    listener: () => void,
+    options?: { once?: boolean },
+  ): void;
+  close(code?: number, reason?: string): void;
+}
+
+type WebSocketCtor = new (url: string) => WebSocketLike;
+
+const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
+const APP_SERVER_HEALTH_TIMEOUT_MS = 1_500;
+const APP_SERVER_START_TIMEOUT_MS = 20_000;
+const APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5_000;
+const APP_SERVER_HEALTH_RETRY_MS = 250;
+const APP_SERVER_AUTH_QUERY_PARAM = "tap_token";
+const APP_SERVER_AUTH_FILE_MODE = 0o600;
+
+function appServerLogFilePath(
+  stateDir: string,
+  instanceId: InstanceId,
+): string {
+  return path.join(stateDir, "logs", `app-server-${instanceId}.log`);
+}
+
+function appServerGatewayLogFilePath(
+  stateDir: string,
+  instanceId: InstanceId,
+): string {
+  return path.join(stateDir, "logs", `app-server-gateway-${instanceId}.log`);
+}
+
+function appServerGatewayTokenFilePath(
+  stateDir: string,
+  instanceId: InstanceId,
+): string {
+  return path.join(
+    stateDir,
+    "secrets",
+    `app-server-gateway-${instanceId}.token`,
+  );
+}
+
+function stderrLogFilePath(logPath: string): string {
+  return `${logPath}.stderr`;
+}
+
+function writeProtectedTextFile(filePath: string, content: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(tmp, content, {
+    encoding: "utf-8",
+    mode: APP_SERVER_AUTH_FILE_MODE,
+  });
+  fs.chmodSync(tmp, APP_SERVER_AUTH_FILE_MODE);
+  fs.renameSync(tmp, filePath);
+  fs.chmodSync(filePath, APP_SERVER_AUTH_FILE_MODE);
+}
+
+function removeFileIfExists(filePath: string | null | undefined): void {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return;
+  }
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function getWebSocketCtor(): WebSocketCtor | null {
+  const candidate = (globalThis as { WebSocket?: unknown }).WebSocket;
+  return typeof candidate === "function" ? (candidate as WebSocketCtor) : null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost";
+}
+
+function resolveCodexCommand(platform: Platform): string | null {
+  const candidates =
+    platform === "win32"
+      ? ["codex.cmd", "codex.exe", "codex", "codex.ps1"]
+      : ["codex"];
+  return probeCommand(candidates).command;
+}
+
+function formatCodexAppServerCommand(command: string, url: string): string {
+  return `${command} app-server --listen ${url}`;
+}
+
+function resolvePowerShellCommand(): string {
+  return (
+    probeCommand(["pwsh", "powershell", "powershell.exe"]).command ??
+    "powershell"
+  );
+}
+
+function resolveAuthGatewayScript(repoRoot: string): string | null {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.mjs"),
+    path.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.ts"),
+    path.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "dist",
+      "bridges",
+      "codex-app-server-auth-gateway.mjs",
+    ),
+    path.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "src",
+      "bridges",
+      "codex-app-server-auth-gateway.ts",
+    ),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+export function getBridgeRuntimeStateDir(
+  repoRoot: string,
+  instanceId: InstanceId,
+): string {
+  return path.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`);
+}
+
+async function allocateLoopbackPort(hostname: string): Promise<number> {
+  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
+  return await new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, bindHost, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => {
+          reject(new Error("Failed to allocate a loopback port"));
+        });
+        return;
+      }
+
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function buildProtectedAppServerUrl(publicUrl: string, token: string): string {
+  const url = new URL(publicUrl);
+  url.searchParams.set(APP_SERVER_AUTH_QUERY_PARAM, token);
+  return url.toString().replace(/\/(?=\?|$)/, "");
+}
+
+function readGatewayTokenFromPath(tokenPath: string): string {
+  return fs.readFileSync(tokenPath, "utf8").trim();
+}
+
+function readGatewayToken(
+  auth: AppServerAuthState | null | undefined,
+): string | null {
+  if (!auth) {
+    return null;
+  }
+
+  const legacyToken = (auth as AppServerAuthState & { token?: string }).token;
+  if (legacyToken?.trim()) {
+    return legacyToken.trim();
+  }
+
+  if (!auth.tokenPath || !fs.existsSync(auth.tokenPath)) {
+    return null;
+  }
+
+  const fileToken = readGatewayTokenFromPath(auth.tokenPath);
+  return fileToken || null;
+}
+
+function materializeGatewayTokenFile(
+  stateDir: string,
+  instanceId: InstanceId,
+  publicUrl: string,
+  auth: AppServerAuthState,
+): AppServerAuthState {
+  if (auth.tokenPath && fs.existsSync(auth.tokenPath)) {
+    return auth;
+  }
+
+  const token = readGatewayToken(auth);
+  if (!token) {
+    throw new Error(`Missing auth gateway token for ${instanceId}`);
+  }
+
+  const tokenPath = appServerGatewayTokenFilePath(stateDir, instanceId);
+  writeProtectedTextFile(tokenPath, `${token}\n`);
+  return {
+    ...auth,
+    protectedUrl: buildProtectedAppServerUrl(publicUrl, "***"),
+    tokenPath,
+  };
+}
+
+async function createManagedAppServerAuth(
+  options: ManagedAppServerGatewayOptions,
+): Promise<AppServerAuthState> {
+  const publicUrl = new URL(options.publicUrl);
+  const upstreamUrl = new URL(options.publicUrl);
+  upstreamUrl.port = String(await allocateLoopbackPort(publicUrl.hostname));
+  upstreamUrl.search = "";
+  upstreamUrl.hash = "";
+
+  const gatewayScript = resolveAuthGatewayScript(options.repoRoot);
+  if (!gatewayScript) {
+    throw new Error("Auth gateway script not found");
+  }
+
+  const token = randomBytes(24).toString("base64url");
+  const tokenPath = appServerGatewayTokenFilePath(
+    options.stateDir,
+    options.instanceId,
+  );
+  writeProtectedTextFile(tokenPath, `${token}\n`);
+  const protectedUrl = buildProtectedAppServerUrl(options.publicUrl, "***");
+
+  const gatewayLogPath = appServerGatewayLogFilePath(
+    options.stateDir,
+    options.instanceId,
+  );
+  fs.mkdirSync(path.dirname(gatewayLogPath), { recursive: true });
+  rotateLog(gatewayLogPath);
+
+  const runtime = resolveNodeRuntime(process.execPath, options.repoRoot);
+  const gatewayArgs: string[] = [];
+  if (gatewayScript.endsWith(".ts")) {
+    if (!runtime.supportsStripTypes) {
+      throw new Error(
+        "Current Node runtime cannot start the auth gateway from TypeScript source. Rebuild @hua-labs/tap or use Node 22.6+.",
+      );
+    }
+    gatewayArgs.push("--experimental-strip-types");
+  }
+  gatewayArgs.push(gatewayScript);
+
+  const gatewayEnv = {
+    ...buildRuntimeEnv(options.repoRoot),
+    TAP_GATEWAY_LISTEN_URL: options.publicUrl,
+    TAP_GATEWAY_UPSTREAM_URL: upstreamUrl.toString().replace(/\/$/, ""),
+    TAP_GATEWAY_TOKEN_FILE: tokenPath,
+  };
+
+  let gatewayPid: number | null;
+  {
+    let logFd: number | null = null;
+    try {
+      if (options.platform === "win32") {
+        gatewayPid = startWindowsDetachedProcess(
+          runtime.command,
+          gatewayArgs,
+          options.repoRoot,
+          gatewayLogPath,
+          gatewayEnv,
+        );
+      } else {
+        logFd = fs.openSync(gatewayLogPath, "a");
+        const child = spawn(runtime.command, gatewayArgs, {
+          cwd: options.repoRoot,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: gatewayEnv,
+          windowsHide: true,
+        });
+        child.unref();
+        gatewayPid = child.pid ?? null;
+      }
+    } catch (error) {
+      removeFileIfExists(tokenPath);
+      throw error;
+    } finally {
+      if (logFd != null) {
+        fs.closeSync(logFd);
+      }
+    }
+  }
+
+  if (gatewayPid == null) {
+    removeFileIfExists(tokenPath);
+    throw new Error("Failed to spawn app-server auth gateway");
+  }
+
+  return {
+    mode: "query-token",
+    protectedUrl,
+    upstreamUrl: upstreamUrl.toString().replace(/\/$/, ""),
+    tokenPath,
+    gatewayPid,
+    gatewayLogPath,
+  };
+}
+
+function canReuseManagedAppServer(
+  appServer: AppServerState | null | undefined,
+): boolean {
+  if (!appServer?.managed) {
+    return false;
+  }
+
+  // App-server process must be alive
+  if (appServer.pid != null && !isProcessAlive(appServer.pid)) {
+    return false;
+  }
+
+  const auth = appServer.auth;
+  if (auth) {
+    // Auth mode: verify gateway token and process are intact
+    if (!auth.protectedUrl) {
+      return false;
+    }
+    if (!readGatewayToken(auth)) {
+      return false;
+    }
+    if (auth.gatewayPid != null && !isProcessAlive(auth.gatewayPid)) {
+      return false;
+    }
+  }
+  // No-auth mode (auth is null): only the app-server process check above is needed
+
+  return true;
+}
+
+function markAppServerHealthy(appServer: AppServerState): AppServerState {
+  const checkedAt = new Date().toISOString();
+  return {
+    ...appServer,
+    healthy: true,
+    lastCheckedAt: checkedAt,
+    lastHealthyAt: checkedAt,
+  };
+}
+
+function findReusableManagedAppServer(
+  stateDir: string,
+  publicUrl: string,
+): AppServerState | null {
+  const pidDir = path.join(stateDir, "pids");
+  if (!fs.existsSync(pidDir)) {
+    return null;
+  }
+
+  for (const name of fs.readdirSync(pidDir)) {
+    if (!name.startsWith("bridge-") || !name.endsWith(".json")) {
+      continue;
+    }
+
+    try {
+      const raw = fs.readFileSync(path.join(pidDir, name), "utf-8");
+      const parsed = JSON.parse(raw) as BridgeState;
+      if (parsed.appServer?.url !== publicUrl) {
+        continue;
+      }
+      if (canReuseManagedAppServer(parsed.appServer)) {
+        return markAppServerHealthy(parsed.appServer!);
+      }
+    } catch {
+      // Ignore stale or corrupted bridge state.
+    }
+  }
+
+  return null;
+}
+
+function startWindowsDetachedProcess(
+  command: string,
+  args: string[],
+  repoRoot: string,
+  logPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): number | null {
+  const ext = path.extname(command).toLowerCase();
+  const stderrLogPath = stderrLogFilePath(logPath);
+  const stdoutFd = fs.openSync(logPath, "a");
+  const stderrFd = fs.openSync(stderrLogPath, "a");
+
+  try {
+    const child =
+      ext === ".ps1"
+        ? spawn(
+            resolvePowerShellCommand(),
+            ["-NoLogo", "-NoProfile", "-File", command, ...args],
+            {
+              cwd: repoRoot,
+              detached: true,
+              stdio: ["ignore", stdoutFd, stderrFd],
+              env,
+              windowsHide: true,
+            },
+          )
+        : spawn(command, args, {
+            cwd: repoRoot,
+            detached: true,
+            stdio: ["ignore", stdoutFd, stderrFd],
+            env,
+            windowsHide: true,
+            shell: ext === ".cmd" || ext === ".bat",
+          });
+
+    child.unref();
+    return child.pid ?? null;
+  } finally {
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+  }
+}
+
+function startWindowsCodexAppServer(
+  command: string,
+  url: string,
+  repoRoot: string,
+  logPath: string,
+): number | null {
+  return startWindowsDetachedProcess(
+    command,
+    ["app-server", "--listen", url],
+    repoRoot,
+    logPath,
+  );
+}
+
+function findListeningProcessId(
+  url: string,
+  platform: Platform,
+): number | null {
+  if (platform !== "win32") {
+    return null;
+  }
+
+  let port: number | null;
+  try {
+    const parsed = new URL(url);
+    port = parsed.port ? Number.parseInt(parsed.port, 10) : null;
+  } catch {
+    return null;
+  }
+
+  if (port == null || !Number.isFinite(port)) {
+    return null;
+  }
+
+  const result = spawnSync(
+    resolvePowerShellCommand(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      [
+        `$port = ${port}`,
+        "$processId = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess",
+        "if ($processId) { $processId }",
+      ].join("; "),
+    ],
+    {
+      encoding: "utf-8",
+      windowsHide: true,
+    },
+  );
+
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
+  return Number.isFinite(parsedPid) ? parsedPid : null;
+}
+
+export function resolveAppServerUrl(
+  baseUrl: string | undefined,
+  port?: number,
+): string {
+  const resolvedBase = (baseUrl ?? DEFAULT_APP_SERVER_URL).replace(/\/$/, "");
+  if (port == null) {
+    return resolvedBase;
+  }
+
+  try {
+    const parsed = new URL(resolvedBase);
+    parsed.port = String(port);
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return resolvedBase;
+  }
+}
+
+export async function isTcpPortAvailable(
+  hostname: string,
+  port: number,
+): Promise<boolean> {
+  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
+  return await new Promise<boolean>((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", () => resolve(false));
+    server.listen(port, bindHost, () => {
+      server.close((error) => resolve(!error));
+    });
+  });
+}
+
+export async function findNextAvailableAppServerPort(
+  state: TapState,
+  baseUrl: string | undefined,
+  basePort: number = 4501,
+  excludeInstanceId?: InstanceId,
+): Promise<number> {
+  let hostname = "127.0.0.1";
+  try {
+    hostname = new URL(baseUrl ?? DEFAULT_APP_SERVER_URL).hostname;
+  } catch {
+    // Fall back to the default loopback host.
+  }
+
+  const maxAttempts = 1000;
+  let port = basePort;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1, port += 1) {
+    const claimedInState = Object.entries(state.instances).some(
+      ([id, inst]) => id !== excludeInstanceId && inst.port === port,
+    );
+    if (claimedInState) {
+      continue;
+    }
+
+    if (!isLoopbackHost(hostname)) {
+      return port;
+    }
+
+    if (await isTcpPortAvailable(hostname, port)) {
+      return port;
+    }
+  }
+
+  throw new Error(
+    `Failed to find a free app-server port starting at ${basePort}`,
+  );
+}
+
+export async function checkAppServerHealth(
+  url: string,
+  timeoutMs: number = APP_SERVER_HEALTH_TIMEOUT_MS,
+): Promise<boolean> {
+  const WebSocket = getWebSocketCtor();
+  if (!WebSocket) {
+    return false;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let socket: WebSocketLike | null = null;
+
+    const finish = (healthy: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+        // Best-effort cleanup only.
+      }
+      resolve(healthy);
+    };
+
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    try {
+      socket = new WebSocket(url);
+      socket.addEventListener("open", () => finish(true), { once: true });
+      socket.addEventListener("error", () => finish(false), { once: true });
+      socket.addEventListener("close", () => finish(false), { once: true });
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function waitForAppServerHealth(
+  url: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await checkAppServerHealth(url)) {
+      return true;
+    }
+    await delay(APP_SERVER_HEALTH_RETRY_MS);
+  }
+
+  return false;
+}
+
+async function terminateProcess(
+  pid: number,
+  platform: Platform,
+): Promise<boolean> {
+  if (!isProcessAlive(pid)) {
+    return false;
+  }
+
+  try {
+    if (platform === "win32") {
+      execSync(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
+    } else {
+      process.kill(pid, "SIGTERM");
+      await delay(2_000);
+      if (isProcessAlive(pid)) {
+        process.kill(pid, "SIGKILL");
+      }
+    }
+  } catch {
+    // Best effort. The caller only needs a boolean outcome.
+  }
+
+  return !isProcessAlive(pid);
+}
+
+export async function stopManagedAppServer(
+  appServer: AppServerState,
+  platform: Platform,
+): Promise<boolean> {
+  if (!appServer.managed) {
+    return false;
+  }
+
+  let stopped = false;
+  if (appServer.auth?.gatewayPid != null) {
+    stopped =
+      (await terminateProcess(appServer.auth.gatewayPid, platform)) || stopped;
+  }
+  if (appServer.pid != null) {
+    stopped = (await terminateProcess(appServer.pid, platform)) || stopped;
+  }
+  removeFileIfExists(appServer.auth?.tokenPath);
+  return stopped;
+}
+
+export async function ensureCodexAppServer(
+  options: EnsureCodexAppServerOptions,
+): Promise<AppServerState> {
+  const effectiveUrl = resolveAppServerUrl(options.appServerUrl);
+  const fallbackManualCommand = formatCodexAppServerCommand(
+    "codex",
+    effectiveUrl,
+  );
+  if (
+    options.existingAppServer?.url === effectiveUrl &&
+    canReuseManagedAppServer(options.existingAppServer)
+  ) {
+    return markAppServerHealthy(options.existingAppServer);
+  }
+
+  const sharedManaged = findReusableManagedAppServer(
+    options.stateDir,
+    effectiveUrl,
+  );
+  if (sharedManaged) {
+    return sharedManaged;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(effectiveUrl);
+  } catch {
+    throw new Error(
+      `Invalid app-server URL: ${effectiveUrl}\nStart it manually:\n  ${fallbackManualCommand}`,
+    );
+  }
+
+  if (!isLoopbackHost(parsedUrl.hostname)) {
+    throw new Error(
+      `Auto-start only supports loopback app-server URLs. Current URL: ${effectiveUrl}\nStart it manually:\n  ${fallbackManualCommand}`,
+    );
+  }
+
+  if (await checkAppServerHealth(effectiveUrl)) {
+    const hint = options.noAuth
+      ? "Stop it first or use --no-server for an unmanaged external app-server."
+      : "A listener is already running, so tap cannot insert the auth gateway there.\nStop it first or use --no-server for an unmanaged external app-server.";
+    throw new Error(`${effectiveUrl}: ${hint}`);
+  }
+
+  const resolvedCommand = resolveCodexCommand(options.platform);
+  if (!resolvedCommand) {
+    throw new Error(
+      `Codex CLI not found in PATH.\nStart the app-server manually:\n  ${fallbackManualCommand}`,
+    );
+  }
+
+  const logPath = appServerLogFilePath(options.stateDir, options.instanceId);
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  rotateLog(logPath);
+
+  // --no-auth: start app-server directly on the public URL (no gateway).
+  // TUI and bridge both connect to the same port without token auth.
+  if (options.noAuth) {
+    const manualCommand = formatCodexAppServerCommand("codex", effectiveUrl);
+    let pid: number | null;
+
+    if (options.platform === "win32") {
+      try {
+        pid = startWindowsCodexAppServer(
+          resolvedCommand,
+          effectiveUrl,
+          options.repoRoot,
+          logPath,
+        );
+      } catch (err) {
+        throw new Error(
+          `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : String(err)}\nStart it manually:\n  ${manualCommand}`,
+          { cause: err },
+        );
+      }
+    } else {
+      const logFd = fs.openSync(logPath, "a");
+      try {
+        const child = spawn(
+          resolvedCommand,
+          ["app-server", "--listen", effectiveUrl],
+          {
+            cwd: options.repoRoot,
+            detached: true,
+            stdio: ["ignore", logFd, logFd],
+            env: process.env,
+            windowsHide: true,
+          },
+        );
+        child.unref();
+        pid = child.pid ?? null;
+      } catch (err) {
+        throw new Error(
+          `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : String(err)}\nStart it manually:\n  ${manualCommand}`,
+          { cause: err },
+        );
+      } finally {
+        fs.closeSync(logFd);
+      }
+    }
+
+    if (pid == null) {
+      throw new Error(
+        `Failed to spawn Codex app-server.\nStart it manually:\n  ${manualCommand}`,
+      );
+    }
+
+    const healthy = await waitForAppServerHealth(
+      effectiveUrl,
+      APP_SERVER_START_TIMEOUT_MS,
+    );
+    if (!healthy) {
+      await terminateProcess(pid, options.platform);
+      throw new Error(
+        `Codex app-server did not become healthy at ${effectiveUrl}.\nCheck ${logPath}\nOr start it manually:\n  ${manualCommand}`,
+      );
+    }
+
+    pid = findListeningProcessId(effectiveUrl, options.platform) ?? pid;
+    const healthyAt = new Date().toISOString();
+    return {
+      url: effectiveUrl,
+      pid,
+      managed: true,
+      healthy: true,
+      lastCheckedAt: healthyAt,
+      lastHealthyAt: healthyAt,
+      logPath,
+      manualCommand,
+      auth: null,
+    };
+  }
+
+  // Default: auth gateway mode — gateway on publicUrl, app-server on random upstream port
+  const auth = await createManagedAppServerAuth({
+    instanceId: options.instanceId,
+    stateDir: options.stateDir,
+    repoRoot: options.repoRoot,
+    platform: options.platform,
+    publicUrl: effectiveUrl,
+  });
+  const manualCommand = formatCodexAppServerCommand("codex", auth.upstreamUrl);
+
+  let pid: number | null;
+
+  if (options.platform === "win32") {
+    try {
+      pid = startWindowsCodexAppServer(
+        resolvedCommand,
+        auth.upstreamUrl,
+        options.repoRoot,
+        logPath,
+      );
+    } catch (err) {
+      if (auth.gatewayPid != null) {
+        await terminateProcess(auth.gatewayPid, options.platform);
+      }
+      removeFileIfExists(auth.tokenPath);
+      throw new Error(
+        `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : String(err)}\nStart it manually:\n  ${manualCommand}`,
+        { cause: err },
+      );
+    }
+  } else {
+    const logFd = fs.openSync(logPath, "a");
+
+    try {
+      const child = spawn(
+        resolvedCommand,
+        ["app-server", "--listen", auth.upstreamUrl],
+        {
+          cwd: options.repoRoot,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: process.env,
+          windowsHide: true,
+        },
+      );
+
+      child.unref();
+      pid = child.pid ?? null;
+    } catch (err) {
+      if (auth.gatewayPid != null) {
+        await terminateProcess(auth.gatewayPid, options.platform);
+      }
+      removeFileIfExists(auth.tokenPath);
+      throw new Error(
+        `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : String(err)}\nStart it manually:\n  ${manualCommand}`,
+        { cause: err },
+      );
+    } finally {
+      fs.closeSync(logFd);
+    }
+  }
+
+  if (pid == null) {
+    if (auth.gatewayPid != null) {
+      await terminateProcess(auth.gatewayPid, options.platform);
+    }
+    removeFileIfExists(auth.tokenPath);
+    throw new Error(
+      `Failed to spawn Codex app-server.\nStart it manually:\n  ${manualCommand}`,
+    );
+  }
+
+  const healthy = await waitForAppServerHealth(
+    auth.upstreamUrl,
+    APP_SERVER_START_TIMEOUT_MS,
+  );
+
+  if (!healthy) {
+    await terminateProcess(pid, options.platform);
+    if (auth.gatewayPid != null) {
+      await terminateProcess(auth.gatewayPid, options.platform);
+    }
+    removeFileIfExists(auth.tokenPath);
+    throw new Error(
+      `Codex app-server did not become healthy at ${auth.upstreamUrl}.\nCheck ${logPath}\nOr start it manually:\n  ${manualCommand}`,
+    );
+  }
+
+  const gatewayToken = readGatewayToken(auth);
+  if (!gatewayToken) {
+    await terminateProcess(pid, options.platform);
+    if (auth.gatewayPid != null) {
+      await terminateProcess(auth.gatewayPid, options.platform);
+    }
+    removeFileIfExists(auth.tokenPath);
+    throw new Error("Tap auth gateway token is missing after startup.");
+  }
+
+  const gatewayHealthy = await waitForAppServerHealth(
+    buildProtectedAppServerUrl(effectiveUrl, gatewayToken),
+    APP_SERVER_GATEWAY_START_TIMEOUT_MS,
+  );
+  if (!gatewayHealthy) {
+    await terminateProcess(pid, options.platform);
+    if (auth.gatewayPid != null) {
+      await terminateProcess(auth.gatewayPid, options.platform);
+    }
+    removeFileIfExists(auth.tokenPath);
+    throw new Error(
+      `Tap auth gateway did not become healthy at ${effectiveUrl}.\nCheck ${auth.gatewayLogPath ?? "the gateway log"} and ${logPath}.`,
+    );
+  }
+
+  const healthyAt = new Date().toISOString();
+  pid = findListeningProcessId(auth.upstreamUrl, options.platform) ?? pid;
+  return {
+    url: effectiveUrl,
+    pid,
+    managed: true,
+    healthy: true,
+    lastCheckedAt: healthyAt,
+    lastHealthyAt: healthyAt,
+    logPath,
+    manualCommand,
+    auth,
+  };
+}
+
 function pidFilePath(stateDir: string, instanceId: InstanceId): string {
   return path.join(stateDir, "pids", `bridge-${instanceId}.json`);
 }
 
 function logFilePath(stateDir: string, instanceId: InstanceId): string {
   return path.join(stateDir, "logs", `bridge-${instanceId}.log`);
+}
+
+function runtimeHeartbeatFilePath(runtimeStateDir: string): string {
+  return path.join(runtimeStateDir, "heartbeat.json");
+}
+
+function loadRuntimeHeartbeatTimestamp(
+  runtimeStateDir: string | null | undefined,
+): string | null {
+  if (!runtimeStateDir) {
+    return null;
+  }
+
+  const heartbeatPath = runtimeHeartbeatFilePath(runtimeStateDir);
+  if (!fs.existsSync(heartbeatPath)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(heartbeatPath, "utf-8");
+    const parsed = JSON.parse(raw) as { updatedAt?: string };
+    return typeof parsed.updatedAt === "string" ? parsed.updatedAt : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveHeartbeatTimestamp(
+  state: BridgeState | null | undefined,
+): string | null {
+  return (
+    loadRuntimeHeartbeatTimestamp(state?.runtimeStateDir) ??
+    state?.lastHeartbeat ??
+    null
+  );
 }
 
 export function loadBridgeState(
@@ -69,10 +1060,13 @@ export function saveBridgeState(
   state: BridgeState,
 ): void {
   const pidPath = pidFilePath(stateDir, instanceId);
-  fs.mkdirSync(path.dirname(pidPath), { recursive: true });
-  const tmp = `${pidPath}.tmp.${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
-  fs.renameSync(tmp, pidPath);
+  const serializable = JSON.parse(JSON.stringify(state)) as BridgeState & {
+    appServer?: { auth?: { token?: string } | null } | null;
+  };
+  if (serializable.appServer?.auth) {
+    delete serializable.appServer.auth.token;
+  }
+  writeProtectedTextFile(pidPath, JSON.stringify(serializable, null, 2));
 }
 
 export function clearBridgeState(
@@ -135,6 +1129,9 @@ export async function startBridge(
     );
   }
 
+  const previousBridgeState = loadBridgeState(stateDir, instanceId);
+  const previousAppServer = previousBridgeState?.appServer ?? null;
+
   // Clear stale PID
   clearBridgeState(stateDir, instanceId);
 
@@ -144,10 +1141,11 @@ export async function startBridge(
   // Log rotation: rename existing log to .prev
   rotateLog(logPath);
 
-  const logFd = fs.openSync(logPath, "a");
+  let logFd: number | null = null;
 
   // Use explicit repoRoot (not derived from stateDir — stateDir may be external)
   const repoRoot = options.repoRoot ?? path.resolve(stateDir, "..");
+  const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
   const resolved = resolveNodeRuntime(
     options.runtimeCommand ?? "node",
     repoRoot,
@@ -157,23 +1155,53 @@ export async function startBridge(
   // Build env with fnm Node prepended to PATH so the bridge runner's
   // 2nd-stage spawn also finds the correct Node (결 finding: 2-stage spawn)
   const runtimeEnv = buildRuntimeEnv(repoRoot);
+  const effectiveAppServerUrl = resolveAppServerUrl(options.appServerUrl, port);
+  let appServer: AppServerState | null = null;
+  let bridgeAppServerUrl = effectiveAppServerUrl;
+
+  if (runtime === "codex" && options.manageAppServer) {
+    appServer = await ensureCodexAppServer({
+      instanceId,
+      stateDir,
+      repoRoot,
+      platform: options.platform,
+      appServerUrl: effectiveAppServerUrl,
+      existingAppServer: previousAppServer,
+      noAuth: options.noAuth,
+    });
+    if (appServer.auth) {
+      appServer = {
+        ...appServer,
+        auth: materializeGatewayTokenFile(
+          stateDir,
+          instanceId,
+          effectiveAppServerUrl,
+          appServer.auth,
+        ),
+      };
+    }
+    bridgeAppServerUrl = effectiveAppServerUrl;
+  }
 
   // Spawn detached process — pass both command and strip-types metadata
   // so the runner doesn't re-guess (avoids bun + --experimental-strip-types)
-  const child = spawn(command, [bridgeScript], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: {
+  try {
+    const bridgeEnv = {
       ...runtimeEnv,
       TAP_COMMS_DIR: commsDir,
+      TAP_STATE_DIR: runtimeStateDir,
       TAP_BRIDGE_RUNTIME: runtime,
       TAP_BRIDGE_INSTANCE_ID: instanceId,
+      TAP_AGENT_ID: instanceId,
       TAP_AGENT_NAME: resolvedAgent,
       CODEX_TAP_AGENT_NAME: resolvedAgent,
       TAP_RESOLVED_NODE: resolved.command,
       TAP_STRIP_TYPES: resolved.supportsStripTypes ? "1" : "0",
-      ...(options.appServerUrl
-        ? { CODEX_APP_SERVER_URL: options.appServerUrl }
+      ...(bridgeAppServerUrl
+        ? { CODEX_APP_SERVER_URL: bridgeAppServerUrl }
+        : {}),
+      ...(appServer?.auth?.tokenPath
+        ? { TAP_GATEWAY_TOKEN_FILE: appServer.auth.tokenPath }
         : {}),
       ...(port != null ? { TAP_BRIDGE_PORT: String(port) } : {}),
       ...(options.headless?.enabled
@@ -184,7 +1212,6 @@ export async function startBridge(
             TAP_QUALITY_FLOOR: options.headless.qualitySeverityFloor,
           }
         : {}),
-      // Bridge script operational flags
       ...(options.busyMode ? { TAP_BUSY_MODE: options.busyMode } : {}),
       ...(options.pollSeconds != null
         ? { TAP_POLL_SECONDS: String(options.pollSeconds) }
@@ -204,29 +1231,68 @@ export async function startBridge(
       ...(options.processExistingMessages
         ? { TAP_PROCESS_EXISTING: "true" }
         : {}),
-    },
-  });
+    };
 
-  child.unref();
-  fs.closeSync(logFd);
+    let bridgePid: number | null = null;
 
-  if (!child.pid) {
-    throw new Error(`Failed to spawn bridge process for ${instanceId}`);
+    if (options.platform === "win32") {
+      bridgePid = startWindowsDetachedProcess(
+        command,
+        [bridgeScript],
+        repoRoot,
+        logPath,
+        bridgeEnv,
+      );
+    } else {
+      logFd = fs.openSync(logPath, "a");
+      const child = spawn(command, [bridgeScript], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: bridgeEnv,
+        windowsHide: true,
+      });
+
+      child.unref();
+      bridgePid = child.pid ?? null;
+    }
+
+    if (logFd != null) {
+      fs.closeSync(logFd);
+      logFd = null;
+    }
+
+    if (!bridgePid) {
+      throw new Error(`Failed to spawn bridge process for ${instanceId}`);
+    }
+
+    const state: BridgeState = {
+      pid: bridgePid,
+      statePath: pidFilePath(stateDir, instanceId),
+      lastHeartbeat: new Date().toISOString(),
+      appServer,
+      runtimeStateDir,
+    };
+
+    saveBridgeState(stateDir, instanceId, state);
+
+    // NOTE: Heartbeat updates are the bridge process's responsibility.
+    // The bridge script should periodically write to the PID file's lastHeartbeat field.
+    // CLI only records the initial heartbeat at spawn time.
+
+    return state;
+  } catch (err) {
+    if (logFd != null) {
+      try {
+        fs.closeSync(logFd);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+    if (appServer?.managed) {
+      await stopManagedAppServer(appServer, options.platform);
+    }
+    throw err;
   }
-
-  const state: BridgeState = {
-    pid: child.pid,
-    statePath: pidFilePath(stateDir, instanceId),
-    lastHeartbeat: new Date().toISOString(),
-  };
-
-  saveBridgeState(stateDir, instanceId, state);
-
-  // NOTE: Heartbeat updates are the bridge process's responsibility.
-  // The bridge script should periodically write to the PID file's lastHeartbeat field.
-  // CLI only records the initial heartbeat at spawn time.
-
-  return state;
 }
 
 export async function stopBridge(options: BridgeStopOptions): Promise<boolean> {
@@ -243,19 +1309,7 @@ export async function stopBridge(options: BridgeStopOptions): Promise<boolean> {
   }
 
   try {
-    if (platform === "win32") {
-      // Windows: use taskkill
-      execSync(`taskkill /PID ${state.pid} /F /T`, { stdio: "pipe" });
-    } else {
-      // Unix: SIGTERM
-      process.kill(state.pid, "SIGTERM");
-
-      // Give it a moment, then SIGKILL if needed
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      if (isProcessAlive(state.pid)) {
-        process.kill(state.pid, "SIGKILL");
-      }
-    }
+    await terminateProcess(state.pid, platform);
   } catch {
     // Process may have already exited
   }
@@ -310,10 +1364,18 @@ export function getHeartbeatAge(
   instanceId: InstanceId,
 ): number | null {
   const state = loadBridgeState(stateDir, instanceId);
-  if (!state?.lastHeartbeat) return null;
-  const heartbeatTime = new Date(state.lastHeartbeat).getTime();
+  const heartbeat = resolveHeartbeatTimestamp(state);
+  if (!heartbeat) return null;
+  const heartbeatTime = new Date(heartbeat).getTime();
   if (isNaN(heartbeatTime)) return null;
   return Math.floor((Date.now() - heartbeatTime) / 1000);
+}
+
+export function getBridgeHeartbeatTimestamp(
+  stateDir: string,
+  instanceId: InstanceId,
+): string | null {
+  return resolveHeartbeatTimestamp(loadBridgeState(stateDir, instanceId));
 }
 
 export function getBridgeStatus(

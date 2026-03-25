@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
+  LEGACY_CONFIG_FILE,
   resolveConfig,
   loadSharedConfig,
   loadLocalConfig,
@@ -87,6 +88,7 @@ describe("resolveConfig", () => {
   it("returns defaults when no config files exist", () => {
     const { config, sources } = resolveConfig({}, tmpDir);
     expect(config.repoRoot).toBe(tmpDir);
+    expect(config.commsDir).toBe(path.join(tmpDir, "tap-comms"));
     expect(config.stateDir).toBe(path.join(tmpDir, ".tap-comms"));
     expect(config.runtimeCommand).toBe("node");
     expect(config.appServerUrl).toBe("ws://127.0.0.1:4501");
@@ -148,5 +150,32 @@ describe("resolveConfig", () => {
     saveLocalConfig(tmpDir, { commsDir: absPath });
     const { config } = resolveConfig({}, tmpDir);
     expect(config.commsDir).toBe(absPath);
+  });
+
+  it("falls back to legacy .tap-config for commsDir", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, LEGACY_CONFIG_FILE),
+      'TAP_COMMS_DIR="../hua-comms"\n',
+      "utf-8",
+    );
+
+    const { config, sources } = resolveConfig({}, tmpDir);
+
+    expect(config.commsDir).toBe(path.resolve(tmpDir, "../hua-comms"));
+    expect(sources.commsDir).toBe("legacy-shell-config");
+  });
+
+  it("prefers JSON config over legacy .tap-config", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, LEGACY_CONFIG_FILE),
+      'TAP_COMMS_DIR="../legacy-comms"\n',
+      "utf-8",
+    );
+    saveSharedConfig(tmpDir, { commsDir: "../json-comms" });
+
+    const { config, sources } = resolveConfig({}, tmpDir);
+
+    expect(config.commsDir).toBe(path.resolve(tmpDir, "../json-comms"));
+    expect(sources.commsDir).toBe("shared-config");
   });
 });

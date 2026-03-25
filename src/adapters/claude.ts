@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { fileHash, backupFile, ensureBackupDir } from "../state.js";
+import { buildManagedMcpServerSpec } from "./common.js";
 import type {
   RuntimeAdapter,
   AdapterContext,
@@ -30,46 +31,18 @@ function findClaudeCommand(): string | null {
   }
 }
 
-/**
- * Build the MCP server entry for .mcp.json.
- *
- * v1: local tap-plugin/channels only. Returns null if not found.
- */
 function buildMcpServerEntry(
   ctx: AdapterContext,
 ): Record<string, unknown> | null {
-  const localChannels = findLocalChannels(ctx);
-  if (!localChannels) return null;
+  const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
+  if (!managed.command) return null;
 
   return {
     type: "stdio",
-    command: "npx",
-    args: ["bun", localChannels],
-    env: { TAP_COMMS_DIR: ctx.commsDir },
+    command: managed.command,
+    args: managed.args,
+    env: managed.env,
   };
-}
-
-function findLocalChannels(ctx: AdapterContext): string | null {
-  const candidates = [
-    path.join(
-      ctx.repoRoot,
-      "packages",
-      "tap-plugin",
-      "channels",
-      "tap-comms.ts",
-    ),
-    path.join(
-      ctx.repoRoot,
-      "node_modules",
-      "@hua-labs",
-      "channels",
-      "tap-comms.ts",
-    ),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
 }
 
 export const claudeAdapter: RuntimeAdapter = {
@@ -99,15 +72,9 @@ export const claudeAdapter: RuntimeAdapter = {
       );
     }
 
-    // Check if local tap-comms MCP server source exists (v1: required)
-    const localChannels = findLocalChannels(ctx);
-    if (!localChannels) {
-      issues.push(
-        "tap-comms MCP server not found locally. " +
-          "Ensure packages/tap-plugin/channels/tap-comms.ts exists. " +
-          "Run from the monorepo root.",
-      );
-    }
+    const managed = buildManagedMcpServerSpec(ctx);
+    warnings.push(...managed.warnings);
+    issues.push(...managed.issues);
 
     // Check if comms dir exists
     if (!fs.existsSync(ctx.commsDir)) {
@@ -156,8 +123,8 @@ export const claudeAdapter: RuntimeAdapter = {
 
     if (!serverEntry) {
       warnings.push(
-        "tap-comms MCP server not found locally. Skipping .mcp.json patch. " +
-          "Run from monorepo root with packages/tap-plugin/channels/ available.",
+        "tap-comms MCP server entry not found. Skipping .mcp.json patch. " +
+          "Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available.",
       );
       return {
         runtime: "claude",
@@ -292,7 +259,9 @@ export const claudeAdapter: RuntimeAdapter = {
 
           // 4. Entry has correct env
           if (entry) {
-            const hasCommsDir = entry.env?.TAP_COMMS_DIR === ctx.commsDir;
+            const hasCommsDir =
+              normalizeTapCommsDir(entry.env?.TAP_COMMS_DIR) ===
+              normalizeTapCommsDir(ctx.commsDir);
             checks.push({
               name: "TAP_COMMS_DIR configured",
               passed: hasCommsDir,
@@ -360,4 +329,10 @@ function setNestedKey(
     current = current[key] as Record<string, unknown>;
   }
   current[keys[keys.length - 1]] = value;
+}
+
+function normalizeTapCommsDir(value: unknown): string {
+  return typeof value === "string"
+    ? path.resolve(value).replace(/\\/g, "/")
+    : "";
 }

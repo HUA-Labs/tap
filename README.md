@@ -1,223 +1,194 @@
-# tap
+# @hua-labs/tap
 
-[![npm version](https://img.shields.io/npm/v/@hua-labs/tap.svg)](https://www.npmjs.com/package/@hua-labs/tap)
-[![license](https://img.shields.io/npm/l/@hua-labs/tap.svg)](LICENSE)
+Zero-dependency CLI for cross-model AI agent communication setup.
 
-> Your AI sessions can already work in parallel. tap gives them a shared protocol.
->
-> Sessions end. Systems grow.
-
-**A local-first, cross-model orchestration protocol for AI coding agents.**
-
-Run multiple AI agents (Claude, Codex, Gemini) on the same codebase — in parallel.
-
----
-
-## What you can do with tap
-
-- Run multiple AI agents in parallel on one repo
-- Split work into independent tasks with isolated worktrees
-- Communicate between Claude, Codex, and Gemini sessions
-- Review code across models (Codex reviews Claude's code, and vice versa)
-- Keep all communication and history in git
-- Continue work across sessions and machines — nothing is lost
-
----
-
-## Why tap?
-
-Because using one AI at a time is slow.
-
-You already have Claude Code, Codex, Gemini CLI. They're powerful alone. But they can't see each other. tap connects them — through files, not proxies.
-
-- **No server.** Messages are markdown files in a git repo.
-- **No vendor lock-in.** Works with any model that can read/write files.
-- **No lost context.** Everything persists in git — messages, reviews, findings, retros.
-- **No TOS violations.** Only official interfaces — MCP, App Server WebSocket, fs.watch.
-
----
-
-## Install
-
-```bash
-npx @hua-labs/tap init
-```
-
-One command. Sets up comms directory, config, and MCP server entry. Works on Windows, macOS, and Linux.
-
----
-
-## How It Works
-
-```
-tap (protocol)  -->  bridge (delivery)  -->  agent (execution)
-git (memory)    <--  human (governance)  <--  tower (decision)
-```
-
-No central server. The file system is the message bus — git is the transport and history.
-
-Messages are plain markdown files: `inbox/YYYYMMDD-{from}-{to}-{subject}.md`
-
-**Delivery modes:**
-- **Claude**: MCP channel push — real-time
-- **Codex**: App Server WebSocket bridge — real-time
-- **Gemini**: File-watch notification — experimental
-
-**Cross-device?** Point both machines at the same git repo. Done.
-
----
+One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
 
 ## Quick Start
 
-### 1. Two agents talking
+> `bun` is required to run the managed tap MCP server. When installed from npm, `@hua-labs/tap` now ships its own bundled MCP server entry.
 
 ```bash
-# Terminal 1 — Agent A
+# 1. Initialize comms directory and state
 npx @hua-labs/tap init
-claude --dangerously-load-development-channels server:tap-comms
-# Inside Claude: tap_set_name("agent-a")
-# Inside Claude: tap_reply(to: "agent-b", subject: "hello", content: "can you see this?")
 
-# Terminal 2 — Agent B
-cd same-repo
-claude
-# Inside Claude: tap_set_name("agent-b")
-# Inside Claude: tap_list_unread()
+# 2. Add runtimes
+npx @hua-labs/tap add claude
+npx @hua-labs/tap add codex
+npx @hua-labs/tap add gemini
+
+# 3. Check status
+npx @hua-labs/tap status
 ```
 
-That's it. Two Claude sessions, talking through files. You should see messages appear in the other session instantly.
+Your agents can now communicate through the shared comms directory.
 
-### 2. Parallel work with worktrees
+## Commands
+
+### `init`
+
+Initialize the comms directory and `.tap-comms/` state.
+
+By default, the comms directory is created inside the current repo at `./tap-comms`.
 
 ```bash
-# Set up isolated workspaces
-npx @hua-labs/tap init-worktree --path ../wt-1 --branch feat/auth
-npx @hua-labs/tap init-worktree --path ../wt-2 --branch feat/dashboard
-
-# Each agent works in its own worktree — no git conflicts
+npx @hua-labs/tap init
+npx @hua-labs/tap init --comms-dir /path/to/comms
+npx @hua-labs/tap init --permissions safe    # default: deny destructive ops
+npx @hua-labs/tap init --permissions full    # no restrictions (use with caution)
+npx @hua-labs/tap init --force               # re-initialize
 ```
 
-### 3. Add Codex to the team
+### `add <runtime>`
+
+Add a runtime. Probes config, plans patches, applies, and verifies.
 
 ```bash
-# Register and start bridge
-npx @hua-labs/tap add codex --name reviewer --port 4501
-npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer
-
-# You can now send a message from Claude and see it appear in Codex in real time.
+npx @hua-labs/tap add claude
+npx @hua-labs/tap add codex
+npx @hua-labs/tap add gemini
+npx @hua-labs/tap add claude --force   # re-install
 ```
 
----
+### `remove <runtime>`
 
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `tap init` | Initialize tap in a project |
-| `tap init-worktree` | Bootstrap a git worktree with deps, permissions, MCP config |
-| `tap add <runtime>` | Register a runtime (codex, gemini) |
-| `tap remove <runtime>` | Remove a registered runtime |
-| `tap bridge start` | Start real-time bridge for a runtime |
-| `tap bridge stop` | Stop a running bridge |
-| `tap bridge status` | Show bridge health and heartbeat |
-| `tap status` | Show registered runtimes and instances |
-| `tap dashboard` | Unified ops view — agents, bridges, PRs |
-| `tap serve` | Start MCP server for development |
-
-All commands support `--json` for automation.
-
----
-
-## Advanced Features
-
-### Multi-Instance Bridge
-
-Run multiple agents on the same runtime:
+Remove a runtime and rollback config changes.
 
 ```bash
-npx @hua-labs/tap add codex --name reviewer --port 4501
-npx @hua-labs/tap add codex --name builder --port 4502
+npx @hua-labs/tap remove claude
+npx @hua-labs/tap remove codex
 ```
 
-Each instance gets its own PID, state directory, and heartbeat.
+### `status`
 
-### Headless Reviewer
-
-Run Codex as a background review daemon — no TUI:
+Show installed runtimes and their status.
 
 ```bash
-npx @hua-labs/tap bridge start codex --headless --role reviewer --agent-name my-reviewer
+npx @hua-labs/tap status
 ```
 
-Auto-polls inbox for review requests. Terminates based on configurable conditions (round cap, quality threshold, repetition detection).
+Output shows three status levels:
 
-### Ops Dashboard
+- **installed** — config written but not verified
+- **configured** — config written and verified
+- **active** — runtime is running and connected
+
+### `serve`
+
+Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
-npx @hua-labs/tap dashboard
+npx @hua-labs/tap serve
+npx @hua-labs/tap serve --comms-dir /path/to/comms
 ```
 
-Agents, bridges, and PR status in one screen. `--watch` for live updates.
+Requires `bun`. Uses the bundled MCP server entry from `@hua-labs/tap`, with a repo-local fallback for monorepo checkouts.
 
-### Config System
+## Supported Runtimes
 
-Two-layer config for portability:
+| Runtime | Config                  | Bridge                 | Mode               |
+| ------- | ----------------------- | ---------------------- | ------------------ |
+| Claude  | `.mcp.json`             | native-push (fs.watch) | No daemon needed   |
+| Codex   | `~/.codex/config.toml`  | WebSocket bridge       | Daemon per session |
+| Gemini  | `.gemini/settings.json` | polling                | No daemon needed   |
 
-- `tap-config.json` — shared, git-tracked
-- `tap-config.local.json` — machine-specific, gitignored
+## `--json` Flag
 
-Automatic runtime resolution: `.node-version` + fnm probing + tsx fallback.
+All commands support `--json` for machine-readable output. Returns a single JSON object to stdout with no human log noise.
 
-### Generational Knowledge Transfer
+```bash
+npx @hua-labs/tap status --json
+```
 
-Agents are stateless — sessions end, context is lost. tap solves this with files:
+```json
+{
+  "ok": true,
+  "command": "status",
+  "code": "TAP_STATUS_OK",
+  "message": "2 runtime(s) installed",
+  "warnings": [],
+  "data": {
+    "version": "0.2.0",
+    "commsDir": "/path/to/comms",
+    "runtimes": {
+      "claude": { "status": "active", "bridgeMode": "native-push" },
+      "codex": { "status": "configured", "bridgeMode": "app-server" }
+    }
+  }
+}
+```
 
-- **Retros** — what worked, what didn't
-- **Handoffs** — context for the next session
-- **Findings** — discoveries that become backlog items
-- **Letters** — agent-to-agent or agent-to-human messages
+Error codes use `TAP_*` prefix: `TAP_ADD_OK`, `TAP_NO_OP`, `TAP_PATCH_FAILED`, etc.
 
-Used across multiple sessions ("generations") where each session builds on previous findings and handoffs.
+Exit codes: `0` = ok, `1` = error.
 
----
+## Permissions
 
-## Results
+`tap init` auto-configures runtime permissions.
 
-Used in production multi-session workflows:
+### Safe mode (default)
 
-| Metric | Value |
-|--------|-------|
-| Generations | 11 |
-| Agents | 50+ |
-| Models | Claude + Codex + Gemini |
-| PRs merged | 55+ |
-| Platforms | Windows + macOS + Linux |
+**Claude**: Adds deny rules to `.claude/settings.local.json` blocking destructive operations (force push, hard reset, rm -rf, etc.).
 
----
+**Codex**: Sets `workspace-write` sandbox, `full` network access, trusted project paths, and writable roots in `~/.codex/config.toml`.
 
-## Docs
+### Full mode
 
-| Document | Description |
-|----------|-------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Design decisions, data model, delivery modes |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
-| [Protocol Rules](docs/) | Rules for agent coordination |
-| [Cross-Platform Strategy](docs/cross-platform-strategy.md) | Windows, macOS, Linux support |
-| [Codex Bridge Deep Dive](docs/codex-app-server-bridge.md) | WebSocket injection details |
-| [Multi-Device Hub](docs/MULTI-DEVICE-HUB.md) | Cross-device via git sync |
+```bash
+npx @hua-labs/tap init --permissions full
+```
 
----
+**Claude**: Removes tap-managed deny rules. User-added rules preserved.
 
-## Contributing
+**Codex**: Sets `danger-full-access` sandbox. Use on trusted local machines only.
 
-Built by [HUA Labs](https://github.com/HUA-Labs). Issues and PRs welcome.
+## How It Works
 
-The best way to contribute? Use tap, run a generation, and submit your retro as a PR.
+Agents communicate through a shared directory (`comms/`) using markdown files:
 
----
+```
+comms/
+├── inbox/          # Agent-to-agent messages
+├── reviews/        # Code review results
+├── findings/       # Out-of-scope discoveries
+├── handoff/        # Session handoff documents
+├── retros/         # Retrospectives
+└── archive/        # Archived messages
+```
 
-*Built by Claude (Anthropic) + Codex (OpenAI) + Gemini (Google) + Devin (human).*
+Each runtime has an adapter that:
 
-*"Sessions end. Systems grow."*
+1. **Probes** — finds config files, checks runtime installation
+2. **Plans** — determines what patches to apply
+3. **Applies** — backs up and patches config files
+4. **Verifies** — confirms the runtime can read the config
 
-**MIT License** — HUA Labs
+The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
+
+## Changelog (0.2.0)
+
+### Bridge
+
+- **Auth gateway** — Managed bridge now includes an auth proxy with timing-safe token validation (M99)
+- **`--no-auth` flag** — Skip auth gateway for localhost-only setups; app-server listens directly on public port (M102)
+- **TUI connect URL** — `bridge start` and `bridge status` output shows where to connect Codex TUI (M102)
+- **Identity routing** — Bridge matches inbox messages by both `agentId` and `agentName`; self echo-back filtered by both (M101)
+- **Display labels** — Bridge prompts, `tap_who`, and notifications use `name [id]` format (M101)
+
+### CLI
+
+- **`tap doctor`** — Diagnose comms, bridge, message, and MCP issues (M95)
+- **`tap doctor --fix`** — Auto-fix common issues with post-fix revalidation (M100)
+- **Error codes** — 24 CLI error codes with consistent `TAP_*` prefix (M91)
+- **Boot streamline** — Faster CLI startup with agent-name persistence (M92)
+
+### Infrastructure
+
+- **Auto-poll fallback** — Bridge falls back to polling when fs.watch is unavailable (M93)
+- **Watcher dedup** — Root-cause fix for duplicate message dispatch (M90)
+- **tap-plugin test infra** — In-memory test harness for MCP channel tests (M94)
+- **Blind test CI** — Cross-model communication verification framework (M98)
+
+## License
+
+MIT

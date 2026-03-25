@@ -1,7 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { backupFile, ensureBackupDir, fileHash } from "../state.js";
-import { artifactBackupPath, writeArtifactBackup } from "../artifact-backups.js";
+import {
+  artifactBackupPath,
+  writeArtifactBackup,
+} from "../artifact-backups.js";
 import type {
   AdapterContext,
   ApplyResult,
@@ -33,7 +36,8 @@ function candidateConfigPaths(ctx: AdapterContext): string[] {
 }
 
 function chooseGeminiConfigPath(ctx: AdapterContext): string {
-  const [workspaceConfig, homeConfig, antigravityConfig] = candidateConfigPaths(ctx);
+  const [workspaceConfig, homeConfig, antigravityConfig] =
+    candidateConfigPaths(ctx);
 
   if (fs.existsSync(workspaceConfig)) return workspaceConfig;
   if (fs.existsSync(homeConfig)) return homeConfig;
@@ -94,7 +98,9 @@ function verifyGeminiConfig(
   ctx: AdapterContext,
 ): VerifyCheck[] {
   const checks: VerifyCheck[] = [];
-  const entry = readNestedKey(config, GEMINI_SELECTOR) as Record<string, unknown> | undefined;
+  const entry = readNestedKey(config, GEMINI_SELECTOR) as
+    | Record<string, unknown>
+    | undefined;
 
   checks.push({
     name: "Gemini config exists",
@@ -109,7 +115,9 @@ function verifyGeminiConfig(
   checks.push({
     name: "Comms directory exists",
     passed: fs.existsSync(ctx.commsDir),
-    message: fs.existsSync(ctx.commsDir) ? undefined : `${ctx.commsDir} not found`,
+    message: fs.existsSync(ctx.commsDir)
+      ? undefined
+      : `${ctx.commsDir} not found`,
   });
 
   if (entry?.env && typeof entry.env === "object") {
@@ -144,10 +152,12 @@ export const geminiAdapter: RuntimeAdapter = {
     }
 
     if (!fs.existsSync(ctx.commsDir)) {
-      issues.push(`Comms directory not found: ${ctx.commsDir}. Run "init" first.`);
+      issues.push(
+        `Comms directory not found: ${ctx.commsDir}. Run "init" first.`,
+      );
     }
 
-    const managed = buildManagedMcpServerSpec(ctx);
+    const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
     warnings.push(...managed.warnings);
     issues.push(...managed.issues);
 
@@ -179,7 +189,9 @@ export const geminiAdapter: RuntimeAdapter = {
           conflicts.push(`Existing ${GEMINI_SELECTOR} entry will be updated.`);
         }
       } catch {
-        warnings.push(`${configPath} exists but is not valid JSON. It will be replaced.`);
+        warnings.push(
+          `${configPath} exists but is not valid JSON. It will be replaced.`,
+        );
       }
     }
 
@@ -204,7 +216,7 @@ export const geminiAdapter: RuntimeAdapter = {
     const configPath = plan.operations[0]?.path ?? chooseGeminiConfigPath(ctx);
     const warnings: string[] = [];
     const changedFiles: string[] = [];
-    const managed = buildManagedMcpServerSpec(ctx);
+    const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
 
     warnings.push(...managed.warnings);
     if (managed.issues.length > 0 || !managed.command) {
@@ -230,14 +242,20 @@ export const geminiAdapter: RuntimeAdapter = {
       try {
         config = readJsonFile(configPath);
       } catch {
-        warnings.push(`${configPath} was invalid JSON. Created backup and starting fresh.`);
+        warnings.push(
+          `${configPath} was invalid JSON. Created backup and starting fresh.`,
+        );
         config = {};
       }
       previousValue = readNestedKey(config, GEMINI_SELECTOR);
     }
 
     const artifact = plan.ownedArtifacts[0];
-    const backupPath = artifactBackupPath(plan.backupDir, artifact.kind, artifact.selector);
+    const backupPath = artifactBackupPath(
+      plan.backupDir,
+      artifact.kind,
+      artifact.selector,
+    );
     writeArtifactBackup(backupPath, {
       kind: "json-path",
       selector: artifact.selector,
@@ -293,7 +311,9 @@ export const geminiAdapter: RuntimeAdapter = {
     checks.push({
       name: "Gemini CLI found",
       passed: !!runtimeProbe.command,
-      message: runtimeProbe.command ? undefined : "gemini not in PATH (non-blocking)",
+      message: runtimeProbe.command
+        ? undefined
+        : "gemini not in PATH (non-blocking)",
     });
 
     if (!runtimeProbe.command) {
@@ -303,7 +323,9 @@ export const geminiAdapter: RuntimeAdapter = {
     }
 
     return {
-      ok: checks.filter((check) => check.name !== "Gemini CLI found").every((check) => check.passed),
+      ok: checks
+        .filter((check) => check.name !== "Gemini CLI found")
+        .every((check) => check.passed),
       checks,
       restartRequired: true,
       warnings,

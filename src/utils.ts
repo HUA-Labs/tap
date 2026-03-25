@@ -20,14 +20,38 @@ export function detectPlatform(): Platform {
   return process.platform as Platform;
 }
 
+/** Shared flag: suppress duplicate no-git warnings across modules. */
+export let _noGitWarned = false;
+
+export function _setNoGitWarned() {
+  _noGitWarned = true;
+}
+
 export function findRepoRoot(startDir: string = process.cwd()): string {
   let dir = path.resolve(startDir);
   while (true) {
     if (fs.existsSync(path.join(dir, ".git"))) return dir;
-    if (fs.existsSync(path.join(dir, "package.json"))) return dir;
+    if (fs.existsSync(path.join(dir, "package.json"))) {
+      if (!_noGitWarned) {
+        _setNoGitWarned();
+        logWarn(
+          "No .git directory found. Resolved repo root via package.json — " +
+            "comms directory may be created in an unexpected location. " +
+            "Use --comms-dir to specify explicitly.",
+        );
+      }
+      return dir;
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
+  }
+  if (!_noGitWarned) {
+    _setNoGitWarned();
+    logWarn(
+      "No git repository or package.json found. Using current directory as root. " +
+        "Run 'git init' first, or use --comms-dir to specify the comms path.",
+    );
   }
   return process.cwd();
 }
@@ -186,4 +210,17 @@ export function findPortConflict(
     if (id !== excludeInstanceId && inst.port === port) return id;
   }
   return null;
+}
+
+/** Find the next available port starting from basePort (default 4501). */
+export function findNextAvailablePort(
+  state: TapState,
+  basePort: number = 4501,
+  excludeInstanceId?: InstanceId,
+): number {
+  let port = basePort;
+  while (findPortConflict(state, port, excludeInstanceId) !== null) {
+    port++;
+  }
+  return port;
 }

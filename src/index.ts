@@ -17,8 +17,11 @@ export type {
   TapState,
   TapStateV1,
   InstanceState,
+  /** @deprecated Use InstanceState. Will be removed in 0.2.0. */
   RuntimeState,
   BridgeState,
+  AppServerState,
+  AppServerAuthState,
   CommandName,
   CommandCode,
   CommandResult,
@@ -53,10 +56,27 @@ export {
 
 // Bridge engine
 export {
+  /** @deprecated Internal use only. Will be removed in 0.2.0. */
   updateBridgeHeartbeat,
   getHeartbeatAge,
   rotateLog,
 } from "./engine/bridge.js";
+
+// Dashboard / State API
+export type {
+  AgentInfo,
+  BridgeInfo,
+  PRInfo,
+  DashboardWarning,
+  DashboardSnapshot,
+} from "./engine/dashboard.js";
+export { collectDashboardSnapshot } from "./engine/dashboard.js";
+
+// State/Control API (M105)
+export type { StateApiOptions, EventStreamOptions } from "./api/state.js";
+export { getDashboardSnapshot, streamEvents, getConfig } from "./api/state.js";
+export type { HttpServerOptions } from "./api/http.js";
+export { startHttpServer } from "./api/http.js";
 
 // Runtime resolver
 export type { ResolvedRuntime, RuntimeSource } from "./runtime/index.js";

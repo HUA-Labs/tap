@@ -38,7 +38,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       command: "add",
       code: "TAP_INVALID_ARGUMENT",
       message:
-        "Missing runtime argument. Usage: npx @hua-labs/tap add <claude|codex|gemini> [--name <name>] [--port <port>] [--headless] [--role <role>]",
+        "Missing runtime argument. Usage: npx @hua-labs/tap add <claude|codex|gemini> [--name <name>] [--port <port>] [--agent-name <name>] [--headless] [--role <role>]",
       warnings: [],
       data: {},
     };
@@ -61,6 +61,8 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   const instanceId = buildInstanceId(runtime, instanceName);
   const portStr = typeof flags["port"] === "string" ? flags["port"] : undefined;
   const port = portStr ? parseInt(portStr, 10) : null;
+  const agentNameFlag =
+    typeof flags["agent-name"] === "string" ? flags["agent-name"] : null;
   const force = flags["force"] === true;
   const headlessFlag = flags["headless"] === true;
   const roleArg = typeof flags["role"] === "string" ? flags["role"] : undefined;
@@ -167,7 +169,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   if (instanceName) log(`Instance name: ${instanceName}`);
   if (port !== null) log(`Port: ${port}`);
 
-  const ctx = createAdapterContext(state.commsDir, repoRoot);
+  const ctx = { ...createAdapterContext(state.commsDir, repoRoot), instanceId };
   const adapter = getAdapter(runtime);
   const warnings: string[] = [];
 
@@ -209,13 +211,22 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
 
   // 3. Check for no-op plan
   if (plan.operations.length === 0) {
+    const failureMessage =
+      probe.issues[0] ??
+      plan.warnings[0] ??
+      probe.warnings[0] ??
+      "No operations to apply. Runtime not configured.";
+    const failureCode = /MCP server/i.test(failureMessage)
+      ? "TAP_LOCAL_SERVER_MISSING"
+      : "TAP_PATCH_FAILED";
+
     return {
-      ok: true,
+      ok: false,
       command: "add",
       runtime,
       instanceId,
-      code: "TAP_NO_OP",
-      message: "No operations to apply. Runtime not configured.",
+      code: failureCode,
+      message: failureMessage,
       warnings,
       data: { planOps: 0 },
     };
@@ -276,11 +287,13 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       logWarn("Bridge script not found. Bridge not started.");
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
-      const agentNameEnv =
-        process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME;
-      if (!agentNameEnv) {
+      const resolvedAgentName =
+        agentNameFlag ||
+        process.env.TAP_AGENT_NAME ||
+        process.env.CODEX_TAP_AGENT_NAME;
+      if (!resolvedAgentName) {
         logWarn(
-          "No agent name set (TAP_AGENT_NAME). Bridge not started. " +
+          "No agent name set. Bridge not started. " +
             "Use: npx @hua-labs/tap bridge start <instance> --agent-name <name>",
         );
         warnings.push("Bridge not auto-started: no agent name available.");
@@ -295,7 +308,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
             commsDir: ctx.commsDir,
             bridgeScript,
             platform: ctx.platform,
-            agentName: agentNameEnv,
+            agentName: resolvedAgentName,
             runtimeCommand: resolvedCfg.runtimeCommand,
             appServerUrl: resolvedCfg.appServerUrl,
             repoRoot,
@@ -312,11 +325,12 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     }
   }
 
-  // 8. Save state
+  // 8. Save state — preserve existing agentName on --force reinstall
+  const existingAgentName = state.instances[instanceId]?.agentName ?? null;
   const instanceState = {
     instanceId,
     runtime,
-    agentName: null,
+    agentName: agentNameFlag ?? existingAgentName,
     port,
     installed: true,
     configPath: probe.configPath ?? "",

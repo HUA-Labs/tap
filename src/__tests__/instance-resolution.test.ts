@@ -4,6 +4,7 @@ import {
   buildInstanceId,
   extractRuntimeFromInstanceId,
   findPortConflict,
+  findNextAvailablePort,
 } from "../utils.js";
 import type { TapState } from "../types.js";
 
@@ -170,5 +171,52 @@ describe("findPortConflict", () => {
       claude: { runtime: "claude" },
     });
     expect(findPortConflict(state, 4500)).toBeNull();
+  });
+});
+
+describe("findNextAvailablePort", () => {
+  it("returns basePort when no ports are assigned", () => {
+    const state = makeState({
+      codex: { runtime: "codex" },
+      claude: { runtime: "claude" },
+    });
+    expect(findNextAvailablePort(state)).toBe(4501);
+  });
+
+  it("returns basePort when specified", () => {
+    const state = makeState({});
+    expect(findNextAvailablePort(state, 5000)).toBe(5000);
+  });
+
+  it("skips occupied ports", () => {
+    const state = makeState({
+      codex: { runtime: "codex", port: 4501 },
+      "codex-reviewer": { runtime: "codex", port: 4502 },
+    });
+    expect(findNextAvailablePort(state)).toBe(4503);
+  });
+
+  it("finds gap between occupied ports", () => {
+    const state = makeState({
+      codex: { runtime: "codex", port: 4501 },
+      "codex-reviewer": { runtime: "codex", port: 4503 },
+    });
+    expect(findNextAvailablePort(state)).toBe(4502);
+  });
+
+  it("excludes self from conflict check", () => {
+    const state = makeState({
+      codex: { runtime: "codex", port: 4501 },
+    });
+    expect(findNextAvailablePort(state, 4501, "codex")).toBe(4501);
+  });
+
+  it("handles mixed null and assigned ports", () => {
+    const state = makeState({
+      codex: { runtime: "codex", port: 4501 },
+      claude: { runtime: "claude" }, // null port
+      "codex-reviewer": { runtime: "codex", port: 4502 },
+    });
+    expect(findNextAvailablePort(state)).toBe(4503);
   });
 });

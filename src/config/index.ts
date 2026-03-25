@@ -7,6 +7,7 @@ export type {
 } from "./types.js";
 
 export {
+  LEGACY_CONFIG_FILE,
   SHARED_CONFIG_FILE,
   LOCAL_CONFIG_FILE,
   findRepoRoot,

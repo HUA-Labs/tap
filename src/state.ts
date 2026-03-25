@@ -167,35 +167,3 @@ export function fileHash(filePath: string): string {
   const content = fs.readFileSync(filePath);
   return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
-
-// ─── Deprecated (v1 compat wrappers) ───────────────────────────
-
-/** @deprecated Use updateInstanceState */
-export function updateRuntimeState(
-  state: TapState,
-  runtime: RuntimeName,
-  runtimeState: InstanceState,
-): TapState {
-  return updateInstanceState(state, runtime, runtimeState);
-}
-
-/** @deprecated Use removeInstanceState */
-export function removeRuntimeState(
-  state: TapState,
-  runtime: RuntimeName,
-): TapState {
-  return removeInstanceState(state, runtime);
-}
-
-/** @deprecated Use getInstalledInstances */
-export function getInstalledRuntimes(state: TapState): InstanceId[] {
-  return getInstalledInstances(state);
-}
-
-/** @deprecated Use getInstanceArtifacts */
-export function getRuntimeArtifacts(
-  state: TapState,
-  instanceId: InstanceId,
-): OwnedArtifact[] {
-  return getInstanceArtifacts(state, instanceId);
-}

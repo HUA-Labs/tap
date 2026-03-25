@@ -1,36 +1,9 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync, spawn } from "node:child_process";
-import { findRepoRoot } from "../utils.js";
+import { spawn } from "node:child_process";
+import { buildManagedMcpServerSpec } from "../adapters/common.js";
+import { createAdapterContext, findRepoRoot } from "../utils.js";
 import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
-
-function findServerEntry(repoRoot: string): string | null {
-  const candidates = [
-    path.join(repoRoot, "packages", "tap-plugin", "channels", "tap-comms.ts"),
-    path.join(
-      repoRoot,
-      "node_modules",
-      "@hua-labs",
-      "tap-plugin",
-      "channels",
-      "tap-comms.ts",
-    ),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
-
-function isBunInstalled(): boolean {
-  try {
-    execSync("bun --version", { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * serve is special: it takes over the process on success.
@@ -69,33 +42,24 @@ export async function serveCommand(args: string[]): Promise<CommandResult> {
     };
   }
 
-  if (!isBunInstalled()) {
+  const ctx = createAdapterContext(commsDir, repoRoot);
+  const managed = buildManagedMcpServerSpec(ctx);
+  if (!managed.command || !managed.sourcePath) {
+    const fallbackMessage =
+      managed.issues[0] ??
+      "tap-comms MCP server not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/.";
     return {
       ok: false,
       command: "serve",
-      code: "TAP_SERVE_BUN_REQUIRED",
-      message:
-        "bun is required to run the tap-comms MCP server. Install: https://bun.sh",
+      code: managed.sourcePath ? "TAP_SERVE_BUN_REQUIRED" : "TAP_SERVE_NO_SERVER",
+      message: fallbackMessage,
       warnings: [],
       data: {},
     };
   }
 
-  const serverEntry = findServerEntry(repoRoot);
-  if (!serverEntry) {
-    return {
-      ok: false,
-      command: "serve",
-      code: "TAP_SERVE_NO_SERVER",
-      message:
-        "tap-comms MCP server not found. Run from a repo with packages/tap-plugin/channels/.",
-      warnings: [],
-      data: {},
-    };
-  }
-
-  // Start MCP server — takes over the process
-  const child = spawn("bun", [serverEntry], {
+  // Start MCP server using managed spec (bun or node fallback)
+  const child = spawn(managed.command, managed.args, {
     stdio: "inherit",
     env: {
       ...process.env,

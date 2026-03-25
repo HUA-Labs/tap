@@ -38,6 +38,7 @@ export type ConfigSource =
   | "env"
   | "local-config"
   | "shared-config"
+  | "legacy-shell-config"
   | "auto";
 
 export interface ConfigResolution {

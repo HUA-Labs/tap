@@ -229,7 +229,7 @@ export const codexAdapter: RuntimeAdapter = {
     const configPath = plan.operations[0]?.path ?? findCodexConfigPath();
     const warnings: string[] = [];
     const changedFiles: string[] = [];
-    const managed = buildManagedMcpServerSpec(ctx);
+    const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
 
     warnings.push(...managed.warnings);
     if (managed.issues.length > 0 || !managed.command) {
