@@ -108,7 +108,7 @@ npx @hua-labs/tap status --json
   "message": "2 runtime(s) installed",
   "warnings": [],
   "data": {
-    "version": "0.2.0",
+    "version": "0.2.2",
     "commsDir": "/path/to/comms",
     "runtimes": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
@@ -165,7 +165,7 @@ Each runtime has an adapter that:
 
 The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
 
-## Changelog (0.2.0)
+## Changelog (0.2.2)
 
 ### Bridge
 

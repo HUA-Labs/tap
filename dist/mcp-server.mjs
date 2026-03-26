@@ -6838,7 +6838,7 @@ __export(tap_utils_exports, {
   stripBom: () => stripBom,
   updateActivityTime: () => updateActivityTime
 });
-import { existsSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
 function resolveInitialId() {
   const envId = process.env.TAP_AGENT_ID;
@@ -6847,6 +6847,20 @@ function resolveInitialId() {
   if (envName && !PLACEHOLDER_NAMES.has(envName))
     return envName.replace(/-/g, "_");
   return "unknown";
+}
+function resolveNameFromState() {
+  const stateDir = process.env.TAP_STATE_DIR;
+  const agentId = process.env.TAP_AGENT_ID;
+  if (!stateDir || !agentId) return null;
+  try {
+    const statePath = join(stateDir, "state.json");
+    if (!existsSync(statePath)) return null;
+    const state = JSON.parse(readFileSync(statePath, "utf-8"));
+    const instance = state.instances?.[agentId] ?? state.instances?.[agentId.replace(/_/g, "-")];
+    return instance?.agentName ?? null;
+  } catch {
+    return null;
+  }
 }
 function getAgentId() {
   return _agentId;
@@ -6965,7 +6979,7 @@ var init_tap_utils = __esm({
     SERVER_START = Date.now();
     PLACEHOLDER_NAMES = /* @__PURE__ */ new Set(["unknown", "unnamed", "<set-per-session>"]);
     _agentId = resolveInitialId();
-    _agentName = process.env.TAP_AGENT_NAME || "unknown";
+    _agentName = resolveNameFromState() ?? (process.env.TAP_AGENT_NAME && !PLACEHOLDER_NAMES.has(process.env.TAP_AGENT_NAME) ? process.env.TAP_AGENT_NAME : "unknown");
     _idLocked = _agentId !== "unknown";
     _lastActivityTime = (/* @__PURE__ */ new Date()).toISOString();
   }
@@ -6991,7 +7005,7 @@ __export(tap_io_exports, {
 import {
   existsSync as existsSync2,
   mkdirSync,
-  readFileSync,
+  readFileSync as readFileSync2,
   readdirSync as readdirSync2,
   renameSync,
   statSync as statSync2,
@@ -7033,7 +7047,7 @@ function ensureReceiptsDir() {
 }
 function loadReceipts() {
   try {
-    return JSON.parse(readFileSync(RECEIPTS_PATH, "utf-8"));
+    return JSON.parse(readFileSync2(RECEIPTS_PATH, "utf-8"));
   } catch {
     return {};
   }
@@ -7046,7 +7060,7 @@ function saveReceipts(store) {
 }
 function loadHeartbeats() {
   try {
-    return JSON.parse(readFileSync(HEARTBEATS_PATH, "utf-8"));
+    return JSON.parse(readFileSync2(HEARTBEATS_PATH, "utf-8"));
   } catch {
     return {};
   }
@@ -7130,7 +7144,7 @@ function getUnreadItems(options) {
       if (effectiveSinceMs && mtime < effectiveSinceMs) continue;
       let content;
       try {
-        content = stripBom(readFileSync(fullPath, "utf-8"));
+        content = stripBom(readFileSync2(fullPath, "utf-8"));
       } catch {
         continue;
       }
@@ -21191,12 +21205,12 @@ var StdioServerTransport = class {
 // ../tap-plugin/channels/tap-comms.ts
 init_tap_utils();
 init_tap_io();
-import { existsSync as existsSync6, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "fs";
 import { join as join5 } from "path";
 
 // ../tap-plugin/channels/tap-db.ts
 init_tap_utils();
-import { existsSync as existsSync3, readFileSync as readFileSync2, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
 import { join as join3 } from "path";
 var db = null;
 function initDb() {
@@ -21264,7 +21278,7 @@ function autoSyncOnStartup() {
     const rcptPath = join3(RECEIPTS_DIR, "receipts.json");
     if (existsSync3(rcptPath)) {
       try {
-        const rcptStore = JSON.parse(readFileSync2(rcptPath, "utf-8"));
+        const rcptStore = JSON.parse(readFileSync3(rcptPath, "utf-8"));
         for (const [fname, readers] of Object.entries(rcptStore)) {
           for (const r of readers) {
             db.run(
@@ -21393,7 +21407,7 @@ function dbSyncAll() {
 
 // ../tap-plugin/channels/tap-watcher.ts
 init_tap_utils();
-import { existsSync as existsSync4, readFileSync as readFileSync3, statSync as statSync4, watch } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, statSync as statSync4, watch } from "fs";
 import { join as join4 } from "path";
 init_tap_io();
 var notifiedFiles = /* @__PURE__ */ new Set();
@@ -21417,7 +21431,7 @@ async function waitForFileReady(filepath) {
     try {
       const mtime = statSync4(filepath).mtimeMs;
       if (mtime < SERVER_START - 5e3) return "stale";
-      const content = stripBom(readFileSync3(filepath, "utf-8"));
+      const content = stripBom(readFileSync4(filepath, "utf-8"));
       return { content, mtime };
     } catch (error2) {
       if (attempt === MAX_READY_ATTEMPTS - 1 || !isRetryableFsError(error2)) {
@@ -21632,14 +21646,56 @@ autoSyncOnStartup();
 seedStartupFiles("inbox");
 seedStartupFiles("reviews");
 seedStartupFiles("findings");
+var ONBOARDING_TEASER_LINES = 10;
+function loadOnboardingTeaser() {
+  const commsDir = process.env.TAP_COMMS_DIR;
+  if (!commsDir) return "";
+  const stateDir = process.env.TAP_STATE_DIR;
+  const agentId = process.env.TAP_AGENT_ID;
+  if (stateDir && agentId) {
+    try {
+      const markerPath = join5(stateDir, "onboarded.json");
+      if (existsSync6(markerPath)) {
+        const store = JSON.parse(readFileSync5(markerPath, "utf-8"));
+        if (store[agentId]) return "";
+      }
+    } catch {
+    }
+  }
+  try {
+    const welcomePath = join5(commsDir, "onboarding", "welcome.md");
+    if (!existsSync6(welcomePath)) return "";
+    const content = readFileSync5(welcomePath, "utf-8");
+    const lines = content.split("\n").slice(0, ONBOARDING_TEASER_LINES);
+    if (stateDir && agentId) {
+      try {
+        const markerPath = join5(stateDir, "onboarded.json");
+        let store = {};
+        if (existsSync6(markerPath)) {
+          store = JSON.parse(readFileSync5(markerPath, "utf-8"));
+        }
+        if (!store[agentId]) {
+          store[agentId] = { onboardedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          mkdirSync2(stateDir, { recursive: true });
+          writeFileSync2(markerPath, JSON.stringify(store, null, 2), "utf-8");
+        }
+      } catch {
+      }
+    }
+    return "\n\n--- Onboarding ---\n" + lines.join("\n") + "\n(Use tap_onboard tool for full onboarding guide.)";
+  } catch {
+    return "";
+  }
+}
+var baseInstructions = 'You are connected to the tap-comms channel. Messages from other agents may arrive as <channel source="tap-comms" from="X" to="Y" subject="Z"> notifications. If your client does not surface Claude channel notifications, call tap_list_unread to pull pending inbox and review messages. Reply using the tap_reply tool to send messages back to other agents or the control tower.';
 var mcp = new Server(
-  { name: "tap-comms", version: "0.2.0" },
+  { name: "tap-comms", version: "0.2.2" },
   {
     capabilities: {
       experimental: { "claude/channel": {} },
       tools: {}
     },
-    instructions: 'You are connected to the tap-comms channel. Messages from other agents may arrive as <channel source="tap-comms" from="X" to="Y" subject="Z"> notifications. If your client does not surface Claude channel notifications, call tap_list_unread to pull pending inbox and review messages. Reply using the tap_reply tool to send messages back to other agents or the control tower.'
+    instructions: baseInstructions + loadOnboardingTeaser()
   }
 );
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -21808,6 +21864,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "tap_db_sync",
       description: "Sync existing inbox/receipts/heartbeats files into the SQLite database.",
       inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "tap_onboard",
+      description: "Get the full onboarding guide for this project. Returns welcome.md + any additional onboarding docs from commsDir/onboarding/.",
+      inputSchema: { type: "object", properties: {} }
     }
   ]
 }));
@@ -21862,11 +21923,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     );
     const activeList = [...activeSenders].filter((n) => n !== "unnamed" && n !== "unknown").join(", ");
     const now = (/* @__PURE__ */ new Date()).toISOString();
+    let priorJoinedAt = null;
+    let priorLastActivity = null;
     const locked = acquireLock(HEARTBEATS_LOCK);
     if (locked) {
       try {
         const store = loadHeartbeats();
         const oldEntry = store[agentId] ?? (oldName !== "unknown" ? store[oldName] : void 0);
+        priorJoinedAt = oldEntry?.joinedAt ?? null;
+        priorLastActivity = oldEntry?.lastActivity ?? null;
         if (oldName !== "unknown" && oldName !== agentId) {
           delete store[oldName];
         }
@@ -21884,6 +21949,84 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
         releaseLock(HEARTBEATS_LOCK);
       }
     }
+    const stateDir = process.env.TAP_STATE_DIR;
+    if (stateDir) {
+      try {
+        const statePath = join5(stateDir, "state.json");
+        if (existsSync6(statePath)) {
+          const state = JSON.parse(readFileSync5(statePath, "utf-8"));
+          const instanceKey = agentId.replace(/_/g, "-");
+          const instance = state.instances?.[agentId] ?? state.instances?.[instanceKey];
+          if (instance) {
+            instance.agentName = name;
+            const tmp = `${statePath}.tmp.${process.pid}`;
+            writeFileSync2(tmp, JSON.stringify(state, null, 2), "utf-8");
+            try {
+              renameSync2(tmp, statePath);
+            } catch {
+              try {
+                renameSync2(tmp, statePath);
+              } catch {
+              }
+            }
+            debug(`backwrite agentName="${name}" to state.json for ${agentId}`);
+          }
+        }
+      } catch {
+      }
+    }
+    if (oldName === "unknown" || oldName === "unnamed") {
+      try {
+        const repoRoot = process.env.TAP_REPO_ROOT ?? ".";
+        let towerName = null;
+        const cfgPath = join5(repoRoot, "tap-config.json");
+        if (existsSync6(cfgPath)) {
+          const cfg = JSON.parse(readFileSync5(cfgPath, "utf-8"));
+          towerName = cfg.towerName ?? null;
+        }
+        let runtime = process.env.TAP_BRIDGE_RUNTIME ?? null;
+        if (!runtime && stateDir) {
+          try {
+            const statePath = join5(stateDir, "state.json");
+            if (existsSync6(statePath)) {
+              const state = JSON.parse(readFileSync5(statePath, "utf-8"));
+              const instanceKey = agentId.replace(/_/g, "-");
+              const inst = state.instances?.[agentId] ?? state.instances?.[instanceKey];
+              runtime = inst?.runtime ?? null;
+            }
+          } catch {
+          }
+        }
+        if (towerName && towerName !== name && towerName !== agentId) {
+          const SKIP_WINDOW_MS = 10 * 60 * 1e3;
+          const STALE_WINDOW_MS = 30 * 60 * 1e3;
+          let shouldNotify = true;
+          if (priorJoinedAt) {
+            const activityTs = priorLastActivity ?? priorJoinedAt;
+            const activityAge = Date.now() - new Date(activityTs).getTime();
+            if (activityAge < SKIP_WINDOW_MS) {
+              shouldNotify = false;
+            } else if (activityAge < STALE_WINDOW_MS) {
+              shouldNotify = false;
+            }
+          }
+          if (shouldNotify) {
+            const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+            const notifyFilename = `${ts.slice(0, 10).replace(/-/g, "")}-tap-${towerName}-new-agent-${agentId}.md`;
+            const notifyPath = join5(INBOX_DIR, notifyFilename);
+            writeFileSync2(
+              notifyPath,
+              `[NEW] ${name} (${agentId}) joined. Runtime: ${runtime ?? "unknown"}.`,
+              "utf-8"
+            );
+            debug(
+              `tower notify: ${towerName} \u2190 new agent ${name} (${runtime})`
+            );
+          }
+        }
+      } catch {
+      }
+    }
     let text = `Name set: ${name} (was: ${oldName}). Messages to "${name}", "${agentId}", "\uC804\uCCB4", or "all" will be received.`;
     if (!wasIdLocked)
       text += `
@@ -21897,6 +22040,53 @@ Recent active names: ${activeList}`;
   }
   if (req.params.name === "tap_reply") {
     const { to, subject, content, cc } = req.params.arguments;
+    const broadcastNames = /* @__PURE__ */ new Set(["\uC804\uCCB4", "all"]);
+    const recipientWarnings = [];
+    const store = loadHeartbeats();
+    const knownAgents = /* @__PURE__ */ new Set();
+    const displayNameCount = /* @__PURE__ */ new Map();
+    const placeholders = /* @__PURE__ */ new Set(["unknown", "unnamed", "<set-per-session>"]);
+    for (const [key, hb] of Object.entries(store)) {
+      if (!placeholders.has(key)) knownAgents.add(key);
+      if (hb.agent && !placeholders.has(hb.agent)) {
+        knownAgents.add(hb.agent);
+        const ids = displayNameCount.get(hb.agent) ?? [];
+        ids.push(key);
+        displayNameCount.set(hb.agent, ids);
+      }
+    }
+    const knownList = [...knownAgents].filter((n) => n !== "unknown").join(", ");
+    if (!broadcastNames.has(to)) {
+      if (!knownAgents.has(to)) {
+        recipientWarnings.push(
+          `\u26A0\uFE0F WARNING: "${to}" is not a known agent. Check spelling. Known: ${knownList}`
+        );
+      } else {
+        const ids = displayNameCount.get(to);
+        if (ids && ids.length > 1) {
+          recipientWarnings.push(
+            `\u26A0\uFE0F WARNING: "${to}" matches multiple agents (${ids.join(", ")}). Use agent ID for precise routing.`
+          );
+        }
+      }
+    }
+    if (cc?.length) {
+      for (const recipient of cc) {
+        if (broadcastNames.has(recipient)) continue;
+        if (!knownAgents.has(recipient)) {
+          recipientWarnings.push(
+            `\u26A0\uFE0F WARNING: CC "${recipient}" is not a known agent. Known: ${knownList}`
+          );
+        } else {
+          const ids = displayNameCount.get(recipient);
+          if (ids && ids.length > 1) {
+            recipientWarnings.push(
+              `\u26A0\uFE0F WARNING: CC "${recipient}" matches multiple agents (${ids.join(", ")}). Use agent ID.`
+            );
+          }
+        }
+      }
+    }
     const date4 = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "");
     const fromId = getAgentId();
     const fromName = getAgentName();
@@ -21935,6 +22125,7 @@ ${content}`,
         }
       }
     }
+    sent.push(...recipientWarnings);
     return { content: [{ type: "text", text: sent.join("\n") }] };
   }
   if (req.params.name === "tap_broadcast") {
@@ -22155,6 +22346,78 @@ ${content}`,
           type: "text",
           text: dryRun ? `[DRY RUN] Would archive ${moved.length} files older than ${days} days (filename date).` : `Archived ${moved.length} files older than ${days} days to archive/ (filename date).`
         }
+      ]
+    };
+  }
+  if (req.params.name === "tap_onboard") {
+    const commsDir = process.env.TAP_COMMS_DIR;
+    if (!commsDir) {
+      return {
+        content: [
+          { type: "text", text: "TAP_COMMS_DIR not set. Cannot load onboarding docs." }
+        ]
+      };
+    }
+    const stateDir = process.env.TAP_STATE_DIR;
+    const agentId = getAgentId();
+    let alreadyOnboarded = false;
+    let markerStore = {};
+    const markerPath = stateDir ? join5(stateDir, "onboarded.json") : null;
+    if (markerPath) {
+      try {
+        if (existsSync6(markerPath)) {
+          markerStore = JSON.parse(readFileSync5(markerPath, "utf-8"));
+          if (markerStore[agentId]) {
+            alreadyOnboarded = true;
+          }
+        }
+      } catch {
+      }
+    }
+    const onboardingDir = join5(commsDir, "onboarding");
+    if (!existsSync6(onboardingDir)) {
+      return {
+        content: [
+          { type: "text", text: "No onboarding directory found at " + onboardingDir }
+        ]
+      };
+    }
+    const docs = [];
+    const allFiles = readdirSync5(onboardingDir).filter((f) => f.endsWith(".md"));
+    const files = [
+      ...allFiles.filter((f) => f === "welcome.md"),
+      ...allFiles.filter((f) => f !== "welcome.md").sort()
+    ];
+    for (const file2 of files) {
+      try {
+        const content = readFileSync5(join5(onboardingDir, file2), "utf-8");
+        docs.push(`# ${file2}
+
+${content}`);
+      } catch {
+        docs.push(`# ${file2}
+
+(failed to read)`);
+      }
+    }
+    if (docs.length === 0) {
+      return {
+        content: [
+          { type: "text", text: "Onboarding directory is empty." }
+        ]
+      };
+    }
+    if (markerPath && !alreadyOnboarded) {
+      try {
+        markerStore[agentId] = { onboardedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        writeFileSync2(markerPath, JSON.stringify(markerStore, null, 2), "utf-8");
+      } catch {
+      }
+    }
+    const prefix = alreadyOnboarded ? "(You have already been onboarded. Showing docs again for reference.)\n\n" : "";
+    return {
+      content: [
+        { type: "text", text: prefix + docs.join("\n\n---\n\n") }
       ]
     };
   }

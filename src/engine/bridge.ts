@@ -16,6 +16,7 @@ import type {
 } from "../types.js";
 import { probeCommand } from "../adapters/common.js";
 import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
+import { loadState } from "../state.js";
 
 export interface BridgeStartOptions {
   instanceId: InstanceId;
@@ -77,14 +78,17 @@ interface WebSocketLike {
   close(code?: number, reason?: string): void;
 }
 
-type WebSocketCtor = new (url: string) => WebSocketLike;
+type WebSocketCtor = new (
+  url: string,
+  protocols?: string | string[],
+) => WebSocketLike;
 
 const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
 const APP_SERVER_HEALTH_TIMEOUT_MS = 1_500;
 const APP_SERVER_START_TIMEOUT_MS = 20_000;
 const APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5_000;
 const APP_SERVER_HEALTH_RETRY_MS = 250;
-const APP_SERVER_AUTH_QUERY_PARAM = "tap_token";
+const AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 const APP_SERVER_AUTH_FILE_MODE = 0o600;
 
 function appServerLogFilePath(
@@ -175,8 +179,11 @@ function resolvePowerShellCommand(): string {
 function resolveAuthGatewayScript(repoRoot: string): string | null {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.mjs"),
-    path.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.ts"),
+    // Bundled: dist/bridges/ sibling (npm install / built package)
+    path.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
+    // Source: src/bridges/ sibling (monorepo dev with ts runner)
+    path.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
+    // Monorepo dist fallback
     path.join(
       repoRoot,
       "packages",
@@ -238,10 +245,10 @@ async function allocateLoopbackPort(hostname: string): Promise<number> {
   });
 }
 
-function buildProtectedAppServerUrl(publicUrl: string, token: string): string {
-  const url = new URL(publicUrl);
-  url.searchParams.set(APP_SERVER_AUTH_QUERY_PARAM, token);
-  return url.toString().replace(/\/(?=\?|$)/, "");
+function buildProtectedAppServerUrl(publicUrl: string, _token: string): string {
+  // Subprotocol auth: token is no longer embedded in the URL.
+  // Kept for backward compatibility with state display — shows base URL only.
+  return publicUrl;
 }
 
 function readGatewayTokenFromPath(tokenPath: string): string {
@@ -380,7 +387,7 @@ async function createManagedAppServerAuth(
   }
 
   return {
-    mode: "query-token",
+    mode: "subprotocol",
     protectedUrl,
     upstreamUrl: upstreamUrl.toString().replace(/\/$/, ""),
     tokenPath,
@@ -636,6 +643,7 @@ export async function findNextAvailableAppServerPort(
 export async function checkAppServerHealth(
   url: string,
   timeoutMs: number = APP_SERVER_HEALTH_TIMEOUT_MS,
+  gatewayToken?: string | null,
 ): Promise<boolean> {
   const WebSocket = getWebSocketCtor();
   if (!WebSocket) {
@@ -663,7 +671,11 @@ export async function checkAppServerHealth(
     const timer = setTimeout(() => finish(false), timeoutMs);
 
     try {
-      socket = new WebSocket(url);
+      // Authenticate via WebSocket subprotocol when a gateway token is provided.
+      const protocols = gatewayToken
+        ? [`${AUTH_SUBPROTOCOL_PREFIX}${gatewayToken}`]
+        : undefined;
+      socket = new WebSocket(url, protocols);
       socket.addEventListener("open", () => finish(true), { once: true });
       socket.addEventListener("error", () => finish(false), { once: true });
       socket.addEventListener("close", () => finish(false), { once: true });
@@ -676,11 +688,18 @@ export async function checkAppServerHealth(
 async function waitForAppServerHealth(
   url: string,
   timeoutMs: number,
+  gatewayToken?: string | null,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    if (await checkAppServerHealth(url)) {
+    if (
+      await checkAppServerHealth(
+        url,
+        APP_SERVER_HEALTH_TIMEOUT_MS,
+        gatewayToken,
+      )
+    ) {
       return true;
     }
     await delay(APP_SERVER_HEALTH_RETRY_MS);
@@ -967,8 +986,9 @@ export async function ensureCodexAppServer(
   }
 
   const gatewayHealthy = await waitForAppServerHealth(
-    buildProtectedAppServerUrl(effectiveUrl, gatewayToken),
+    effectiveUrl,
     APP_SERVER_GATEWAY_START_TIMEOUT_MS,
+    gatewayToken,
   );
   if (!gatewayHealthy) {
     await terminateProcess(pid, options.platform);
@@ -1097,6 +1117,91 @@ export function isBridgeRunning(
   return isProcessAlive(state.pid);
 }
 
+// ─── Testable helpers (extracted for unit testing) ─────────────
+
+/**
+ * Resolve agent name: explicit > state.json > env.
+ * Exported for direct testing without spawning a process.
+ */
+export function resolveAgentName(
+  instanceId: InstanceId,
+  explicit?: string,
+  context?: { repoRoot?: string; stateDir?: string },
+): string | null {
+  if (explicit) return explicit;
+
+  // state.json SSOT (#784 backwrite)
+  try {
+    const repoRoot =
+      context?.repoRoot ??
+      context?.stateDir?.replace(/[\\/].tap-comms$/, "") ??
+      process.cwd();
+    const state = loadState(repoRoot);
+    const stateAgent = state?.instances[instanceId]?.agentName;
+    if (stateAgent) return stateAgent;
+  } catch {
+    // state read failed — fall through
+  }
+
+  return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
+}
+
+/**
+ * Infer restart mode from current bridge/instance state.
+ * Priority: explicit flags > saved instance mode > bridge state inference > defaults.
+ */
+export function inferRestartMode(
+  bridgeState: BridgeState | null,
+  flags?: { noServer?: boolean; noAuth?: boolean },
+  savedMode?: { manageAppServer?: boolean; noAuth?: boolean },
+): { manageAppServer: boolean; noAuth: boolean } {
+  const wasManaged = bridgeState?.appServer != null;
+  const hadAuth = bridgeState?.appServer?.auth != null;
+
+  const manageAppServer =
+    flags?.noServer === true
+      ? false
+      : flags?.noServer === undefined
+        ? (savedMode?.manageAppServer ?? wasManaged)
+        : true;
+  const noAuth =
+    flags?.noAuth === true
+      ? true
+      : flags?.noAuth === undefined
+        ? (savedMode?.noAuth ?? !hadAuth)
+        : false;
+
+  return { manageAppServer, noAuth };
+}
+
+/**
+ * Clean up headless dispatch files from inbox.
+ * Matches YYYYMMDD-headless-{agent}-review-PR{n}.md pattern.
+ */
+export function cleanupHeadlessDispatch(
+  inboxDir: string,
+  agentName: string,
+): string[] {
+  const removed: string[] = [];
+  if (!fs.existsSync(inboxDir)) return removed;
+
+  const normalizedAgent = agentName.replace(/-/g, "_");
+  const marker = `-headless-${normalizedAgent}-review-`;
+
+  try {
+    for (const file of fs.readdirSync(inboxDir)) {
+      if (file.includes(marker)) {
+        fs.unlinkSync(path.join(inboxDir, file));
+        removed.push(file);
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  return removed;
+}
+
 export async function startBridge(
   options: BridgeStartOptions,
 ): Promise<BridgeState> {
@@ -1110,9 +1215,10 @@ export async function startBridge(
     port,
   } = options;
 
-  // Resolve agent name: explicit > env > error
-  const resolvedAgent =
-    agentName || process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME;
+  const resolvedAgent = resolveAgentName(instanceId, agentName, {
+    repoRoot: options.repoRoot,
+    stateDir,
+  });
 
   if (!resolvedAgent) {
     throw new Error(
@@ -1316,6 +1422,65 @@ export async function stopBridge(options: BridgeStopOptions): Promise<boolean> {
 
   clearBridgeState(stateDir, instanceId);
   return true;
+}
+
+// ─── Graceful restart ──────────────────────────────────────────
+
+export interface RestartBridgeOptions extends BridgeStartOptions {
+  /** Max seconds to wait for active turn to complete before killing. Default: 30 */
+  drainTimeoutSeconds?: number;
+}
+
+/**
+ * Graceful bridge restart: wait for active turn → cleanup → stop → start.
+ * Prevents message loss during restart by draining active work first
+ * and replaying unprocessed messages on the new instance.
+ *
+ * For headless instances: drain phase cleans up headless dispatch files
+ * to prevent the new bridge from re-injecting completed review requests.
+ * (별 finding: eager marking + replay collision)
+ */
+export async function restartBridge(
+  options: RestartBridgeOptions,
+): Promise<BridgeState> {
+  const { instanceId, stateDir, platform } = options;
+  const drainTimeout = (options.drainTimeoutSeconds ?? 30) * 1000;
+  const repoRoot = options.repoRoot ?? stateDir.replace(/[\\/].tap-comms$/, "");
+
+  // Phase 1: Drain — wait for active turn to complete
+  const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
+  const heartbeatPath = path.join(runtimeStateDir, "heartbeat.json");
+
+  if (fs.existsSync(heartbeatPath)) {
+    const startWait = Date.now();
+    while (Date.now() - startWait < drainTimeout) {
+      try {
+        const hb = JSON.parse(fs.readFileSync(heartbeatPath, "utf-8"));
+        if (!hb.activeTurnId) break; // No active turn — safe to stop
+      } catch {
+        break; // Can't read heartbeat — proceed with stop
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  // Phase 1.5: Clean up headless dispatch files (uses extracted helper)
+  if (options.headless?.enabled && options.commsDir) {
+    const agentName = options.agentName ?? instanceId;
+    cleanupHeadlessDispatch(path.join(options.commsDir, "inbox"), agentName);
+  }
+
+  // Phase 2: Stop existing bridge
+  await stopBridge({ instanceId, stateDir, platform });
+
+  // Phase 3: Start new bridge with --process-existing-messages
+  // This replays any messages that arrived during drain/restart
+  const restartOptions: BridgeStartOptions = {
+    ...options,
+    processExistingMessages: true,
+  };
+
+  return startBridge(restartOptions);
 }
 
 // ─── Log rotation ──────────────────────────────────────────────

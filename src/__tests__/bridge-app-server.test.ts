@@ -101,8 +101,8 @@ describe("ensureCodexAppServer", () => {
       logPath: path.join(tmpDir, "logs", "app-server-reviewer.log"),
       manualCommand: "codex app-server --listen ws://127.0.0.1:55210",
       auth: {
-        mode: "query-token" as const,
-        protectedUrl: "ws://127.0.0.1:4510?tap_token=***",
+        mode: "subprotocol" as const,
+        protectedUrl: "ws://127.0.0.1:4510",
         upstreamUrl: "ws://127.0.0.1:55210",
         tokenPath: path.join(tmpDir, "secrets", "gateway-reviewer.token"),
         gatewayPid: process.pid,
@@ -110,11 +110,10 @@ describe("ensureCodexAppServer", () => {
       },
     };
     fs.mkdirSync(path.join(tmpDir, "secrets"), { recursive: true });
-    fs.writeFileSync(
-      sharedAppServer.auth.tokenPath,
-      "secret\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
+    fs.writeFileSync(sharedAppServer.auth.tokenPath, "secret\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     fs.writeFileSync(
       path.join(tmpDir, "pids", "bridge-codex-reviewer.json"),
       JSON.stringify({
@@ -134,7 +133,7 @@ describe("ensureCodexAppServer", () => {
       appServerUrl: "ws://127.0.0.1:4510",
     });
 
-    expect(appServer.auth?.protectedUrl).toBe("ws://127.0.0.1:4510?tap_token=***");
+    expect(appServer.auth?.protectedUrl).toBe("ws://127.0.0.1:4510");
     expect(appServer.managed).toBe(true);
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -216,9 +215,7 @@ describe("ensureCodexAppServer", () => {
     );
     expect(fs.existsSync(appServer.logPath!)).toBe(true);
     expect(appServer.url).toBe("ws://127.0.0.1:4511");
-    expect(appServer.auth?.protectedUrl).toBe(
-      "ws://127.0.0.1:4511?tap_token=***",
-    );
+    expect(appServer.auth?.protectedUrl).toBe("ws://127.0.0.1:4511");
     expect(appServer.auth?.upstreamUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
     expect(appServer.auth?.tokenPath).toContain(
       path.join("secrets", "app-server-gateway-codex.token"),
@@ -308,9 +305,7 @@ describe("ensureCodexAppServer", () => {
     expect(appServer.logPath).toBe(
       path.join(tmpDir, "logs", "app-server-codex.log"),
     );
-    expect(appServer.auth?.protectedUrl).toBe(
-      "ws://127.0.0.1:4512?tap_token=***",
-    );
+    expect(appServer.auth?.protectedUrl).toBe("ws://127.0.0.1:4512");
     expect(appServer.auth?.tokenPath).toContain(
       path.join("secrets", "app-server-gateway-codex.token"),
     );

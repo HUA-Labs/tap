@@ -1,7 +1,7 @@
 // src/commands/init.ts
 import * as fs6 from "fs";
 import * as path6 from "path";
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 
 // src/state.ts
 import * as fs3 from "fs";
@@ -23,8 +23,15 @@ function detectPlatform() {
   return process.platform;
 }
 var _noGitWarned = false;
+var _loggedWarnings = /* @__PURE__ */ new Set();
 function _setNoGitWarned() {
   _noGitWarned = true;
+}
+function resetLoggedWarnings() {
+  _loggedWarnings.clear();
+}
+function wasWarningLogged(message) {
+  return _loggedWarnings.has(message);
 }
 function findRepoRoot(startDir = process.cwd()) {
   let dir = path.resolve(startDir);
@@ -33,8 +40,8 @@ function findRepoRoot(startDir = process.cwd()) {
     if (fs.existsSync(path.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        logWarn(
-          "No .git directory found. Resolved repo root via package.json \u2014 comms directory may be created in an unexpected location. Use --comms-dir to specify explicitly."
+        log(
+          "No .git directory found. Resolved tap root via package.json. That's fine outside git; use --comms-dir to choose a different comms location."
         );
       }
       return dir;
@@ -45,8 +52,8 @@ function findRepoRoot(startDir = process.cwd()) {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    logWarn(
-      "No git repository or package.json found. Using current directory as root. Run 'git init' first, or use --comms-dir to specify the comms path."
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. That's fine outside git; use --comms-dir to choose a different comms location."
     );
   }
   return process.cwd();
@@ -101,7 +108,9 @@ function logSuccess(message) {
   if (!_jsonMode) console.log(`  + ${message}`);
 }
 function logWarn(message) {
-  if (!_jsonMode) console.log(`  ! ${message}`);
+  if (_jsonMode) return;
+  _loggedWarnings.add(message);
+  console.log(`  ! ${message}`);
 }
 function logError(message) {
   if (!_jsonMode) console.error(`  x ${message}`);
@@ -110,6 +119,16 @@ function logHeader(message) {
   if (!_jsonMode) console.log(`
   ${message}
 `);
+}
+function parseIntFlag(value, name, min, max) {
+  if (value === void 0) return void 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new RangeError(
+      `Invalid ${name}: ${value}. Must be an integer between ${min} and ${max}.`
+    );
+  }
+  return parsed;
 }
 function resolveInstanceId(identifier, state) {
   if (state.instances[identifier]) {
@@ -160,8 +179,8 @@ function findRepoRoot2(startDir = process.cwd()) {
     if (fs2.existsSync(path2.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        console.error(
-          "[tap] warning: No .git directory found. Resolved via package.json. Use --comms-dir to specify explicitly."
+        log(
+          "No .git directory found. Resolved tap root via package.json. That's fine outside git; use --comms-dir to choose a different comms location."
         );
       }
       return dir;
@@ -172,8 +191,8 @@ function findRepoRoot2(startDir = process.cwd()) {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    console.error(
-      "[tap] warning: No git repository found. Using cwd as root. Run 'git init' or use --comms-dir."
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. That's fine outside git; use --comms-dir to choose a different comms location."
     );
   }
   return process.cwd();
@@ -187,7 +206,7 @@ function loadJsonFile(filePath) {
     return null;
   }
 }
-function loadSharedConfig2(repoRoot) {
+function loadSharedConfig(repoRoot) {
   return loadJsonFile(path2.join(repoRoot, SHARED_CONFIG_FILE));
 }
 function loadLocalConfig(repoRoot) {
@@ -211,7 +230,7 @@ function loadLegacyShellConfig(repoRoot) {
 }
 function resolveConfig(overrides = {}, startDir) {
   const repoRoot = findRepoRoot2(startDir);
-  const shared = loadSharedConfig2(repoRoot) ?? {};
+  const shared = loadSharedConfig(repoRoot) ?? {};
   const local = loadLocalConfig(repoRoot) ?? {};
   const legacy = loadLegacyShellConfig(repoRoot) ?? {};
   const sources = {
@@ -219,7 +238,8 @@ function resolveConfig(overrides = {}, startDir) {
     commsDir: "auto",
     stateDir: "auto",
     runtimeCommand: "auto",
-    appServerUrl: "auto"
+    appServerUrl: "auto",
+    towerName: "auto"
   };
   let commsDir;
   if (overrides.commsDir) {
@@ -288,8 +308,16 @@ function resolveConfig(overrides = {}, startDir) {
   } else {
     appServerUrl = DEFAULT_APP_SERVER_URL;
   }
+  const towerName = local.towerName ?? shared.towerName ?? null;
   return {
-    config: { repoRoot, commsDir, stateDir, runtimeCommand, appServerUrl },
+    config: {
+      repoRoot,
+      commsDir,
+      stateDir,
+      runtimeCommand,
+      appServerUrl,
+      towerName
+    },
     sources
   };
 }
@@ -745,7 +773,39 @@ function parsePermissionMode(args) {
   }
   return "safe";
 }
+var INIT_HELP = `
+Usage:
+  tap-comms init [options]
+
+Description:
+  Initialize the tap-comms directory structure, state file, and permissions.
+  Optionally clone a shared comms repository.
+
+Options:
+  --comms-dir <path>    Override comms directory (default: tap-comms/)
+  --comms-repo <url>    Clone a shared comms git repo into comms directory
+  --permissions <mode>  Permission mode: safe (default) or full
+  --force               Re-initialize even if already set up
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap init
+  npx @hua-labs/tap init --permissions full
+  npx @hua-labs/tap init --comms-repo https://github.com/org/comms.git
+  npx @hua-labs/tap init --comms-dir /shared/comms --force
+`.trim();
 async function initCommand(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(INIT_HELP);
+    return {
+      ok: true,
+      command: "init",
+      code: "TAP_NO_OP",
+      message: INIT_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const repoRoot = findRepoRoot();
   const commsDir = resolveCommsDir(args, repoRoot);
   const permMode = parsePermissionMode(args);
@@ -782,10 +842,19 @@ async function initCommand(args) {
     } else {
       log(`Cloning comms repo: ${commsRepoUrl}`);
       try {
-        execSync(`git clone "${commsRepoUrl}" "${commsDir}"`, {
-          stdio: "pipe",
-          encoding: "utf-8"
-        });
+        const cloneResult = spawnSync(
+          "git",
+          ["clone", commsRepoUrl, commsDir],
+          {
+            stdio: "pipe",
+            encoding: "utf-8"
+          }
+        );
+        if (cloneResult.status !== 0) {
+          throw new Error(
+            cloneResult.stderr || `git clone exited with code ${cloneResult.status}`
+          );
+        }
         logSuccess(`Cloned comms repo to ${commsDir}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -802,7 +871,7 @@ async function initCommand(args) {
     }
   }
   {
-    const sharedConfig = loadSharedConfig2(repoRoot) ?? {};
+    const sharedConfig = loadSharedConfig(repoRoot) ?? {};
     let configChanged = false;
     if (commsRepoUrl) {
       sharedConfig.commsRepoUrl = commsRepoUrl;
@@ -894,17 +963,17 @@ ${entry}
 // src/adapters/claude.ts
 import * as fs8 from "fs";
 import * as path8 from "path";
-import { execSync as execSync2 } from "child_process";
+import { execSync } from "child_process";
 
 // src/adapters/common.ts
 import * as fs7 from "fs";
 import * as os2 from "os";
 import * as path7 from "path";
-import { spawnSync } from "child_process";
+import { spawnSync as spawnSync2 } from "child_process";
 import { fileURLToPath as fileURLToPath2 } from "url";
 function probeCommand(candidates) {
   for (const candidate of candidates) {
-    const result = spawnSync(candidate, ["--version"], {
+    const result = spawnSync2(candidate, ["--version"], {
       encoding: "utf-8",
       shell: process.platform === "win32"
     });
@@ -934,6 +1003,10 @@ function canWriteOrCreate(filePath) {
   } catch {
     return false;
   }
+}
+function isEphemeralPath(p) {
+  const normalized = p.replace(/\\/g, "/").toLowerCase();
+  return normalized.includes("/_npx/") || normalized.includes("\\_npx\\") || normalized.includes("/fnm_multishells/") || normalized.includes("\\fnm_multishells\\") || normalized.includes("/tmp/") || normalized.includes("\\temp\\");
 }
 function findLocalTapCommsSource(ctx) {
   const candidates = [
@@ -978,7 +1051,7 @@ function findPreferredBunCommand() {
   const candidates = process.platform === "win32" ? [path7.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path7.join(home, ".bun", "bin", "bun"), "bun"];
   for (const candidate of candidates) {
     if (path7.isAbsolute(candidate) && !fs7.existsSync(candidate)) continue;
-    const result = spawnSync(candidate, ["--version"], {
+    const result = spawnSync2(candidate, ["--version"], {
       encoding: "utf-8",
       shell: process.platform === "win32"
     });
@@ -994,8 +1067,10 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   const warnings = [];
   const issues = [];
   const env = {
-    TAP_AGENT_NAME: "<set-per-session>",
-    TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir)
+    TAP_AGENT_NAME: ctx.agentName ?? "<set-per-session>",
+    TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
+    TAP_STATE_DIR: toForwardSlashPath(ctx.stateDir),
+    TAP_REPO_ROOT: toForwardSlashPath(ctx.repoRoot)
   };
   if (instanceId) {
     env.TAP_AGENT_ID = instanceId;
@@ -1007,9 +1082,25 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
   const isBundled = sourcePath.endsWith(".mjs");
+  const isEphemeralSource = isEphemeralPath(sourcePath);
   let command = bunCommand;
-  if (!command && isBundled) {
-    command = process.execPath;
+  let args = [toForwardSlashPath(sourcePath)];
+  if (isEphemeralSource && isBundled) {
+    command = "npx";
+    args = ["@hua-labs/tap", "serve"];
+    warnings.push(
+      "Detected npx cache path. Using `npx @hua-labs/tap serve` as stable MCP launcher."
+    );
+  } else if (!command && isBundled) {
+    const isEphemeralNode = isEphemeralPath(process.execPath);
+    if (isEphemeralNode) {
+      command = "node";
+      warnings.push(
+        "Detected ephemeral node path. Using `node` from PATH for MCP config stability."
+      );
+    } else {
+      command = toForwardSlashPath(process.execPath);
+    }
     warnings.push(
       "bun not found; using node to run the compiled MCP server. Install bun for better performance."
     );
@@ -1021,8 +1112,8 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
   return {
-    command: isBundled && command === process.execPath ? toForwardSlashPath(command) : command,
-    args: [toForwardSlashPath(sourcePath)],
+    command,
+    args,
     env,
     sourcePath,
     warnings,
@@ -1037,7 +1128,7 @@ function findMcpJsonPath(ctx) {
 }
 function findClaudeCommand() {
   try {
-    execSync2("claude --version", { stdio: "pipe" });
+    execSync("claude --version", { stdio: "pipe" });
     return "claude";
   } catch {
     return null;
@@ -1386,13 +1477,12 @@ function verifyManagedToml(content, ctx, configPath) {
     });
   }
   if (mainTable && managed.command) {
+    const expectedArgs = managed.args.map((a) => `"${a.replace(/\\/g, "\\\\")}"`).join(", ");
     checks.push({
       name: "Managed command configured",
       passed: mainTable.includes(
         `command = "${managed.command.replace(/\\/g, "\\\\")}"`
-      ) && mainTable.includes(
-        `args = ["${managed.args[0]?.replace(/\\/g, "\\\\") ?? ""}"]`
-      ),
+      ) && mainTable.includes(`args = [${expectedArgs}]`),
       message: "Managed tap-comms command/args do not match expected values"
     });
   }
@@ -1899,13 +1989,13 @@ import * as fs13 from "fs";
 import * as net from "net";
 import * as path13 from "path";
 import { randomBytes } from "crypto";
-import { spawn, spawnSync as spawnSync2, execSync as execSync4 } from "child_process";
+import { spawn, spawnSync as spawnSync3, execSync as execSync3 } from "child_process";
 import { fileURLToPath as fileURLToPath4 } from "url";
 
 // src/runtime/resolve-node.ts
 import * as fs12 from "fs";
 import * as path12 from "path";
-import { execSync as execSync3 } from "child_process";
+import { execSync as execSync2 } from "child_process";
 function readNodeVersion(repoRoot) {
   const nvFile = path12.join(repoRoot, ".node-version");
   if (!fs12.existsSync(nvFile)) return null;
@@ -1948,7 +2038,7 @@ function probeFnmNode(desiredVersion) {
     );
     if (!fs12.existsSync(candidate)) continue;
     try {
-      const v = execSync3(`"${candidate}" --version`, {
+      const v = execSync2(`"${candidate}" --version`, {
         encoding: "utf-8",
         timeout: 5e3
       }).trim();
@@ -1962,7 +2052,7 @@ function probeFnmNode(desiredVersion) {
 }
 function detectNodeMajorVersion(command) {
   try {
-    const version2 = execSync3(`"${command}" --version`, {
+    const version2 = execSync2(`"${command}" --version`, {
       encoding: "utf-8",
       timeout: 5e3
     }).trim();
@@ -1976,7 +2066,7 @@ function checkStripTypesSupport(command) {
   const major = detectNodeMajorVersion(command);
   if (major !== null && major >= 22) return true;
   try {
-    execSync3(`"${command}" --experimental-strip-types -e ""`, {
+    execSync2(`"${command}" --experimental-strip-types -e ""`, {
       timeout: 5e3,
       stdio: "pipe"
     });
@@ -2067,7 +2157,7 @@ var APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
 var APP_SERVER_START_TIMEOUT_MS = 2e4;
 var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
 var APP_SERVER_HEALTH_RETRY_MS = 250;
-var APP_SERVER_AUTH_QUERY_PARAM = "tap_token";
+var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 var APP_SERVER_AUTH_FILE_MODE = 384;
 function appServerLogFilePath(stateDir, instanceId) {
   return path13.join(stateDir, "logs", `app-server-${instanceId}.log`);
@@ -2128,8 +2218,11 @@ function resolvePowerShellCommand() {
 function resolveAuthGatewayScript(repoRoot) {
   const moduleDir = path13.dirname(fileURLToPath4(import.meta.url));
   const candidates = [
-    path13.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.mjs"),
-    path13.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.ts"),
+    // Bundled: dist/bridges/ sibling (npm install / built package)
+    path13.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
+    // Source: src/bridges/ sibling (monorepo dev with ts runner)
+    path13.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
+    // Monorepo dist fallback
     path13.join(
       repoRoot,
       "packages",
@@ -2182,10 +2275,8 @@ async function allocateLoopbackPort(hostname) {
     });
   });
 }
-function buildProtectedAppServerUrl(publicUrl, token) {
-  const url = new URL(publicUrl);
-  url.searchParams.set(APP_SERVER_AUTH_QUERY_PARAM, token);
-  return url.toString().replace(/\/(?=\?|$)/, "");
+function buildProtectedAppServerUrl(publicUrl, _token) {
+  return publicUrl;
 }
 function readGatewayTokenFromPath(tokenPath) {
   return fs13.readFileSync(tokenPath, "utf8").trim();
@@ -2300,7 +2391,7 @@ async function createManagedAppServerAuth(options) {
     throw new Error("Failed to spawn app-server auth gateway");
   }
   return {
-    mode: "query-token",
+    mode: "subprotocol",
     protectedUrl,
     upstreamUrl: upstreamUrl.toString().replace(/\/$/, ""),
     tokenPath,
@@ -2414,7 +2505,7 @@ function findListeningProcessId(url, platform) {
   if (port == null || !Number.isFinite(port)) {
     return null;
   }
-  const result = spawnSync2(
+  const result = spawnSync3(
     resolvePowerShellCommand(),
     [
       "-NoLogo",
@@ -2487,7 +2578,7 @@ async function findNextAvailableAppServerPort(state, baseUrl, basePort = 4501, e
     `Failed to find a free app-server port starting at ${basePort}`
   );
 }
-async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken) {
   const WebSocket = getWebSocketCtor();
   if (!WebSocket) {
     return false;
@@ -2509,7 +2600,8 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
-      socket = new WebSocket(url);
+      const protocols = gatewayToken ? [`${AUTH_SUBPROTOCOL_PREFIX}${gatewayToken}`] : void 0;
+      socket = new WebSocket(url, protocols);
       socket.addEventListener("open", () => finish(true), { once: true });
       socket.addEventListener("error", () => finish(false), { once: true });
       socket.addEventListener("close", () => finish(false), { once: true });
@@ -2518,10 +2610,14 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
     }
   });
 }
-async function waitForAppServerHealth(url, timeoutMs) {
+async function waitForAppServerHealth(url, timeoutMs, gatewayToken) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await checkAppServerHealth(url)) {
+    if (await checkAppServerHealth(
+      url,
+      APP_SERVER_HEALTH_TIMEOUT_MS,
+      gatewayToken
+    )) {
       return true;
     }
     await delay(APP_SERVER_HEALTH_RETRY_MS);
@@ -2534,7 +2630,7 @@ async function terminateProcess(pid, platform) {
   }
   try {
     if (platform === "win32") {
-      execSync4(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
+      execSync3(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
     } else {
       process.kill(pid, "SIGTERM");
       await delay(2e3);
@@ -2786,8 +2882,9 @@ Or start it manually:
     throw new Error("Tap auth gateway token is missing after startup.");
   }
   const gatewayHealthy = await waitForAppServerHealth(
-    buildProtectedAppServerUrl(effectiveUrl, gatewayToken),
-    APP_SERVER_GATEWAY_START_TIMEOUT_MS
+    effectiveUrl,
+    APP_SERVER_GATEWAY_START_TIMEOUT_MS,
+    gatewayToken
   );
   if (!gatewayHealthy) {
     await terminateProcess(pid, options.platform);
@@ -2879,6 +2976,40 @@ function isBridgeRunning(stateDir, instanceId) {
   if (!state) return false;
   return isProcessAlive(state.pid);
 }
+function resolveAgentName(instanceId, explicit, context) {
+  if (explicit) return explicit;
+  try {
+    const repoRoot = context?.repoRoot ?? context?.stateDir?.replace(/[\\/].tap-comms$/, "") ?? process.cwd();
+    const state = loadState(repoRoot);
+    const stateAgent = state?.instances[instanceId]?.agentName;
+    if (stateAgent) return stateAgent;
+  } catch {
+  }
+  return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
+}
+function inferRestartMode(bridgeState, flags, savedMode) {
+  const wasManaged = bridgeState?.appServer != null;
+  const hadAuth = bridgeState?.appServer?.auth != null;
+  const manageAppServer = flags?.noServer === true ? false : flags?.noServer === void 0 ? savedMode?.manageAppServer ?? wasManaged : true;
+  const noAuth = flags?.noAuth === true ? true : flags?.noAuth === void 0 ? savedMode?.noAuth ?? !hadAuth : false;
+  return { manageAppServer, noAuth };
+}
+function cleanupHeadlessDispatch(inboxDir, agentName) {
+  const removed = [];
+  if (!fs13.existsSync(inboxDir)) return removed;
+  const normalizedAgent = agentName.replace(/-/g, "_");
+  const marker = `-headless-${normalizedAgent}-review-`;
+  try {
+    for (const file of fs13.readdirSync(inboxDir)) {
+      if (file.includes(marker)) {
+        fs13.unlinkSync(path13.join(inboxDir, file));
+        removed.push(file);
+      }
+    }
+  } catch {
+  }
+  return removed;
+}
 async function startBridge(options) {
   const {
     instanceId,
@@ -2889,7 +3020,10 @@ async function startBridge(options) {
     agentName,
     port
   } = options;
-  const resolvedAgent = agentName || process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME;
+  const resolvedAgent = resolveAgentName(instanceId, agentName, {
+    repoRoot: options.repoRoot,
+    stateDir
+  });
   if (!resolvedAgent) {
     throw new Error(
       `No agent name for ${instanceId} bridge. Set TAP_AGENT_NAME env var or pass --agent-name flag.`
@@ -3041,6 +3175,35 @@ async function stopBridge(options) {
   clearBridgeState(stateDir, instanceId);
   return true;
 }
+async function restartBridge(options) {
+  const { instanceId, stateDir, platform } = options;
+  const drainTimeout = (options.drainTimeoutSeconds ?? 30) * 1e3;
+  const repoRoot = options.repoRoot ?? stateDir.replace(/[\\/].tap-comms$/, "");
+  const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
+  const heartbeatPath = path13.join(runtimeStateDir, "heartbeat.json");
+  if (fs13.existsSync(heartbeatPath)) {
+    const startWait = Date.now();
+    while (Date.now() - startWait < drainTimeout) {
+      try {
+        const hb = JSON.parse(fs13.readFileSync(heartbeatPath, "utf-8"));
+        if (!hb.activeTurnId) break;
+      } catch {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1e3));
+    }
+  }
+  if (options.headless?.enabled && options.commsDir) {
+    const agentName = options.agentName ?? instanceId;
+    cleanupHeadlessDispatch(path13.join(options.commsDir, "inbox"), agentName);
+  }
+  await stopBridge({ instanceId, stateDir, platform });
+  const restartOptions = {
+    ...options,
+    processExistingMessages: true
+  };
+  return startBridge(restartOptions);
+}
 function rotateLog(logPath) {
   if (!fs13.existsSync(logPath)) return;
   try {
@@ -3073,8 +3236,49 @@ function getBridgeStatus(stateDir, instanceId) {
 }
 
 // src/commands/add.ts
+var ADD_HELP = `
+Usage:
+  tap-comms add <claude|codex|gemini> [options]
+
+Description:
+  Install a runtime instance and configure it to use tap-comms.
+
+Options:
+  --name <name>         Instance name (default: runtime name)
+  --port <port>         Port for app-server bridge
+  --agent-name <name>   Agent display name for bridge identification
+  --force               Re-install even if already configured
+  --headless            Enable headless reviewer mode (requires --name)
+  --role <role>         Headless role: reviewer, validator, long-running
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap add claude
+  npx @hua-labs/tap add codex --name reviewer --port 4501 --headless --role reviewer
+`.trim();
+function normalizeAgentName(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+function resolveAgentName2(options) {
+  return normalizeAgentName(options.explicit) ?? normalizeAgentName(options.stored) ?? normalizeAgentName(options.env) ?? normalizeAgentName(options.fallback) ?? null;
+}
 async function addCommand(args) {
   const { positional, flags } = parseArgs(args);
+  if (flags["help"] === true || flags["h"] === true) {
+    log(ADD_HELP);
+    return {
+      ok: true,
+      command: "add",
+      code: "TAP_NO_OP",
+      message: ADD_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const runtimeArg = positional[0];
   if (!runtimeArg) {
     return {
@@ -3100,8 +3304,10 @@ async function addCommand(args) {
   const instanceName = typeof flags["name"] === "string" ? flags["name"] : void 0;
   const instanceId = buildInstanceId(runtime, instanceName);
   const portStr = typeof flags["port"] === "string" ? flags["port"] : void 0;
-  const port = portStr ? parseInt(portStr, 10) : null;
-  const agentNameFlag = typeof flags["agent-name"] === "string" ? flags["agent-name"] : null;
+  const port = portStr ? Number(portStr) : null;
+  const agentNameFlag = normalizeAgentName(
+    typeof flags["agent-name"] === "string" ? flags["agent-name"] : null
+  );
   const force = flags["force"] === true;
   const headlessFlag = flags["headless"] === true;
   const roleArg = typeof flags["role"] === "string" ? flags["role"] : void 0;
@@ -3136,20 +3342,21 @@ async function addCommand(args) {
     maxRounds: 5,
     qualitySeverityFloor: "high"
   } : null;
-  if (portStr && (port === null || isNaN(port))) {
+  if (portStr && (port === null || isNaN(port) || port < 1 || port > 65535)) {
     return {
       ok: false,
       command: "add",
       runtime,
       instanceId,
       code: "TAP_INVALID_ARGUMENT",
-      message: `Invalid port: ${portStr}`,
+      message: `Invalid port: ${portStr}. Must be between 1 and 65535.`,
       warnings: [],
       data: {}
     };
   }
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
+  const adapter = getAdapter(runtime);
   if (!state) {
     return {
       ok: false,
@@ -3162,7 +3369,39 @@ async function addCommand(args) {
       data: {}
     };
   }
-  if (state.instances[instanceId]?.installed && !force) {
+  const existingInstance = state.instances[instanceId];
+  const mode = adapter.bridgeMode();
+  const envAgentName = normalizeAgentName(
+    process.env.TAP_AGENT_NAME ?? process.env.CODEX_TAP_AGENT_NAME
+  );
+  const defaultAgentName = mode === "app-server" ? instanceId : null;
+  const resolvedAgentName = resolveAgentName2({
+    explicit: agentNameFlag,
+    env: envAgentName,
+    stored: existingInstance?.agentName ?? null,
+    fallback: defaultAgentName
+  });
+  if (existingInstance?.installed && !force) {
+    if (resolvedAgentName !== existingInstance.agentName) {
+      const updatedState = updateInstanceState(state, instanceId, {
+        ...existingInstance,
+        agentName: resolvedAgentName
+      });
+      saveState(repoRoot, updatedState);
+      return {
+        ok: true,
+        command: "add",
+        runtime,
+        instanceId,
+        code: "TAP_ADD_OK",
+        message: resolvedAgentName === null ? `${instanceId} updated` : `${instanceId} agent name updated to "${resolvedAgentName}".`,
+        warnings: [],
+        data: {
+          updatedFields: ["agentName"],
+          agentName: resolvedAgentName
+        }
+      };
+    }
     return {
       ok: true,
       command: "add",
@@ -3192,8 +3431,12 @@ async function addCommand(args) {
   logHeader(`@hua-labs/tap add ${instanceId}`);
   if (instanceName) log(`Instance name: ${instanceName}`);
   if (port !== null) log(`Port: ${port}`);
-  const ctx = { ...createAdapterContext(state.commsDir, repoRoot), instanceId };
-  const adapter = getAdapter(runtime);
+  if (resolvedAgentName) log(`Agent name: ${resolvedAgentName}`);
+  const ctx = {
+    ...createAdapterContext(state.commsDir, repoRoot),
+    instanceId,
+    agentName: resolvedAgentName ?? void 0
+  };
   const warnings = [];
   log("Probing runtime...");
   const probe = await adapter.probe(ctx);
@@ -3273,51 +3516,41 @@ async function addCommand(args) {
     );
   }
   let bridge = null;
-  const mode = adapter.bridgeMode();
   if (mode === "app-server") {
     const bridgeScript = adapter.resolveBridgeScript?.(ctx);
     if (!bridgeScript) {
       logWarn("Bridge script not found. Bridge not started.");
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
-      const resolvedAgentName = agentNameFlag || process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME;
-      if (!resolvedAgentName) {
-        logWarn(
-          "No agent name set. Bridge not started. Use: npx @hua-labs/tap bridge start <instance> --agent-name <name>"
-        );
-        warnings.push("Bridge not auto-started: no agent name available.");
-      } else {
-        const { config: resolvedCfg } = resolveConfig({}, repoRoot);
-        log(`Starting bridge: ${bridgeScript}`);
-        try {
-          bridge = await startBridge({
-            instanceId,
-            runtime,
-            stateDir: ctx.stateDir,
-            commsDir: ctx.commsDir,
-            bridgeScript,
-            platform: ctx.platform,
-            agentName: resolvedAgentName,
-            runtimeCommand: resolvedCfg.runtimeCommand,
-            appServerUrl: resolvedCfg.appServerUrl,
-            repoRoot,
-            port: port ?? void 0,
-            headless
-          });
-          logSuccess(`Bridge started (PID: ${bridge.pid})`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logWarn(`Bridge not started: ${msg}`);
-          warnings.push(`Bridge not started: ${msg}`);
-        }
+      const { config: resolvedCfg } = resolveConfig({}, repoRoot);
+      log(`Starting bridge: ${bridgeScript}`);
+      try {
+        bridge = await startBridge({
+          instanceId,
+          runtime,
+          stateDir: ctx.stateDir,
+          commsDir: ctx.commsDir,
+          bridgeScript,
+          platform: ctx.platform,
+          agentName: resolvedAgentName ?? void 0,
+          runtimeCommand: resolvedCfg.runtimeCommand,
+          appServerUrl: resolvedCfg.appServerUrl,
+          repoRoot,
+          port: port ?? void 0,
+          headless
+        });
+        logSuccess(`Bridge started (PID: ${bridge.pid})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logWarn(`Bridge not started: ${msg}`);
+        warnings.push(`Bridge not started: ${msg}`);
       }
     }
   }
-  const existingAgentName = state.instances[instanceId]?.agentName ?? null;
   const instanceState = {
     instanceId,
     runtime,
-    agentName: agentNameFlag ?? existingAgentName,
+    agentName: resolvedAgentName,
     port,
     installed: true,
     configPath: probe.configPath ?? "",
@@ -3329,13 +3562,20 @@ async function addCommand(args) {
     lastVerifiedAt: verify.ok ? (/* @__PURE__ */ new Date()).toISOString() : null,
     bridge,
     headless,
-    warnings: [...result.warnings, ...verify.warnings]
+    warnings: Array.from(/* @__PURE__ */ new Set([...result.warnings, ...verify.warnings]))
   };
   const newState = updateInstanceState(state, instanceId, instanceState);
   saveState(repoRoot, newState);
   logSuccess("State saved");
   if (result.restartRequired) {
     logWarn(`Restart ${runtime} to pick up the new configuration.`);
+  }
+  if (runtime === "claude") {
+    log("");
+    log("For real-time notifications:");
+    log("  claude --dangerously-load-development-channels server:tap-comms");
+    log("Or polling mode (tools still work):");
+    log("  claude");
   }
   logHeader("Done!");
   return {
@@ -3356,6 +3596,16 @@ async function addCommand(args) {
 }
 
 // src/commands/status.ts
+var STATUS_HELP = `
+Usage:
+  tap-comms status
+
+Description:
+  Show all installed instances, their bridge status, and configuration info.
+
+Examples:
+  npx @hua-labs/tap status
+`.trim();
 function resolveStatus(inst, stateDir) {
   if (!inst.installed) return "not installed";
   switch (inst.bridgeMode) {
@@ -3382,7 +3632,18 @@ function instanceStatusLine(inst, status) {
   const warns = inst.warnings.length > 0 ? ` [${inst.warnings.length} warning(s)]` : "";
   return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
 }
-async function statusCommand(_args) {
+async function statusCommand(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(STATUS_HELP);
+    return {
+      ok: true,
+      command: "status",
+      code: "TAP_NO_OP",
+      message: STATUS_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
   if (!state) {
@@ -3611,7 +3872,32 @@ function cleanEmptyParents(obj, keyPath) {
 }
 
 // src/commands/remove.ts
+var REMOVE_HELP = `
+Usage:
+  tap-comms remove <instance>
+
+Description:
+  Remove a registered instance, stop its bridge, and rollback config changes.
+
+Arguments:
+  <instance>    Instance ID or runtime name (e.g. claude, codex-reviewer)
+
+Examples:
+  npx @hua-labs/tap remove claude
+  npx @hua-labs/tap remove codex-reviewer
+`.trim();
 async function removeCommand(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(REMOVE_HELP);
+    return {
+      ok: true,
+      command: "remove",
+      code: "TAP_NO_OP",
+      message: REMOVE_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const identifier = args.find((a) => !a.startsWith("-"));
   if (!identifier) {
     return {
@@ -3647,8 +3933,8 @@ async function removeCommand(args) {
     };
   }
   const instanceId = resolved.instanceId;
-  const instance = state.instances[instanceId];
-  if (!instance?.installed) {
+  const instance2 = state.instances[instanceId];
+  if (!instance2?.installed) {
     return {
       ok: true,
       command: "remove",
@@ -3660,7 +3946,7 @@ async function removeCommand(args) {
     };
   }
   logHeader(`@hua-labs/tap remove ${instanceId}`);
-  if (instance.bridge) {
+  if (instance2.bridge) {
     const ctx = createAdapterContext(state.commsDir, repoRoot);
     const stopped = await stopBridge({
       instanceId,
@@ -3673,7 +3959,7 @@ async function removeCommand(args) {
       log(`No running bridge for ${instanceId}`);
     }
   }
-  const result = await rollbackRuntime(instanceId, instance);
+  const result = await rollbackRuntime(instanceId, instance2);
   if (result.success) {
     logSuccess(`Rolled back ${result.restoredCount} artifact(s)`);
     for (const f of result.restoredFiles) logSuccess(`Restored: ${f}`);
@@ -3685,7 +3971,7 @@ async function removeCommand(args) {
       ok: true,
       command: "remove",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_REMOVE_OK",
       message: `${instanceId} removed successfully`,
       warnings: [],
@@ -3700,7 +3986,7 @@ async function removeCommand(args) {
     ok: false,
     command: "remove",
     instanceId,
-    runtime: instance.runtime,
+    runtime: instance2.runtime,
     code: "TAP_ROLLBACK_FAILED",
     message: "Rollback had errors. State preserved for retry.",
     warnings: result.errors,
@@ -3729,7 +4015,7 @@ Subcommands:
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
-                                   Saved to state \u2014 only needed on first start
+                                   Overrides the stored name from 'tap add' when needed
   --all                            Start all registered app-server instances
   --busy-mode <steer|wait>         How to handle active turns (default: steer)
   --poll-seconds <n>               Inbox poll interval (default: 5)
@@ -3765,11 +4051,11 @@ function redactProtectedUrl(url) {
   try {
     const parsed = new URL(url);
     if (parsed.searchParams.has("tap_token")) {
-      parsed.searchParams.set("tap_token", "***");
+      parsed.searchParams.delete("tap_token");
     }
     return parsed.toString().replace(/\/$/, "");
   } catch {
-    return url.replace(/tap_token=[^&]+/g, "tap_token=***");
+    return url.replace(/[?&]tap_token=[^&]+/g, "");
   }
 }
 function loadCurrentBridgeState(stateDir, instanceId, fallback) {
@@ -3852,37 +4138,37 @@ async function bridgeStart(identifier, agentName, flags = {}) {
     };
   }
   const instanceId = resolved.instanceId;
-  let instance = state.instances[instanceId];
-  if (!instance?.installed) {
+  let instance2 = state.instances[instanceId];
+  if (!instance2?.installed) {
     return {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance?.runtime,
+      runtime: instance2?.runtime,
       code: "TAP_INSTANCE_NOT_FOUND",
-      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance?.runtime ?? identifier}`,
+      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance2?.runtime ?? identifier}`,
       warnings: [],
       data: {}
     };
   }
-  const adapter = getAdapter(instance.runtime);
+  const adapter = getAdapter(instance2.runtime);
   const mode = adapter.bridgeMode();
   if (mode !== "app-server") {
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_NO_OP",
       message: `${instanceId} uses ${mode} mode \u2014 no bridge needed.`,
       warnings: [],
       data: { bridgeMode: mode }
     };
   }
-  const resolvedAgentName = agentName ?? instance.agentName ?? void 0;
-  if (agentName && agentName !== instance.agentName) {
-    instance = { ...instance, agentName };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+  const resolvedAgentName = agentName ?? instance2.agentName ?? void 0;
+  if (agentName && agentName !== instance2.agentName) {
+    instance2 = { ...instance2, agentName };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -3893,7 +4179,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_SCRIPT_MISSING",
       message: `Bridge script not found for ${instanceId}. Ensure the runtime is properly configured.`,
       warnings: [],
@@ -3902,8 +4188,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   }
   const { config: resolvedConfig } = resolveConfig({}, repoRoot);
   const runtimeCommand = resolvedConfig.runtimeCommand;
-  const manageAppServer = instance.runtime === "codex" && flags["no-server"] !== true;
-  let effectivePort = instance.port;
+  const manageAppServer = instance2.runtime === "codex" && flags["no-server"] !== true;
+  let effectivePort = instance2.port;
   if (effectivePort == null && manageAppServer) {
     effectivePort = await findNextAvailableAppServerPort(
       state,
@@ -3911,8 +4197,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       4501,
       instanceId
     );
-    instance = { ...instance, port: effectivePort };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+    instance2 = { ...instance2, port: effectivePort };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -3928,19 +4214,19 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   if (effectivePort != null) log(`Port:          ${effectivePort}`);
   if (resolvedAgentName) log(`Agent name:    ${resolvedAgentName}`);
   const noAuth = flags["no-auth"] === true;
-  if (!manageAppServer && instance.runtime === "codex") {
+  if (!manageAppServer && instance2.runtime === "codex") {
     log("Auto server:   disabled (--no-server)");
   }
   if (noAuth && manageAppServer) {
     log("Auth gateway:  disabled (--no-auth)");
   }
-  const willBeHeadless = flags["headless"] === true || instance.headless?.enabled;
+  const willBeHeadless = flags["headless"] === true || instance2.headless?.enabled;
   if (willBeHeadless) {
-    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance.headless?.role ?? "reviewer";
+    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance2.headless?.role ?? "reviewer";
     log(`Headless:      ${role}`);
   }
   try {
-    if (!manageAppServer && instance.runtime === "codex") {
+    if (!manageAppServer && instance2.runtime === "codex") {
       log("Checking app-server health...");
       const healthy = await checkAppServerHealth(appServerUrl);
       if (healthy) {
@@ -3951,7 +4237,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
           ok: false,
           command: "bridge",
           instanceId,
-          runtime: instance.runtime,
+          runtime: instance2.runtime,
           code: "TAP_BRIDGE_START_FAILED",
           message: `App server not reachable at ${appServerUrl}. Start it first: codex app-server --listen ${appServerUrl}`,
           warnings: [],
@@ -3965,7 +4251,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --busy-mode: ${String(busyModeRaw)}. Must be "steer" or "wait".`,
         warnings: [],
@@ -3973,9 +4259,38 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       };
     }
     const busyMode = busyModeRaw;
-    const pollSeconds = typeof flags["poll-seconds"] === "string" ? parseInt(flags["poll-seconds"], 10) : void 0;
-    const reconnectSeconds = typeof flags["reconnect-seconds"] === "string" ? parseInt(flags["reconnect-seconds"], 10) : void 0;
-    const messageLookbackMinutes = typeof flags["message-lookback-minutes"] === "string" ? parseInt(flags["message-lookback-minutes"], 10) : void 0;
+    const pollSecondsRaw = typeof flags["poll-seconds"] === "string" ? flags["poll-seconds"] : void 0;
+    const reconnectSecondsRaw = typeof flags["reconnect-seconds"] === "string" ? flags["reconnect-seconds"] : void 0;
+    const lookbackRaw = typeof flags["message-lookback-minutes"] === "string" ? flags["message-lookback-minutes"] : void 0;
+    let pollSeconds;
+    let reconnectSeconds;
+    let messageLookbackMinutes;
+    try {
+      pollSeconds = parseIntFlag(pollSecondsRaw, "--poll-seconds", 1, 3600);
+      reconnectSeconds = parseIntFlag(
+        reconnectSecondsRaw,
+        "--reconnect-seconds",
+        1,
+        3600
+      );
+      messageLookbackMinutes = parseIntFlag(
+        lookbackRaw,
+        "--message-lookback-minutes",
+        1,
+        10080
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        command: "bridge",
+        instanceId,
+        runtime: instance2.runtime,
+        code: "TAP_INVALID_ARGUMENT",
+        message: err instanceof Error ? err.message : String(err),
+        warnings: [],
+        data: {}
+      };
+    }
     const threadId = typeof flags["thread-id"] === "string" ? flags["thread-id"] : void 0;
     const ephemeral = flags["ephemeral"] === true;
     const processExistingMessages = flags["process-existing-messages"] === true;
@@ -3987,7 +4302,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --role: ${roleArg}. Must be: ${validRoles.join(", ")}`,
         warnings: [],
@@ -3999,10 +4314,10 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       role: roleArg ?? "reviewer",
       maxRounds: 5,
       qualitySeverityFloor: "high"
-    } : instance.headless;
+    } : instance2.headless;
     const bridge = await startBridge({
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       stateDir: ctx.stateDir,
       commsDir: ctx.commsDir,
       bridgeScript,
@@ -4043,14 +4358,14 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         log(`TUI connect:  ${bridge.appServer.url}`);
       }
     }
-    const updated = { ...instance, bridge };
+    const updated = { ...instance2, bridge, manageAppServer, noAuth };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_OK",
       message: `Bridge for ${instanceId} started (PID: ${bridge.pid})`,
       warnings: [],
@@ -4063,7 +4378,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_FAILED",
       message: msg,
       warnings: [],
@@ -4165,11 +4480,11 @@ async function bridgeStopOne(identifier) {
   }
   const instanceId = resolved.instanceId;
   const ctx = createAdapterContext(state.commsDir, repoRoot);
-  const instance = state.instances[instanceId];
+  const instance2 = state.instances[instanceId];
   const bridgeState = loadCurrentBridgeState(
     ctx.stateDir,
     instanceId,
-    instance?.bridge
+    instance2?.bridge
   );
   const appServer = bridgeState?.appServer ?? null;
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
@@ -4217,8 +4532,8 @@ async function bridgeStopOne(identifier) {
       }
     }
   }
-  if (instance) {
-    const updated = { ...instance, bridge: null };
+  if (instance2) {
+    const updated = { ...instance2, bridge: null };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
   }
@@ -4290,9 +4605,9 @@ async function bridgeStopAll() {
       logSuccess(`Stopped bridge for ${instanceId}`);
       stopped.push(instanceId);
     }
-    const instance = state.instances[instanceId];
-    if (instance?.bridge) {
-      state.instances[instanceId] = { ...instance, bridge: null };
+    const instance2 = state.instances[instanceId];
+    if (instance2?.bridge) {
+      state.instances[instanceId] = { ...instance2, bridge: null };
       stateChanged = true;
     }
   }
@@ -4534,6 +4849,135 @@ function bridgeStatusOne(identifier) {
     }
   };
 }
+async function bridgeRestart(identifier, flags) {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {}
+    };
+  }
+  const resolved = resolveInstanceId(identifier, state);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: resolved.code,
+      message: resolved.message,
+      warnings: [],
+      data: {}
+    };
+  }
+  const instanceId = resolved.instanceId;
+  const inst = state.instances[instanceId];
+  if (!inst) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_INSTANCE_NOT_FOUND",
+      message: `Instance not found: ${instanceId}`,
+      warnings: [],
+      data: {}
+    };
+  }
+  const adapter = getAdapter(inst.runtime);
+  const ctx = {
+    ...createAdapterContext(state.commsDir, repoRoot),
+    instanceId
+  };
+  const bridgeScript = adapter.resolveBridgeScript?.(ctx);
+  if (!bridgeScript) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_SCRIPT_MISSING",
+      message: `Bridge script not found for ${instanceId}`,
+      warnings: [],
+      data: {}
+    };
+  }
+  const { config: resolvedConfig } = resolveConfig({}, repoRoot);
+  const drainStr = typeof flags["drain-timeout"] === "string" ? flags["drain-timeout"] : void 0;
+  let drainTimeout;
+  try {
+    drainTimeout = parseIntFlag(drainStr, "--drain-timeout", 1, 300) ?? 30;
+  } catch (err) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: instance.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message: err instanceof Error ? err.message : String(err),
+      warnings: [],
+      data: {}
+    };
+  }
+  logHeader(`@hua-labs/tap bridge restart ${instanceId}`);
+  log(`Drain timeout: ${drainTimeout}s`);
+  try {
+    const currentBridgeState = loadBridgeState(ctx.stateDir, instanceId);
+    const { manageAppServer, noAuth } = inferRestartMode(
+      currentBridgeState,
+      {
+        noServer: flags["no-server"] === true ? true : void 0,
+        noAuth: flags["no-auth"] === true ? true : void 0
+      },
+      {
+        manageAppServer: inst.manageAppServer,
+        noAuth: inst.noAuth
+      }
+    );
+    const bridge = await restartBridge({
+      instanceId,
+      runtime: inst.runtime,
+      stateDir: ctx.stateDir,
+      commsDir: ctx.commsDir,
+      bridgeScript,
+      platform: ctx.platform,
+      agentName: inst.agentName ?? void 0,
+      runtimeCommand: resolvedConfig.runtimeCommand,
+      appServerUrl: resolvedConfig.appServerUrl,
+      repoRoot,
+      port: inst.port ?? void 0,
+      headless: inst.headless,
+      drainTimeoutSeconds: drainTimeout,
+      manageAppServer,
+      noAuth
+    });
+    logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
+    const updated = { ...inst, bridge, manageAppServer, noAuth };
+    const newState = updateInstanceState(state, instanceId, updated);
+    saveState(repoRoot, newState);
+    return {
+      ok: true,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_OK",
+      message: `Bridge for ${instanceId} restarted (PID: ${bridge.pid})`,
+      warnings: [],
+      data: { pid: bridge.pid }
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(msg);
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_FAILED",
+      message: msg,
+      warnings: [],
+      data: {}
+    };
+  }
+}
 async function bridgeCommand(args) {
   const { positional, flags } = parseArgs(args);
   const subcommand = positional[0];
@@ -4593,12 +5037,25 @@ async function bridgeCommand(args) {
       }
       return bridgeStatusAll();
     }
+    case "restart": {
+      if (!identifierArg) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message: "Missing instance. Usage: npx @hua-labs/tap bridge restart <instance>",
+          warnings: [],
+          data: {}
+        };
+      }
+      return bridgeRestart(identifierArg, flags);
+    }
     default:
       return {
         ok: false,
         command: "bridge",
         code: "TAP_INVALID_ARGUMENT",
-        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, status`,
+        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status`,
         warnings: [],
         data: {}
       };
@@ -4608,7 +5065,7 @@ async function bridgeCommand(args) {
 // src/engine/dashboard.ts
 import * as fs15 from "fs";
 import * as path15 from "path";
-import { execSync as execSync5 } from "child_process";
+import { execSync as execSync4 } from "child_process";
 function collectAgents(commsDir) {
   const heartbeatsPath = path15.join(commsDir, "heartbeats.json");
   if (!fs15.existsSync(heartbeatsPath)) return [];
@@ -4687,7 +5144,7 @@ function collectBridges(repoRoot) {
 }
 function collectPRs() {
   try {
-    const output = execSync5(
+    const output = execSync4(
       "gh pr list --state all --limit 10 --json number,title,author,state,url",
       { encoding: "utf-8", timeout: 1e4, stdio: ["pipe", "pipe", "pipe"] }
     );
@@ -4861,7 +5318,34 @@ async function downCommand(args) {
 // src/commands/serve.ts
 import * as path16 from "path";
 import { spawn as spawn2 } from "child_process";
+var SERVE_HELP = `
+Usage:
+  tap-comms serve [options]
+
+Description:
+  Start the tap-comms MCP server over stdio. This command takes over the
+  process \u2014 it is intended to be launched by an MCP host (e.g. Claude Code).
+
+Options:
+  --comms-dir <path>    Override comms directory (also reads TAP_COMMS_DIR env)
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap serve
+  npx @hua-labs/tap serve --comms-dir /shared/comms
+`.trim();
 async function serveCommand(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(SERVE_HELP);
+    return {
+      ok: true,
+      command: "serve",
+      code: "TAP_NO_OP",
+      message: SERVE_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const repoRoot = findRepoRoot();
   let commsDir;
   const commsDirIdx = args.indexOf("--comms-dir");
@@ -4900,7 +5384,9 @@ async function serveCommand(args) {
       data: {}
     };
   }
-  const child = spawn2(managed.command, managed.args, {
+  const serveCommand2 = managed.command === "npx" ? "node" : managed.command;
+  const serveArgs = managed.command === "npx" && managed.sourcePath ? [managed.sourcePath] : managed.args;
+  const child = spawn2(serveCommand2, serveArgs, {
     stdio: "inherit",
     env: {
       ...process.env,
@@ -4934,7 +5420,7 @@ async function serveCommand(args) {
 // src/commands/init-worktree.ts
 import * as fs16 from "fs";
 import * as path17 from "path";
-import { execSync as execSync6 } from "child_process";
+import { execSync as execSync5 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
   tap-comms init-worktree [options]
@@ -4958,7 +5444,7 @@ function warn(warnings, message) {
 }
 function run(cmd, opts) {
   try {
-    return execSync6(cmd, {
+    return execSync5(cmd, {
       cwd: opts?.cwd,
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
@@ -4975,7 +5461,7 @@ function toAbsolute(p) {
 }
 function probeBun(candidate) {
   try {
-    const out = execSync6(`"${candidate}" --version`, {
+    const out = execSync5(`"${candidate}" --version`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
       timeout: 5e3
@@ -4989,7 +5475,7 @@ function findBun() {
   const candidates = process.platform === "win32" ? ["bun.exe", "bun"] : ["bun"];
   for (const name of candidates) {
     try {
-      const out = execSync6(
+      const out = execSync5(
         process.platform === "win32" ? `where ${name}` : `which ${name}`,
         { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], timeout: 5e3 }
       ).trim();
@@ -5220,7 +5706,7 @@ async function initWorktreeCommand(args) {
       ok: true,
       command: "init-worktree",
       code: "TAP_NO_OP",
-      message: "init-worktree help",
+      message: INIT_WORKTREE_HELP,
       warnings: [],
       data: {}
     };
@@ -5382,8 +5868,38 @@ function renderSnapshot(snapshot) {
     }
   }
 }
+var DASHBOARD_HELP = `
+Usage:
+  tap-comms dashboard [options]
+
+Description:
+  Display a unified ops dashboard: agents, bridges, PRs, and warnings.
+
+Options:
+  --json                Output snapshot as JSON
+  --watch               Refresh dashboard on an interval
+  --interval <seconds>  Refresh interval in seconds (default: 5, min: 2)
+  --comms-dir <path>    Override comms directory
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap dashboard
+  npx @hua-labs/tap dashboard --watch --interval 10
+  npx @hua-labs/tap dashboard --json
+`.trim();
 async function dashboardCommand(args) {
   const { flags } = parseArgs(args);
+  if (flags["help"] === true || flags["h"] === true) {
+    log(DASHBOARD_HELP);
+    return {
+      ok: true,
+      command: "dashboard",
+      code: "TAP_NO_OP",
+      message: DASHBOARD_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const jsonMode = flags["json"] === true;
   const watchMode = flags["watch"] === true;
   const intervalStr = typeof flags["interval"] === "string" ? flags["interval"] : "5";
@@ -5446,6 +5962,7 @@ import {
   statSync as statSync2,
   unlinkSync as unlinkSync3
 } from "fs";
+import { execSync as execSync6 } from "child_process";
 import { join as join17 } from "path";
 var PASS = "pass";
 var WARN = "warn";
@@ -5674,35 +6191,205 @@ function checkMessageLifecycle(commsDir) {
 function checkMcpServer(repoRoot) {
   const checks = [];
   const mcpJson = join17(repoRoot, ".mcp.json");
-  if (existsSync16(mcpJson)) {
-    try {
-      const config = JSON.parse(readFileSync14(mcpJson, "utf-8"));
-      const hasTapComms = config?.mcpServers?.["tap-comms"];
-      checks.push({
-        name: "MCP config (.mcp.json)",
-        status: hasTapComms ? PASS : WARN,
-        message: hasTapComms ? `command: ${hasTapComms.command}` : "tap-comms not configured"
-      });
-      if (hasTapComms?.args?.[0]) {
-        const mcpScript = hasTapComms.args[0];
-        checks.push({
-          name: "MCP server script",
-          status: existsSync16(mcpScript) ? PASS : FAIL,
-          message: existsSync16(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
-        });
-      }
-    } catch {
-      checks.push({
-        name: "MCP config (.mcp.json)",
-        status: WARN,
-        message: "File exists but invalid JSON"
-      });
-    }
-  } else {
+  if (!existsSync16(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
       message: "Not found \u2014 MCP channel notifications won't work"
+    });
+    return checks;
+  }
+  let config;
+  try {
+    config = JSON.parse(readFileSync14(mcpJson, "utf-8"));
+  } catch {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "File exists but invalid JSON"
+    });
+    return checks;
+  }
+  const hasTapComms = config?.mcpServers?.["tap-comms"];
+  if (!hasTapComms) {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "tap-comms not configured"
+    });
+    return checks;
+  }
+  checks.push({
+    name: "MCP config (.mcp.json)",
+    status: PASS,
+    message: `command: ${hasTapComms.command}`
+  });
+  if (hasTapComms.command) {
+    const cmd = hasTapComms.command;
+    let cmdAvailable = existsSync16(cmd);
+    if (!cmdAvailable) {
+      try {
+        execSync6(`"${cmd}" --version`, {
+          stdio: "pipe",
+          timeout: 5e3
+        });
+        cmdAvailable = true;
+      } catch {
+      }
+    }
+    checks.push({
+      name: "MCP command binary",
+      status: cmdAvailable ? PASS : FAIL,
+      message: cmdAvailable ? cmd : `Not found: ${cmd} (checked PATH and absolute)`
+    });
+  }
+  if (hasTapComms.args?.[0]) {
+    const mcpScript = hasTapComms.args[0];
+    checks.push({
+      name: "MCP server script",
+      status: existsSync16(mcpScript) ? PASS : FAIL,
+      message: existsSync16(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
+    });
+    if (mcpScript.endsWith(".mjs") && hasTapComms.command && !hasTapComms.command.includes("bun")) {
+      checks.push({
+        name: "MCP SQLite support",
+        status: WARN,
+        message: "Node + .mjs = no SQLite (bun:sqlite unavailable). Use bun or .ts source for full features."
+      });
+    }
+  }
+  if (!hasTapComms.cwd) {
+    checks.push({
+      name: "MCP cwd field",
+      status: WARN,
+      message: "No cwd in .mcp.json \u2014 worktree sessions may fail to resolve MCP server dependencies"
+    });
+  } else {
+    checks.push({
+      name: "MCP cwd field",
+      status: PASS,
+      message: hasTapComms.cwd
+    });
+  }
+  const envCommsDir = hasTapComms.env?.TAP_COMMS_DIR;
+  if (!envCommsDir) {
+    checks.push({
+      name: "MCP TAP_COMMS_DIR",
+      status: FAIL,
+      message: "TAP_COMMS_DIR not set in .mcp.json env \u2014 server will fail to start"
+    });
+  } else {
+    checks.push({
+      name: "MCP TAP_COMMS_DIR",
+      status: existsSync16(envCommsDir) ? PASS : FAIL,
+      message: existsSync16(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
+    });
+  }
+  checks.push({
+    name: "MCP session cache",
+    status: PASS,
+    message: "If .mcp.json was changed mid-session, restart Claude (Ctrl+C \u2192 claude --resume) to reload"
+  });
+  return checks;
+}
+function checkBridgeTurnHealth(repoRoot) {
+  const checks = [];
+  const tmpDir = join17(repoRoot, ".tmp");
+  if (!existsSync16(tmpDir)) return checks;
+  const state = loadState(repoRoot);
+  const activeMatchers = /* @__PURE__ */ new Set();
+  if (state) {
+    for (const [id, inst] of Object.entries(state.instances)) {
+      if (inst?.installed && inst.bridgeMode === "app-server") {
+        activeMatchers.add(id);
+        if (inst.agentName) activeMatchers.add(inst.agentName);
+      }
+    }
+  }
+  let dirs;
+  try {
+    dirs = readdirSync4(tmpDir).filter((d) => {
+      if (!d.startsWith("codex-app-server-bridge")) return false;
+      const suffix = d.replace("codex-app-server-bridge-", "");
+      if (activeMatchers.size === 0) return true;
+      for (const matcher of activeMatchers) {
+        if (suffix === matcher || suffix.startsWith(matcher)) return true;
+      }
+      return false;
+    });
+  } catch {
+    return checks;
+  }
+  for (const dir of dirs) {
+    const heartbeatPath = join17(tmpDir, dir, "heartbeat.json");
+    if (!existsSync16(heartbeatPath)) continue;
+    let heartbeat;
+    try {
+      heartbeat = JSON.parse(readFileSync14(heartbeatPath, "utf-8"));
+    } catch {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: WARN,
+        message: "heartbeat.json unreadable"
+      });
+      continue;
+    }
+    const heartbeatAge = heartbeat.updatedAt ? Math.floor(
+      (Date.now() - new Date(heartbeat.updatedAt).getTime()) / 1e3
+    ) : null;
+    if (heartbeat.connected === false || heartbeat.initialized === false) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: FAIL,
+        message: `disconnected (connected=${heartbeat.connected}, initialized=${heartbeat.initialized})${heartbeat.lastError ? ` \u2014 ${heartbeat.lastError}` : ""}`
+      });
+      continue;
+    }
+    if (heartbeatAge !== null && heartbeatAge > 300) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: FAIL,
+        message: `dead \u2014 heartbeat ${Math.round(heartbeatAge)}s ago, no updates`
+      });
+      continue;
+    }
+    if (heartbeat.activeTurnId) {
+      const ZOMBIE_THRESHOLD = 30 * 60;
+      const lastNotifAge = heartbeat.lastNotificationAt ? Math.floor(
+        (Date.now() - new Date(heartbeat.lastNotificationAt).getTime()) / 1e3
+      ) : null;
+      if (lastNotifAge !== null && lastNotifAge > ZOMBIE_THRESHOLD) {
+        checks.push({
+          name: `turn: ${dir}`,
+          status: WARN,
+          message: `zombie \u2014 active turn ${heartbeat.activeTurnId}, last notification ${Math.round(lastNotifAge / 60)}m ago (${heartbeat.lastNotificationMethod ?? "?"}). MCP tools may not be exposed in app-server turns \u2014 try bridge restart${heartbeat.lastError ? `. Error: ${heartbeat.lastError}` : ""}`
+        });
+        continue;
+      }
+      const failures2 = heartbeat.consecutiveFailureCount ?? 0;
+      if (failures2 > 0 && heartbeatAge !== null && heartbeatAge < 60) {
+        checks.push({
+          name: `turn: ${dir}`,
+          status: WARN,
+          message: `zombie \u2014 active turn ${heartbeat.activeTurnId}, ${failures2} consecutive failures. MCP tools may not be exposed in app-server turns \u2014 try bridge restart${heartbeat.lastError ? `. Error: ${heartbeat.lastError}` : ""}`
+        });
+        continue;
+      }
+    }
+    const failures = heartbeat.consecutiveFailureCount ?? 0;
+    if (failures > 5) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: WARN,
+        message: `slow \u2014 ${failures} consecutive failures, last: ${heartbeat.lastError ?? "unknown"}`
+      });
+      continue;
+    }
+    const turnInfo = heartbeat.activeTurnId ? `active turn ${heartbeat.activeTurnId}` : `idle (last: ${heartbeat.lastTurnStatus ?? "none"})`;
+    checks.push({
+      name: `turn: ${dir}`,
+      status: PASS,
+      message: `healthy \u2014 ${turnInfo}, heartbeat ${heartbeatAge ?? "?"}s ago`
     });
   }
   return checks;
@@ -5719,7 +6406,35 @@ function renderCheck(check, fixMode) {
   const msg = check.message ? ` \u2014 ${check.message}${fixable}` : "";
   return `  ${icon} ${check.name}${msg}`;
 }
+var DOCTOR_HELP = `
+Usage:
+  tap-comms doctor [options]
+
+Description:
+  Diagnose tap infrastructure health: comms directory, instances, bridges,
+  message lifecycle, and MCP server configuration.
+
+Options:
+  --fix                 Auto-repair detected issues where possible
+  --comms-dir <path>    Override comms directory
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap doctor
+  npx @hua-labs/tap doctor --fix
+`.trim();
 async function doctorCommand(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(DOCTOR_HELP);
+    return {
+      ok: true,
+      command: "doctor",
+      code: "TAP_NO_OP",
+      message: DOCTOR_HELP,
+      warnings: [],
+      data: {}
+    };
+  }
   const repoRoot = findRepoRoot();
   const overrides = {};
   let fixMode = false;
@@ -5741,10 +6456,17 @@ async function doctorCommand(args) {
     checks.push(...checkInstances(repoRoot, config.stateDir));
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
+    checks.push(...checkBridgeTurnHealth(repoRoot));
     return checks;
   }
   const initialChecks = runAllChecks();
-  for (const section of ["Comms", "Instances", "Messages", "MCP"]) {
+  for (const section of [
+    "Comms",
+    "Instances",
+    "Messages",
+    "MCP",
+    "Turns"
+  ]) {
     const sectionChecks = {
       Comms: initialChecks.filter(
         (c) => [
@@ -5763,7 +6485,8 @@ async function doctorCommand(args) {
       ),
       MCP: initialChecks.filter(
         (c) => c.name.startsWith("MCP") || c.name === "MCP server script"
-      )
+      ),
+      Turns: initialChecks.filter((c) => c.name.startsWith("turn:"))
     }[section];
     if (sectionChecks.length > 0) {
       log(`${section}:`);
@@ -5824,7 +6547,7 @@ async function doctorCommand(args) {
 }
 
 // src/commands/comms.ts
-import { execSync as execSync7 } from "child_process";
+import { execSync as execSync7, spawnSync as spawnSync4 } from "child_process";
 import * as fs17 from "fs";
 import * as path18 from "path";
 var COMMS_HELP = `
@@ -5916,10 +6639,22 @@ function commsPush(commsDir) {
       };
     }
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    execSync7(`git commit -m "chore(comms): sync ${timestamp}"`, {
-      cwd: commsDir,
-      stdio: "pipe"
-    });
+    const commitResult = spawnSync4(
+      "git",
+      ["commit", "-m", `chore(comms): sync ${timestamp}`],
+      { cwd: commsDir, stdio: "pipe", encoding: "utf-8" }
+    );
+    if (commitResult.status !== 0) {
+      const msg = commitResult.stderr || `git commit exited with code ${commitResult.status}`;
+      return {
+        ok: false,
+        command: "comms",
+        code: "TAP_COMMS_PUSH_FAILED",
+        message: `Commit failed: ${msg}`,
+        warnings: [],
+        data: { commsDir }
+      };
+    }
     execSync7("git push", { cwd: commsDir, stdio: "pipe" });
     logSuccess("Comms push complete");
     return {
@@ -5986,7 +6721,12 @@ function emitResult(result, jsonMode) {
   } else {
     logError(result.message);
   }
+  const emittedWarnings = /* @__PURE__ */ new Set();
   for (const w of result.warnings) {
+    if (emittedWarnings.has(w) || wasWarningLogged(w)) {
+      continue;
+    }
+    emittedWarnings.add(w);
     logWarn(w);
   }
 }
@@ -6055,6 +6795,7 @@ function normalizeCommandName(command) {
 async function main() {
   const rawArgs = process.argv.slice(2);
   const { jsonMode, cleanArgs } = extractJsonFlag(rawArgs);
+  resetLoggedWarnings();
   setJsonMode(jsonMode);
   const command = cleanArgs[0];
   if (!command || command === "--help" || command === "-h") {
@@ -6112,7 +6853,7 @@ async function main() {
         break;
       case "serve": {
         const serveResult = await serveCommand(commandArgs);
-        if (!serveResult.ok) {
+        if (!serveResult.ok || serveResult.code === "TAP_NO_OP") {
           emitResult(serveResult, jsonMode);
         }
         process.exit(exitCode(serveResult));

@@ -21,7 +21,7 @@ const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
 
 // ─── Repo root discovery ───────────────────────────────────────
 
-import { _noGitWarned, _setNoGitWarned } from "../utils.js";
+import { _noGitWarned, _setNoGitWarned, log } from "../utils.js";
 
 export function findRepoRoot(startDir: string = process.cwd()): string {
   let dir = path.resolve(startDir);
@@ -30,8 +30,9 @@ export function findRepoRoot(startDir: string = process.cwd()): string {
     if (fs.existsSync(path.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        console.error(
-          "[tap] warning: No .git directory found. Resolved via package.json. Use --comms-dir to specify explicitly.",
+        log(
+          "No .git directory found. Resolved tap root via package.json. " +
+            "That's fine outside git; use --comms-dir to choose a different comms location.",
         );
       }
       return dir;
@@ -42,8 +43,9 @@ export function findRepoRoot(startDir: string = process.cwd()): string {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    console.error(
-      "[tap] warning: No git repository found. Using cwd as root. Run 'git init' or use --comms-dir.",
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. " +
+        "That's fine outside git; use --comms-dir to choose a different comms location.",
     );
   }
   return process.cwd();
@@ -117,6 +119,7 @@ export function resolveConfig(
     stateDir: "auto",
     runtimeCommand: "auto",
     appServerUrl: "auto",
+    towerName: "auto",
   };
 
   // ─── commsDir ──────────────────────────────────────────────
@@ -194,8 +197,18 @@ export function resolveConfig(
     appServerUrl = DEFAULT_APP_SERVER_URL;
   }
 
+  // ─── towerName ──────────────────────────────────────────────
+  const towerName = local.towerName ?? shared.towerName ?? null;
+
   return {
-    config: { repoRoot, commsDir, stateDir, runtimeCommand, appServerUrl },
+    config: {
+      repoRoot,
+      commsDir,
+      stateDir,
+      runtimeCommand,
+      appServerUrl,
+      towerName,
+    },
     sources,
   };
 }

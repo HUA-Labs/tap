@@ -27,8 +27,8 @@ function findRepoRoot(startDir = process.cwd()) {
     if (fs.existsSync(path.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        logWarn(
-          "No .git directory found. Resolved repo root via package.json \u2014 comms directory may be created in an unexpected location. Use --comms-dir to specify explicitly."
+        log(
+          "No .git directory found. Resolved tap root via package.json. That's fine outside git; use --comms-dir to choose a different comms location."
         );
       }
       return dir;
@@ -39,8 +39,8 @@ function findRepoRoot(startDir = process.cwd()) {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    logWarn(
-      "No git repository or package.json found. Using current directory as root. Run 'git init' first, or use --comms-dir to specify the comms path."
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. That's fine outside git; use --comms-dir to choose a different comms location."
     );
   }
   return process.cwd();
@@ -82,9 +82,6 @@ function log(message) {
 function logSuccess(message) {
   if (!_jsonMode) console.log(`  + ${message}`);
 }
-function logWarn(message) {
-  if (!_jsonMode) console.log(`  ! ${message}`);
-}
 function logError(message) {
   if (!_jsonMode) console.error(`  x ${message}`);
 }
@@ -92,6 +89,16 @@ function logHeader(message) {
   if (!_jsonMode) console.log(`
   ${message}
 `);
+}
+function parseIntFlag(value, name, min, max) {
+  if (value === void 0) return void 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new RangeError(
+      `Invalid ${name}: ${value}. Must be an integer between ${min} and ${max}.`
+    );
+  }
+  return parsed;
 }
 function resolveInstanceId(identifier, state) {
   if (state.instances[identifier]) {
@@ -140,8 +147,8 @@ function findRepoRoot2(startDir = process.cwd()) {
     if (fs2.existsSync(path2.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        console.error(
-          "[tap] warning: No .git directory found. Resolved via package.json. Use --comms-dir to specify explicitly."
+        log(
+          "No .git directory found. Resolved tap root via package.json. That's fine outside git; use --comms-dir to choose a different comms location."
         );
       }
       return dir;
@@ -152,8 +159,8 @@ function findRepoRoot2(startDir = process.cwd()) {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    console.error(
-      "[tap] warning: No git repository found. Using cwd as root. Run 'git init' or use --comms-dir."
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. That's fine outside git; use --comms-dir to choose a different comms location."
     );
   }
   return process.cwd();
@@ -199,7 +206,8 @@ function resolveConfig(overrides = {}, startDir) {
     commsDir: "auto",
     stateDir: "auto",
     runtimeCommand: "auto",
-    appServerUrl: "auto"
+    appServerUrl: "auto",
+    towerName: "auto"
   };
   let commsDir;
   if (overrides.commsDir) {
@@ -268,8 +276,16 @@ function resolveConfig(overrides = {}, startDir) {
   } else {
     appServerUrl = DEFAULT_APP_SERVER_URL;
   }
+  const towerName = local.towerName ?? shared.towerName ?? null;
   return {
-    config: { repoRoot, commsDir, stateDir, runtimeCommand, appServerUrl },
+    config: {
+      repoRoot,
+      commsDir,
+      stateDir,
+      runtimeCommand,
+      appServerUrl,
+      towerName
+    },
     sources
   };
 }
@@ -469,6 +485,10 @@ function canWriteOrCreate(filePath) {
     return false;
   }
 }
+function isEphemeralPath(p) {
+  const normalized = p.replace(/\\/g, "/").toLowerCase();
+  return normalized.includes("/_npx/") || normalized.includes("\\_npx\\") || normalized.includes("/fnm_multishells/") || normalized.includes("\\fnm_multishells\\") || normalized.includes("/tmp/") || normalized.includes("\\temp\\");
+}
 function findLocalTapCommsSource(ctx) {
   const candidates = [
     path5.join(
@@ -528,8 +548,10 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   const warnings = [];
   const issues = [];
   const env = {
-    TAP_AGENT_NAME: "<set-per-session>",
-    TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir)
+    TAP_AGENT_NAME: ctx.agentName ?? "<set-per-session>",
+    TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
+    TAP_STATE_DIR: toForwardSlashPath(ctx.stateDir),
+    TAP_REPO_ROOT: toForwardSlashPath(ctx.repoRoot)
   };
   if (instanceId) {
     env.TAP_AGENT_ID = instanceId;
@@ -541,9 +563,25 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
   const isBundled = sourcePath.endsWith(".mjs");
+  const isEphemeralSource = isEphemeralPath(sourcePath);
   let command = bunCommand;
-  if (!command && isBundled) {
-    command = process.execPath;
+  let args = [toForwardSlashPath(sourcePath)];
+  if (isEphemeralSource && isBundled) {
+    command = "npx";
+    args = ["@hua-labs/tap", "serve"];
+    warnings.push(
+      "Detected npx cache path. Using `npx @hua-labs/tap serve` as stable MCP launcher."
+    );
+  } else if (!command && isBundled) {
+    const isEphemeralNode = isEphemeralPath(process.execPath);
+    if (isEphemeralNode) {
+      command = "node";
+      warnings.push(
+        "Detected ephemeral node path. Using `node` from PATH for MCP config stability."
+      );
+    } else {
+      command = toForwardSlashPath(process.execPath);
+    }
     warnings.push(
       "bun not found; using node to run the compiled MCP server. Install bun for better performance."
     );
@@ -555,8 +593,8 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
   return {
-    command: isBundled && command === process.execPath ? toForwardSlashPath(command) : command,
-    args: [toForwardSlashPath(sourcePath)],
+    command,
+    args,
     env,
     sourcePath,
     warnings,
@@ -807,8 +845,11 @@ function resolvePowerShellCommand() {
 function resolveAuthGatewayScript(repoRoot) {
   const moduleDir = path7.dirname(fileURLToPath3(import.meta.url));
   const candidates = [
-    path7.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.mjs"),
-    path7.join(moduleDir, "..", "bridges", "codex-app-server-auth-gateway.ts"),
+    // Bundled: dist/bridges/ sibling (npm install / built package)
+    path7.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
+    // Source: src/bridges/ sibling (monorepo dev with ts runner)
+    path7.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
+    // Monorepo dist fallback
     path7.join(
       repoRoot,
       "packages",
@@ -861,10 +902,8 @@ async function allocateLoopbackPort(hostname) {
     });
   });
 }
-function buildProtectedAppServerUrl(publicUrl, token) {
-  const url = new URL(publicUrl);
-  url.searchParams.set(APP_SERVER_AUTH_QUERY_PARAM, token);
-  return url.toString().replace(/\/(?=\?|$)/, "");
+function buildProtectedAppServerUrl(publicUrl, _token) {
+  return publicUrl;
 }
 function readGatewayTokenFromPath(tokenPath) {
   return fs7.readFileSync(tokenPath, "utf8").trim();
@@ -979,7 +1018,7 @@ async function createManagedAppServerAuth(options) {
     throw new Error("Failed to spawn app-server auth gateway");
   }
   return {
-    mode: "query-token",
+    mode: "subprotocol",
     protectedUrl,
     upstreamUrl: upstreamUrl.toString().replace(/\/$/, ""),
     tokenPath,
@@ -1166,7 +1205,7 @@ async function findNextAvailableAppServerPort(state, baseUrl, basePort = 4501, e
     `Failed to find a free app-server port starting at ${basePort}`
   );
 }
-async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken) {
   const WebSocket = getWebSocketCtor();
   if (!WebSocket) {
     return false;
@@ -1188,7 +1227,8 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
-      socket = new WebSocket(url);
+      const protocols = gatewayToken ? [`${AUTH_SUBPROTOCOL_PREFIX}${gatewayToken}`] : void 0;
+      socket = new WebSocket(url, protocols);
       socket.addEventListener("open", () => finish(true), { once: true });
       socket.addEventListener("error", () => finish(false), { once: true });
       socket.addEventListener("close", () => finish(false), { once: true });
@@ -1197,10 +1237,14 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
     }
   });
 }
-async function waitForAppServerHealth(url, timeoutMs) {
+async function waitForAppServerHealth(url, timeoutMs, gatewayToken) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await checkAppServerHealth(url)) {
+    if (await checkAppServerHealth(
+      url,
+      APP_SERVER_HEALTH_TIMEOUT_MS,
+      gatewayToken
+    )) {
       return true;
     }
     await delay(APP_SERVER_HEALTH_RETRY_MS);
@@ -1465,8 +1509,9 @@ Or start it manually:
     throw new Error("Tap auth gateway token is missing after startup.");
   }
   const gatewayHealthy = await waitForAppServerHealth(
-    buildProtectedAppServerUrl(effectiveUrl, gatewayToken),
-    APP_SERVER_GATEWAY_START_TIMEOUT_MS
+    effectiveUrl,
+    APP_SERVER_GATEWAY_START_TIMEOUT_MS,
+    gatewayToken
   );
   if (!gatewayHealthy) {
     await terminateProcess(pid, options.platform);
@@ -1558,6 +1603,40 @@ function isBridgeRunning(stateDir, instanceId) {
   if (!state) return false;
   return isProcessAlive(state.pid);
 }
+function resolveAgentName(instanceId, explicit, context) {
+  if (explicit) return explicit;
+  try {
+    const repoRoot = context?.repoRoot ?? context?.stateDir?.replace(/[\\/].tap-comms$/, "") ?? process.cwd();
+    const state = loadState(repoRoot);
+    const stateAgent = state?.instances[instanceId]?.agentName;
+    if (stateAgent) return stateAgent;
+  } catch {
+  }
+  return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
+}
+function inferRestartMode(bridgeState, flags, savedMode) {
+  const wasManaged = bridgeState?.appServer != null;
+  const hadAuth = bridgeState?.appServer?.auth != null;
+  const manageAppServer = flags?.noServer === true ? false : flags?.noServer === void 0 ? savedMode?.manageAppServer ?? wasManaged : true;
+  const noAuth = flags?.noAuth === true ? true : flags?.noAuth === void 0 ? savedMode?.noAuth ?? !hadAuth : false;
+  return { manageAppServer, noAuth };
+}
+function cleanupHeadlessDispatch(inboxDir, agentName) {
+  const removed = [];
+  if (!fs7.existsSync(inboxDir)) return removed;
+  const normalizedAgent = agentName.replace(/-/g, "_");
+  const marker = `-headless-${normalizedAgent}-review-`;
+  try {
+    for (const file of fs7.readdirSync(inboxDir)) {
+      if (file.includes(marker)) {
+        fs7.unlinkSync(path7.join(inboxDir, file));
+        removed.push(file);
+      }
+    }
+  } catch {
+  }
+  return removed;
+}
 async function startBridge(options) {
   const {
     instanceId,
@@ -1568,7 +1647,10 @@ async function startBridge(options) {
     agentName,
     port
   } = options;
-  const resolvedAgent = agentName || process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME;
+  const resolvedAgent = resolveAgentName(instanceId, agentName, {
+    repoRoot: options.repoRoot,
+    stateDir
+  });
   if (!resolvedAgent) {
     throw new Error(
       `No agent name for ${instanceId} bridge. Set TAP_AGENT_NAME env var or pass --agent-name flag.`
@@ -1720,6 +1802,35 @@ async function stopBridge(options) {
   clearBridgeState(stateDir, instanceId);
   return true;
 }
+async function restartBridge(options) {
+  const { instanceId, stateDir, platform } = options;
+  const drainTimeout = (options.drainTimeoutSeconds ?? 30) * 1e3;
+  const repoRoot = options.repoRoot ?? stateDir.replace(/[\\/].tap-comms$/, "");
+  const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
+  const heartbeatPath = path7.join(runtimeStateDir, "heartbeat.json");
+  if (fs7.existsSync(heartbeatPath)) {
+    const startWait = Date.now();
+    while (Date.now() - startWait < drainTimeout) {
+      try {
+        const hb = JSON.parse(fs7.readFileSync(heartbeatPath, "utf-8"));
+        if (!hb.activeTurnId) break;
+      } catch {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1e3));
+    }
+  }
+  if (options.headless?.enabled && options.commsDir) {
+    const agentName = options.agentName ?? instanceId;
+    cleanupHeadlessDispatch(path7.join(options.commsDir, "inbox"), agentName);
+  }
+  await stopBridge({ instanceId, stateDir, platform });
+  const restartOptions = {
+    ...options,
+    processExistingMessages: true
+  };
+  return startBridge(restartOptions);
+}
 function rotateLog(logPath) {
   if (!fs7.existsSync(logPath)) return;
   try {
@@ -1757,18 +1868,19 @@ function getBridgeStatus(stateDir, instanceId) {
   }
   return "running";
 }
-var DEFAULT_APP_SERVER_URL2, APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_START_TIMEOUT_MS, APP_SERVER_GATEWAY_START_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, APP_SERVER_AUTH_QUERY_PARAM, APP_SERVER_AUTH_FILE_MODE;
+var DEFAULT_APP_SERVER_URL2, APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_START_TIMEOUT_MS, APP_SERVER_GATEWAY_START_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, AUTH_SUBPROTOCOL_PREFIX, APP_SERVER_AUTH_FILE_MODE;
 var init_bridge = __esm({
   "src/engine/bridge.ts"() {
     "use strict";
     init_common();
     init_runtime();
+    init_state();
     DEFAULT_APP_SERVER_URL2 = "ws://127.0.0.1:4501";
     APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
     APP_SERVER_START_TIMEOUT_MS = 2e4;
     APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
     APP_SERVER_HEALTH_RETRY_MS = 250;
-    APP_SERVER_AUTH_QUERY_PARAM = "tap_token";
+    AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
     APP_SERVER_AUTH_FILE_MODE = 384;
   }
 });
@@ -2396,13 +2508,12 @@ function verifyManagedToml(content, ctx, configPath) {
     });
   }
   if (mainTable && managed.command) {
+    const expectedArgs = managed.args.map((a) => `"${a.replace(/\\/g, "\\\\")}"`).join(", ");
     checks.push({
       name: "Managed command configured",
       passed: mainTable.includes(
         `command = "${managed.command.replace(/\\/g, "\\\\")}"`
-      ) && mainTable.includes(
-        `args = ["${managed.args[0]?.replace(/\\/g, "\\\\") ?? ""}"]`
-      ),
+      ) && mainTable.includes(`args = [${expectedArgs}]`),
       message: "Managed tap-comms command/args do not match expected values"
     });
   }
@@ -2952,11 +3063,11 @@ function redactProtectedUrl(url) {
   try {
     const parsed = new URL(url);
     if (parsed.searchParams.has("tap_token")) {
-      parsed.searchParams.set("tap_token", "***");
+      parsed.searchParams.delete("tap_token");
     }
     return parsed.toString().replace(/\/$/, "");
   } catch {
-    return url.replace(/tap_token=[^&]+/g, "tap_token=***");
+    return url.replace(/[?&]tap_token=[^&]+/g, "");
   }
 }
 function loadCurrentBridgeState(stateDir, instanceId, fallback) {
@@ -3039,37 +3150,37 @@ async function bridgeStart(identifier, agentName, flags = {}) {
     };
   }
   const instanceId = resolved.instanceId;
-  let instance = state.instances[instanceId];
-  if (!instance?.installed) {
+  let instance2 = state.instances[instanceId];
+  if (!instance2?.installed) {
     return {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance?.runtime,
+      runtime: instance2?.runtime,
       code: "TAP_INSTANCE_NOT_FOUND",
-      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance?.runtime ?? identifier}`,
+      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance2?.runtime ?? identifier}`,
       warnings: [],
       data: {}
     };
   }
-  const adapter = getAdapter(instance.runtime);
+  const adapter = getAdapter(instance2.runtime);
   const mode = adapter.bridgeMode();
   if (mode !== "app-server") {
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_NO_OP",
       message: `${instanceId} uses ${mode} mode \u2014 no bridge needed.`,
       warnings: [],
       data: { bridgeMode: mode }
     };
   }
-  const resolvedAgentName = agentName ?? instance.agentName ?? void 0;
-  if (agentName && agentName !== instance.agentName) {
-    instance = { ...instance, agentName };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+  const resolvedAgentName = agentName ?? instance2.agentName ?? void 0;
+  if (agentName && agentName !== instance2.agentName) {
+    instance2 = { ...instance2, agentName };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -3080,7 +3191,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_SCRIPT_MISSING",
       message: `Bridge script not found for ${instanceId}. Ensure the runtime is properly configured.`,
       warnings: [],
@@ -3089,8 +3200,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   }
   const { config: resolvedConfig } = resolveConfig({}, repoRoot);
   const runtimeCommand = resolvedConfig.runtimeCommand;
-  const manageAppServer = instance.runtime === "codex" && flags["no-server"] !== true;
-  let effectivePort = instance.port;
+  const manageAppServer = instance2.runtime === "codex" && flags["no-server"] !== true;
+  let effectivePort = instance2.port;
   if (effectivePort == null && manageAppServer) {
     effectivePort = await findNextAvailableAppServerPort(
       state,
@@ -3098,8 +3209,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       4501,
       instanceId
     );
-    instance = { ...instance, port: effectivePort };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+    instance2 = { ...instance2, port: effectivePort };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -3115,19 +3226,19 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   if (effectivePort != null) log(`Port:          ${effectivePort}`);
   if (resolvedAgentName) log(`Agent name:    ${resolvedAgentName}`);
   const noAuth = flags["no-auth"] === true;
-  if (!manageAppServer && instance.runtime === "codex") {
+  if (!manageAppServer && instance2.runtime === "codex") {
     log("Auto server:   disabled (--no-server)");
   }
   if (noAuth && manageAppServer) {
     log("Auth gateway:  disabled (--no-auth)");
   }
-  const willBeHeadless = flags["headless"] === true || instance.headless?.enabled;
+  const willBeHeadless = flags["headless"] === true || instance2.headless?.enabled;
   if (willBeHeadless) {
-    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance.headless?.role ?? "reviewer";
+    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance2.headless?.role ?? "reviewer";
     log(`Headless:      ${role}`);
   }
   try {
-    if (!manageAppServer && instance.runtime === "codex") {
+    if (!manageAppServer && instance2.runtime === "codex") {
       log("Checking app-server health...");
       const healthy = await checkAppServerHealth(appServerUrl);
       if (healthy) {
@@ -3138,7 +3249,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
           ok: false,
           command: "bridge",
           instanceId,
-          runtime: instance.runtime,
+          runtime: instance2.runtime,
           code: "TAP_BRIDGE_START_FAILED",
           message: `App server not reachable at ${appServerUrl}. Start it first: codex app-server --listen ${appServerUrl}`,
           warnings: [],
@@ -3152,7 +3263,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --busy-mode: ${String(busyModeRaw)}. Must be "steer" or "wait".`,
         warnings: [],
@@ -3160,9 +3271,38 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       };
     }
     const busyMode = busyModeRaw;
-    const pollSeconds = typeof flags["poll-seconds"] === "string" ? parseInt(flags["poll-seconds"], 10) : void 0;
-    const reconnectSeconds = typeof flags["reconnect-seconds"] === "string" ? parseInt(flags["reconnect-seconds"], 10) : void 0;
-    const messageLookbackMinutes = typeof flags["message-lookback-minutes"] === "string" ? parseInt(flags["message-lookback-minutes"], 10) : void 0;
+    const pollSecondsRaw = typeof flags["poll-seconds"] === "string" ? flags["poll-seconds"] : void 0;
+    const reconnectSecondsRaw = typeof flags["reconnect-seconds"] === "string" ? flags["reconnect-seconds"] : void 0;
+    const lookbackRaw = typeof flags["message-lookback-minutes"] === "string" ? flags["message-lookback-minutes"] : void 0;
+    let pollSeconds;
+    let reconnectSeconds;
+    let messageLookbackMinutes;
+    try {
+      pollSeconds = parseIntFlag(pollSecondsRaw, "--poll-seconds", 1, 3600);
+      reconnectSeconds = parseIntFlag(
+        reconnectSecondsRaw,
+        "--reconnect-seconds",
+        1,
+        3600
+      );
+      messageLookbackMinutes = parseIntFlag(
+        lookbackRaw,
+        "--message-lookback-minutes",
+        1,
+        10080
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        command: "bridge",
+        instanceId,
+        runtime: instance2.runtime,
+        code: "TAP_INVALID_ARGUMENT",
+        message: err instanceof Error ? err.message : String(err),
+        warnings: [],
+        data: {}
+      };
+    }
     const threadId = typeof flags["thread-id"] === "string" ? flags["thread-id"] : void 0;
     const ephemeral = flags["ephemeral"] === true;
     const processExistingMessages = flags["process-existing-messages"] === true;
@@ -3174,7 +3314,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --role: ${roleArg}. Must be: ${validRoles.join(", ")}`,
         warnings: [],
@@ -3186,10 +3326,10 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       role: roleArg ?? "reviewer",
       maxRounds: 5,
       qualitySeverityFloor: "high"
-    } : instance.headless;
+    } : instance2.headless;
     const bridge = await startBridge({
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       stateDir: ctx.stateDir,
       commsDir: ctx.commsDir,
       bridgeScript,
@@ -3230,14 +3370,14 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         log(`TUI connect:  ${bridge.appServer.url}`);
       }
     }
-    const updated = { ...instance, bridge };
+    const updated = { ...instance2, bridge, manageAppServer, noAuth };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_OK",
       message: `Bridge for ${instanceId} started (PID: ${bridge.pid})`,
       warnings: [],
@@ -3250,7 +3390,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_FAILED",
       message: msg,
       warnings: [],
@@ -3352,11 +3492,11 @@ async function bridgeStopOne(identifier) {
   }
   const instanceId = resolved.instanceId;
   const ctx = createAdapterContext(state.commsDir, repoRoot);
-  const instance = state.instances[instanceId];
+  const instance2 = state.instances[instanceId];
   const bridgeState = loadCurrentBridgeState(
     ctx.stateDir,
     instanceId,
-    instance?.bridge
+    instance2?.bridge
   );
   const appServer = bridgeState?.appServer ?? null;
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
@@ -3404,8 +3544,8 @@ async function bridgeStopOne(identifier) {
       }
     }
   }
-  if (instance) {
-    const updated = { ...instance, bridge: null };
+  if (instance2) {
+    const updated = { ...instance2, bridge: null };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
   }
@@ -3477,9 +3617,9 @@ async function bridgeStopAll() {
       logSuccess(`Stopped bridge for ${instanceId}`);
       stopped.push(instanceId);
     }
-    const instance = state.instances[instanceId];
-    if (instance?.bridge) {
-      state.instances[instanceId] = { ...instance, bridge: null };
+    const instance2 = state.instances[instanceId];
+    if (instance2?.bridge) {
+      state.instances[instanceId] = { ...instance2, bridge: null };
       stateChanged = true;
     }
   }
@@ -3721,6 +3861,135 @@ function bridgeStatusOne(identifier) {
     }
   };
 }
+async function bridgeRestart(identifier, flags) {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {}
+    };
+  }
+  const resolved = resolveInstanceId(identifier, state);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: resolved.code,
+      message: resolved.message,
+      warnings: [],
+      data: {}
+    };
+  }
+  const instanceId = resolved.instanceId;
+  const inst = state.instances[instanceId];
+  if (!inst) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_INSTANCE_NOT_FOUND",
+      message: `Instance not found: ${instanceId}`,
+      warnings: [],
+      data: {}
+    };
+  }
+  const adapter = getAdapter(inst.runtime);
+  const ctx = {
+    ...createAdapterContext(state.commsDir, repoRoot),
+    instanceId
+  };
+  const bridgeScript = adapter.resolveBridgeScript?.(ctx);
+  if (!bridgeScript) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_SCRIPT_MISSING",
+      message: `Bridge script not found for ${instanceId}`,
+      warnings: [],
+      data: {}
+    };
+  }
+  const { config: resolvedConfig } = resolveConfig({}, repoRoot);
+  const drainStr = typeof flags["drain-timeout"] === "string" ? flags["drain-timeout"] : void 0;
+  let drainTimeout;
+  try {
+    drainTimeout = parseIntFlag(drainStr, "--drain-timeout", 1, 300) ?? 30;
+  } catch (err) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: instance.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message: err instanceof Error ? err.message : String(err),
+      warnings: [],
+      data: {}
+    };
+  }
+  logHeader(`@hua-labs/tap bridge restart ${instanceId}`);
+  log(`Drain timeout: ${drainTimeout}s`);
+  try {
+    const currentBridgeState = loadBridgeState(ctx.stateDir, instanceId);
+    const { manageAppServer, noAuth } = inferRestartMode(
+      currentBridgeState,
+      {
+        noServer: flags["no-server"] === true ? true : void 0,
+        noAuth: flags["no-auth"] === true ? true : void 0
+      },
+      {
+        manageAppServer: inst.manageAppServer,
+        noAuth: inst.noAuth
+      }
+    );
+    const bridge = await restartBridge({
+      instanceId,
+      runtime: inst.runtime,
+      stateDir: ctx.stateDir,
+      commsDir: ctx.commsDir,
+      bridgeScript,
+      platform: ctx.platform,
+      agentName: inst.agentName ?? void 0,
+      runtimeCommand: resolvedConfig.runtimeCommand,
+      appServerUrl: resolvedConfig.appServerUrl,
+      repoRoot,
+      port: inst.port ?? void 0,
+      headless: inst.headless,
+      drainTimeoutSeconds: drainTimeout,
+      manageAppServer,
+      noAuth
+    });
+    logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
+    const updated = { ...inst, bridge, manageAppServer, noAuth };
+    const newState = updateInstanceState(state, instanceId, updated);
+    saveState(repoRoot, newState);
+    return {
+      ok: true,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_OK",
+      message: `Bridge for ${instanceId} restarted (PID: ${bridge.pid})`,
+      warnings: [],
+      data: { pid: bridge.pid }
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(msg);
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_FAILED",
+      message: msg,
+      warnings: [],
+      data: {}
+    };
+  }
+}
 async function bridgeCommand(args) {
   const { positional, flags } = parseArgs(args);
   const subcommand = positional[0];
@@ -3780,12 +4049,25 @@ async function bridgeCommand(args) {
       }
       return bridgeStatusAll();
     }
+    case "restart": {
+      if (!identifierArg) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message: "Missing instance. Usage: npx @hua-labs/tap bridge restart <instance>",
+          warnings: [],
+          data: {}
+        };
+      }
+      return bridgeRestart(identifierArg, flags);
+    }
     default:
       return {
         ok: false,
         command: "bridge",
         code: "TAP_INVALID_ARGUMENT",
-        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, status`,
+        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status`,
         warnings: [],
         data: {}
       };
@@ -3814,7 +4096,7 @@ Subcommands:
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
-                                   Saved to state \u2014 only needed on first start
+                                   Overrides the stored name from 'tap add' when needed
   --all                            Start all registered app-server instances
   --busy-mode <steer|wait>         How to handle active turns (default: steer)
   --poll-seconds <n>               Inbox poll interval (default: 5)
@@ -4003,6 +4285,9 @@ init_dashboard();
 init_dashboard();
 init_utils();
 init_config();
+init_state();
+import * as fs13 from "fs";
+import * as path14 from "path";
 function getDashboardSnapshot(options) {
   const repoRoot = options?.repoRoot ?? findRepoRoot();
   return collectDashboardSnapshot(repoRoot, options?.commsDir);
@@ -4049,6 +4334,60 @@ async function stopAgents() {
     commandResult: result
   };
 }
+function getHealthReport(options) {
+  const repoRoot = options?.repoRoot ?? findRepoRoot();
+  const snapshot = collectDashboardSnapshot(repoRoot, options?.commsDir);
+  const headlessStates = [];
+  try {
+    const state = loadState(repoRoot);
+    const activeMatchers = /* @__PURE__ */ new Set();
+    if (state) {
+      for (const [id, inst] of Object.entries(state.instances)) {
+        if (inst?.installed && inst.bridgeMode === "app-server") {
+          activeMatchers.add(id);
+          if (inst.agentName) activeMatchers.add(inst.agentName);
+        }
+      }
+    }
+    const tmpDir = path14.join(repoRoot, ".tmp");
+    if (fs13.existsSync(tmpDir)) {
+      for (const dir of fs13.readdirSync(tmpDir)) {
+        if (!dir.startsWith("codex-app-server-bridge")) continue;
+        const suffix = dir.replace("codex-app-server-bridge-", "");
+        if (activeMatchers.size > 0) {
+          let matched = false;
+          for (const matcher of activeMatchers) {
+            if (suffix === matcher || suffix.startsWith(matcher)) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) continue;
+        }
+        const hsPath = path14.join(tmpDir, dir, "headless-state.json");
+        if (!fs13.existsSync(hsPath)) continue;
+        try {
+          const hs = JSON.parse(fs13.readFileSync(hsPath, "utf-8"));
+          headlessStates.push({ instanceDir: dir, ...hs });
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  const hasFailures = snapshot.warnings.some((w) => w.level === "error");
+  const hasBridgeDown = snapshot.bridges.some(
+    (b) => b.status === "stale" || b.status === "stopped"
+  );
+  return {
+    ok: !hasFailures && !hasBridgeDown,
+    timestamp: snapshot.generatedAt,
+    bridges: snapshot.bridges,
+    agents: snapshot.agents,
+    warnings: snapshot.warnings,
+    headless: headlessStates
+  };
+}
 function getConfig(options) {
   const repoRoot = options?.repoRoot ?? findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
@@ -4064,11 +4403,38 @@ function getConfig(options) {
 import {
   createServer as createServer2
 } from "http";
+import { randomBytes as randomBytes2, timingSafeEqual } from "crypto";
 var CORS_HEADERS = {
   "Access-Control-Allow-Origin": "http://localhost:3000",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type"
+  "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
+function tokensMatch(presentedToken, expectedToken) {
+  if (!presentedToken) {
+    return false;
+  }
+  const presented = Buffer.from(presentedToken, "utf8");
+  const expected = Buffer.from(expectedToken, "utf8");
+  if (presented.length !== expected.length) {
+    return false;
+  }
+  return timingSafeEqual(presented, expected);
+}
+function verifyBearerToken(req, expectedToken) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return false;
+  }
+  return tokensMatch(header.slice(7), expectedToken);
+}
+function verifySseToken(req, expectedToken, serverUrl) {
+  if (verifyBearerToken(req, expectedToken)) {
+    return true;
+  }
+  const url = new URL(req.url ?? "/", serverUrl);
+  const queryToken = url.searchParams.get("token");
+  return tokensMatch(queryToken, expectedToken);
+}
 function jsonResponse(res, data, status = 200) {
   res.writeHead(status, {
     "Content-Type": "application/json",
@@ -4104,12 +4470,14 @@ async function handleEvents(req, res, apiOptions) {
   }
   res.end();
 }
-function handleHealth(res) {
-  jsonResponse(res, { ok: true, timestamp: (/* @__PURE__ */ new Date()).toISOString() });
+function handleHealth(res, apiOptions) {
+  const report = getHealthReport(apiOptions);
+  jsonResponse(res, report);
 }
 async function startHttpServer(options) {
   const port = options?.port ?? 4580;
   const host = "127.0.0.1";
+  const token = options?.token ?? randomBytes2(24).toString("base64url");
   const apiOptions = {
     repoRoot: options?.repoRoot,
     commsDir: options?.commsDir
@@ -4123,20 +4491,31 @@ async function startHttpServer(options) {
         res.end();
         return;
       }
+      if (req.method === "GET" && pathname === "/health") {
+        handleHealth(res, apiOptions);
+        return;
+      }
+      if (req.method === "GET" && pathname === "/api/events") {
+        const serverUrl = `http://${host}:${port}`;
+        if (!verifySseToken(req, token, serverUrl)) {
+          jsonResponse(res, { error: "Unauthorized" }, 401);
+          return;
+        }
+        await handleEvents(req, res, apiOptions);
+        return;
+      }
+      if (!verifyBearerToken(req, token)) {
+        jsonResponse(res, { error: "Unauthorized" }, 401);
+        return;
+      }
       try {
         if (req.method === "GET") {
           switch (pathname) {
             case "/api/snapshot":
               handleSnapshot(res, apiOptions);
               return;
-            case "/api/events":
-              await handleEvents(req, res, apiOptions);
-              return;
             case "/api/config":
               handleConfig(res, apiOptions);
-              return;
-            case "/health":
-              handleHealth(res);
               return;
           }
         }
@@ -4175,6 +4554,7 @@ async function startHttpServer(options) {
   });
   return {
     port,
+    token,
     close: () => new Promise((resolve8, reject) => {
       server.close((err) => err ? reject(err) : resolve8());
     })
@@ -4192,6 +4572,7 @@ export {
   getConfig,
   getDashboardSnapshot,
   getFnmBinDir,
+  getHealthReport,
   getHeartbeatAge,
   loadLocalConfig,
   loadSharedConfig,
@@ -4200,6 +4581,7 @@ export {
   readNodeVersion,
   resolveConfig,
   resolveNodeRuntime,
+  restartBridge,
   rotateLog,
   saveLocalConfig,
   saveSharedConfig,

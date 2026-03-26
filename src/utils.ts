@@ -22,9 +22,18 @@ export function detectPlatform(): Platform {
 
 /** Shared flag: suppress duplicate no-git warnings across modules. */
 export let _noGitWarned = false;
+const _loggedWarnings = new Set<string>();
 
 export function _setNoGitWarned() {
   _noGitWarned = true;
+}
+
+export function resetLoggedWarnings() {
+  _loggedWarnings.clear();
+}
+
+export function wasWarningLogged(message: string): boolean {
+  return _loggedWarnings.has(message);
 }
 
 export function findRepoRoot(startDir: string = process.cwd()): string {
@@ -34,10 +43,9 @@ export function findRepoRoot(startDir: string = process.cwd()): string {
     if (fs.existsSync(path.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        logWarn(
-          "No .git directory found. Resolved repo root via package.json — " +
-            "comms directory may be created in an unexpected location. " +
-            "Use --comms-dir to specify explicitly.",
+        log(
+          "No .git directory found. Resolved tap root via package.json. " +
+            "That's fine outside git; use --comms-dir to choose a different comms location.",
         );
       }
       return dir;
@@ -48,9 +56,9 @@ export function findRepoRoot(startDir: string = process.cwd()): string {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    logWarn(
-      "No git repository or package.json found. Using current directory as root. " +
-        "Run 'git init' first, or use --comms-dir to specify the comms path.",
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. " +
+        "That's fine outside git; use --comms-dir to choose a different comms location.",
     );
   }
   return process.cwd();
@@ -127,7 +135,9 @@ export function logSuccess(message: string): void {
 }
 
 export function logWarn(message: string): void {
-  if (!_jsonMode) console.log(`  ! ${message}`);
+  if (_jsonMode) return;
+  _loggedWarnings.add(message);
+  console.log(`  ! ${message}`);
 }
 
 export function logError(message: string): void {
@@ -136,6 +146,43 @@ export function logError(message: string): void {
 
 export function logHeader(message: string): void {
   if (!_jsonMode) console.log(`\n  ${message}\n`);
+}
+
+// ─── CLI argument validation ──────────────────────────────────
+
+/**
+ * Parse and validate an integer CLI flag within a range.
+ * Returns undefined if the flag is not provided, or the validated number.
+ * Throws a descriptive error if invalid.
+ */
+export function parseIntFlag(
+  value: string | undefined,
+  name: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new RangeError(
+      `Invalid ${name}: ${value}. Must be an integer between ${min} and ${max}.`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Parse and validate a port number (1-65535).
+ */
+export function parsePortFlag(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new RangeError(
+      `Invalid port: ${value}. Must be between 1 and 65535.`,
+    );
+  }
+  return parsed;
 }
 
 // ─── Instance ID utilities ─────────────────────────────────────

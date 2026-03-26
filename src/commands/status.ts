@@ -5,6 +5,17 @@ import { findRepoRoot, log, logHeader, logWarn } from "../utils.js";
 import { version } from "../version.js";
 import type { InstanceState, CommandResult } from "../types.js";
 
+const STATUS_HELP = `
+Usage:
+  tap-comms status
+
+Description:
+  Show all installed instances, their bridge status, and configuration info.
+
+Examples:
+  npx @hua-labs/tap status
+`.trim();
+
 function resolveStatus(inst: InstanceState, stateDir: string): string {
   if (!inst.installed) return "not installed";
 
@@ -39,7 +50,19 @@ function instanceStatusLine(inst: InstanceState, status: string): string {
   return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
 }
 
-export async function statusCommand(_args: string[]): Promise<CommandResult> {
+export async function statusCommand(args: string[]): Promise<CommandResult> {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(STATUS_HELP);
+    return {
+      ok: true,
+      command: "status",
+      code: "TAP_NO_OP",
+      message: STATUS_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
 

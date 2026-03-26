@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createInitialState, saveState, stateExists } from "../state.js";
 import {
   findRepoRoot,
@@ -44,7 +44,41 @@ function parsePermissionMode(args: string[]): PermissionMode {
   return "safe";
 }
 
+const INIT_HELP = `
+Usage:
+  tap-comms init [options]
+
+Description:
+  Initialize the tap-comms directory structure, state file, and permissions.
+  Optionally clone a shared comms repository.
+
+Options:
+  --comms-dir <path>    Override comms directory (default: tap-comms/)
+  --comms-repo <url>    Clone a shared comms git repo into comms directory
+  --permissions <mode>  Permission mode: safe (default) or full
+  --force               Re-initialize even if already set up
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap init
+  npx @hua-labs/tap init --permissions full
+  npx @hua-labs/tap init --comms-repo https://github.com/org/comms.git
+  npx @hua-labs/tap init --comms-dir /shared/comms --force
+`.trim();
+
 export async function initCommand(args: string[]): Promise<CommandResult> {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(INIT_HELP);
+    return {
+      ok: true,
+      command: "init",
+      code: "TAP_NO_OP",
+      message: INIT_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const repoRoot = findRepoRoot();
   const commsDir = resolveCommsDir(args, repoRoot);
   const permMode = parsePermissionMode(args);
@@ -90,10 +124,20 @@ export async function initCommand(args: string[]): Promise<CommandResult> {
     } else {
       log(`Cloning comms repo: ${commsRepoUrl}`);
       try {
-        execSync(`git clone "${commsRepoUrl}" "${commsDir}"`, {
-          stdio: "pipe",
-          encoding: "utf-8",
-        });
+        const cloneResult = spawnSync(
+          "git",
+          ["clone", commsRepoUrl, commsDir],
+          {
+            stdio: "pipe",
+            encoding: "utf-8",
+          },
+        );
+        if (cloneResult.status !== 0) {
+          throw new Error(
+            cloneResult.stderr ||
+              `git clone exited with code ${cloneResult.status}`,
+          );
+        }
         logSuccess(`Cloned comms repo to ${commsDir}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

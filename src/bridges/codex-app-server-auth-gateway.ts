@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 
-const AUTH_QUERY_PARAM = "tap_token";
+const AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 const CLOSE_UNAUTHORIZED = 4401;
 const CLOSE_UPSTREAM_ERROR = 1013;
 
@@ -119,7 +119,10 @@ export function buildGatewayOptions(argv: string[]): GatewayOptions {
   };
 }
 
-function tokensMatch(presentedToken: string | null, expectedToken: string): boolean {
+function tokensMatch(
+  presentedToken: string | null,
+  expectedToken: string,
+): boolean {
   if (!presentedToken) {
     return false;
   }
@@ -139,7 +142,9 @@ async function main(): Promise<void> {
   const host = listen.hostname === "localhost" ? "127.0.0.1" : listen.hostname;
   const port = Number.parseInt(listen.port, 10);
   if (!Number.isFinite(port) || port <= 0) {
-    throw new Error(`Gateway listen URL must include a valid port: ${options.listenUrl}`);
+    throw new Error(
+      `Gateway listen URL must include a valid port: ${options.listenUrl}`,
+    );
   }
 
   const server = new WebSocketServer({
@@ -150,8 +155,24 @@ async function main(): Promise<void> {
   });
 
   server.on("connection", (client: WebSocket, request: IncomingMessage) => {
+    // Extract token from Sec-WebSocket-Protocol header (subprotocol auth).
+    // Client sends: WebSocket(url, ["tap-auth-<token>"])
+    // Falls back to query param for backward compatibility during migration.
+    const protocols =
+      request.headers["sec-websocket-protocol"]
+        ?.split(",")
+        .map((s) => s.trim()) ?? [];
+    const authProtocol = protocols.find((p) =>
+      p.startsWith(AUTH_SUBPROTOCOL_PREFIX),
+    );
+    const subprotocolToken =
+      authProtocol?.slice(AUTH_SUBPROTOCOL_PREFIX.length) ?? null;
+
+    // Legacy fallback: query param (will be removed in future version)
     const requestUrl = new URL(request.url ?? "/", options.listenUrl);
-    const presentedToken = requestUrl.searchParams.get(AUTH_QUERY_PARAM);
+    const queryToken = requestUrl.searchParams.get("tap_token");
+
+    const presentedToken = subprotocolToken ?? queryToken;
     if (!tokensMatch(presentedToken, options.token)) {
       closeSocket(client, CLOSE_UNAUTHORIZED, "Unauthorized");
       return;

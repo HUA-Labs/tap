@@ -21,16 +21,13 @@ tap handles everything: starts app-server, spawns bridge, manages lifecycle.
 ```bash
 # 1. Initialize + add codex
 tap init
-tap add codex
+tap add codex --agent-name myAgent   # optional; default agent name is "codex"
 
-# 2. Start bridge (auto-starts app-server)
-tap bridge start codex --agent-name myAgent
-
-# 3. Verify
+# 2. Verify
 tap bridge status
 ```
 
-Port is auto-assigned from 4501. Agent name is saved — only needed on first start.
+Managed `tap add codex` already starts the bridge and app-server. Re-running `tap add codex --agent-name <name>` updates the stored agent name without `--force`.
 
 ### Option B: Managed Mode Without Auth Gateway (--no-auth)
 
@@ -116,8 +113,8 @@ Multiple codex instances with unique names and ports.
 
 ```bash
 # Add instances
-tap add codex                              # codex (port auto: 4501)
-tap add codex --name reviewer --port 4502  # codex-reviewer
+tap add codex                                           # agent-name defaults to codex
+tap add codex --name reviewer --port 4502 --agent-name reviewer
 
 # Start all at once
 tap bridge start --all
@@ -127,7 +124,7 @@ tap bridge start codex --agent-name worker
 tap bridge start codex-reviewer --agent-name reviewer
 ```
 
-`--all` starts every registered app-server instance sequentially. Requires stored agent-name (set on first individual start).
+`--all` starts every registered app-server instance sequentially. Agent names are stored during `tap add` and can be updated later with `tap add ... --agent-name <name>`.
 
 ## Headless Mode
 
@@ -206,6 +203,14 @@ The bridge script wasn't found. Ensure:
 ### `TAP_INSTANCE_NOT_FOUND`
 
 Instance not registered. Run `tap add <runtime>` first.
+
+### Codex shows "Tools: (none)"
+
+**Cause**: Codex CLI display bug with hyphenated MCP server names (`tap-comms`). Tools are working — this is a rendering issue only.
+
+**Verify**: Run `codex mcp list` — should show `tap-comms: enabled`.
+
+**Status**: Upstream fix pending ([codex#15565](https://github.com/openai/codex/issues/15565), PR [#15797](https://github.com/openai/codex/pull/15797)).
 
 ### Port conflicts
 

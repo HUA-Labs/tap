@@ -14,10 +14,12 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   getDashboardSnapshot,
   streamEvents,
   getConfig,
+  getHealthReport,
   startAgents,
   stopAgents,
 } from "./state.js";
@@ -26,13 +28,55 @@ import type { StateApiOptions } from "./state.js";
 export interface HttpServerOptions extends StateApiOptions {
   /** Port to listen on (default: 4580) */
   port?: number;
+  /** Pre-set API token (default: auto-generated) */
+  token?: string;
 }
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "http://localhost:3000",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+function tokensMatch(
+  presentedToken: string | null,
+  expectedToken: string,
+): boolean {
+  if (!presentedToken) {
+    return false;
+  }
+  const presented = Buffer.from(presentedToken, "utf8");
+  const expected = Buffer.from(expectedToken, "utf8");
+  if (presented.length !== expected.length) {
+    return false;
+  }
+  return timingSafeEqual(presented, expected);
+}
+
+function verifyBearerToken(
+  req: IncomingMessage,
+  expectedToken: string,
+): boolean {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) {
+    return false;
+  }
+  return tokensMatch(header.slice(7), expectedToken);
+}
+
+function verifySseToken(
+  req: IncomingMessage,
+  expectedToken: string,
+  serverUrl: string,
+): boolean {
+  // EventSource can't set custom headers — accept ?token= query param for SSE only
+  if (verifyBearerToken(req, expectedToken)) {
+    return true;
+  }
+  const url = new URL(req.url ?? "/", serverUrl);
+  const queryToken = url.searchParams.get("token");
+  return tokensMatch(queryToken, expectedToken);
+}
 
 function jsonResponse(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
@@ -81,8 +125,9 @@ async function handleEvents(
   res.end();
 }
 
-function handleHealth(res: ServerResponse): void {
-  jsonResponse(res, { ok: true, timestamp: new Date().toISOString() });
+function handleHealth(res: ServerResponse, apiOptions: StateApiOptions): void {
+  const report = getHealthReport(apiOptions);
+  jsonResponse(res, report);
 }
 
 /**
@@ -91,11 +136,13 @@ function handleHealth(res: ServerResponse): void {
  */
 export async function startHttpServer(options?: HttpServerOptions): Promise<{
   port: number;
+  token: string;
   close: () => Promise<void>;
 }> {
   const port = options?.port ?? 4580;
-  // Security: always bind to loopback — no auth layer, must not expose to network
+  // Security: always bind to loopback — no auth layer beyond bearer token
   const host = "127.0.0.1";
+  const token = options?.token ?? randomBytes(24).toString("base64url");
   const apiOptions: StateApiOptions = {
     repoRoot: options?.repoRoot,
     commsDir: options?.commsDir,
@@ -112,6 +159,29 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
         return;
       }
 
+      // Health endpoint is public (no auth required)
+      if (req.method === "GET" && pathname === "/health") {
+        handleHealth(res, apiOptions);
+        return;
+      }
+
+      // SSE endpoint: accepts Bearer header OR ?token= query param (EventSource can't set headers)
+      if (req.method === "GET" && pathname === "/api/events") {
+        const serverUrl = `http://${host}:${port}`;
+        if (!verifySseToken(req, token, serverUrl)) {
+          jsonResponse(res, { error: "Unauthorized" }, 401);
+          return;
+        }
+        await handleEvents(req, res, apiOptions);
+        return;
+      }
+
+      // All other endpoints require Bearer token only (no query param fallback)
+      if (!verifyBearerToken(req, token)) {
+        jsonResponse(res, { error: "Unauthorized" }, 401);
+        return;
+      }
+
       try {
         // GET endpoints
         if (req.method === "GET") {
@@ -119,15 +189,10 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
             case "/api/snapshot":
               handleSnapshot(res, apiOptions);
               return;
-            case "/api/events":
-              await handleEvents(req, res, apiOptions);
-              return;
             case "/api/config":
               handleConfig(res, apiOptions);
               return;
-            case "/health":
-              handleHealth(res);
-              return;
+            // /health handled above (public, no auth)
           }
         }
 
@@ -173,6 +238,7 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
 
   return {
     port,
+    token,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

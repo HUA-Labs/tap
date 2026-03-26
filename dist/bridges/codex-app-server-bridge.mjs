@@ -16,7 +16,7 @@ import { isAbsolute, join, resolve } from "path";
 import { pathToFileURL } from "url";
 var DEFAULT_AGENT = String.fromCharCode(50728);
 var DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
-var APP_SERVER_AUTH_QUERY_PARAM = "tap_token";
+var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 var PLACEHOLDER_AGENT_VALUES = /* @__PURE__ */ new Set([
   "unknown",
   "unnamed",
@@ -316,11 +316,6 @@ function persistAgentName(stateDir, agentName) {
   writeFileSync(join(stateDir, "agent-name.txt"), `${agentName}
 `, "utf8");
 }
-function buildProtectedAppServerUrl(appServerUrl, token) {
-  const url = new URL(appServerUrl);
-  url.searchParams.set(APP_SERVER_AUTH_QUERY_PARAM, token);
-  return url.toString().replace(/\/(?=\?|$)/, "");
-}
 function readGatewayTokenFile(tokenFile) {
   const token = readFileSync(tokenFile, "utf8").trim();
   if (!token) {
@@ -558,7 +553,14 @@ function buildUserInput(candidate, agentName, heartbeats) {
     `File: ${candidate.fileName}`,
     "",
     "Message body:",
-    body || "(empty)"
+    body || "(empty)",
+    "",
+    "---",
+    "Instructions: Read the message above and respond using the tap_reply tool.",
+    `Use tap_reply(to: "${candidate.sender || "unknown"}", subject: "<your-subject>", content: "<your-response>") to send your response.`,
+    "If the message is a review request, perform the review and reply with your findings.",
+    "If the message is informational, acknowledge briefly via tap_reply.",
+    "Do NOT respond with plain text only \u2014 you MUST use the tap_reply tool."
   ].join("\n");
 }
 function writeProcessedMarker(stateDir, candidate, dispatchMode, threadId, turnId) {
@@ -705,6 +707,7 @@ async function readSocketData(data) {
 var AppServerClient = class {
   socket = null;
   url;
+  gatewayToken;
   logger;
   nextId = 1;
   pending = /* @__PURE__ */ new Map();
@@ -718,15 +721,20 @@ var AppServerClient = class {
   lastError = null;
   lastSuccessfulAppServerAt = null;
   lastSuccessfulAppServerMethod = null;
-  constructor(url, logger) {
+  constructor(url, logger, gatewayToken) {
     this.url = url;
     this.logger = logger;
+    this.gatewayToken = gatewayToken ?? null;
   }
   async connect() {
     if (this.connected && this.socket?.readyState === WebSocket.OPEN) {
       return;
     }
-    this.socket = new WebSocket(this.url);
+    const wsOptions = {};
+    if (this.gatewayToken) {
+      wsOptions.protocols = [`${AUTH_SUBPROTOCOL_PREFIX}${this.gatewayToken}`];
+    }
+    this.socket = new WebSocket(this.url, wsOptions);
     await new Promise((resolvePromise, rejectPromise) => {
       let settled = false;
       const resolveOnce = () => {
@@ -1212,10 +1220,8 @@ function buildOptions(argv) {
     runOnce: parsed.runOnce,
     waitAfterDispatchSeconds: parsed.waitAfterDispatchSeconds ?? 0,
     appServerUrl,
-    connectAppServerUrl: gatewayTokenFile ? buildProtectedAppServerUrl(
-      appServerUrl,
-      readGatewayTokenFile(gatewayTokenFile)
-    ) : appServerUrl,
+    connectAppServerUrl: appServerUrl,
+    gatewayToken: gatewayTokenFile ? readGatewayTokenFile(gatewayTokenFile) : null,
     gatewayTokenFile,
     busyMode: parsed.busyMode ?? "steer",
     threadId: parsed.threadId?.trim() || null,
@@ -1260,7 +1266,11 @@ async function main() {
     try {
       if (!options.dryRun) {
         if (!client || !client.connected) {
-          client = new AppServerClient(options.connectAppServerUrl, logStatus);
+          client = new AppServerClient(
+            options.connectAppServerUrl,
+            logStatus,
+            options.gatewayToken
+          );
           await client.connect();
           const threadId = await client.ensureThread(
             options.threadId,

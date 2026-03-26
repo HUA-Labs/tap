@@ -1,5 +1,5 @@
 import type { CommandResult } from "./types.js";
-import { logSuccess, logWarn, logError } from "./utils.js";
+import { logSuccess, logWarn, logError, wasWarningLogged } from "./utils.js";
 
 /**
  * Emit a CommandResult to stdout.
@@ -19,7 +19,12 @@ export function emitResult(result: CommandResult, jsonMode: boolean): void {
     logError(result.message);
   }
 
+  const emittedWarnings = new Set<string>();
   for (const w of result.warnings) {
+    if (emittedWarnings.has(w) || wasWarningLogged(w)) {
+      continue;
+    }
+    emittedWarnings.add(w);
     logWarn(w);
   }
 }

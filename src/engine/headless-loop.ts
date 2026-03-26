@@ -81,12 +81,45 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
     console.error(`[${ts}] [headless-loop] ${msg}`);
   }
 
+  function writeStateFile(): void {
+    try {
+      const payload = {
+        running: state.running,
+        agentName: options.agentName,
+        generation: options.generation,
+        pollIntervalMs: options.pollIntervalMs,
+        completedSessions: state.completedSessions,
+        lastPollAt: state.lastPollAt,
+        activeReview: state.activeSession
+          ? {
+              prNumber: state.activeSession.request.prNumber,
+              round: state.activeSession.rounds.length + 1,
+              startedAt: state.activeSession.startedAt,
+              sender: state.activeSession.request.sender,
+            }
+          : null,
+        terminationConfig: {
+          maxRounds: terminationConfig.maxRounds,
+          qualitySeverityFloor: terminationConfig.qualitySeverityFloor,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      const filePath = path.join(options.stateDir, "headless-state.json");
+      const tmp = `${filePath}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+      fs.renameSync(tmp, filePath);
+    } catch {
+      // Non-critical — state dump is best-effort
+    }
+  }
+
   function pollOnce(): void {
     state.lastPollAt = new Date().toISOString();
 
     // Skip if already processing a review
     if (state.activeSession) {
       checkActiveSession();
+      writeStateFile();
       return;
     }
 
@@ -98,11 +131,15 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
       options.agentName,
     );
 
-    if (requests.length === 0) return;
+    if (requests.length === 0) {
+      writeStateFile();
+      return;
+    }
 
     // Process first request (sequential — one at a time)
     const request = requests[0];
     startReviewSession(request);
+    writeStateFile();
   }
 
   function startReviewSession(request: ReviewRequest): void {
@@ -162,45 +199,79 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
     const session = state.activeSession;
     const revPath = session.reviewFilePath;
 
-    // Check if review output file has been updated since last check
-    if (!fs.existsSync(revPath)) return;
+    // Check for new output FIRST — if output arrived, process it regardless
+    // of elapsed time. Timeouts only apply when there's genuinely no output.
+    // (덱 review: timeout before file check drops late-arriving valid output)
+    let hasNewOutput = false;
+    if (fs.existsSync(revPath)) {
+      const stat = fs.statSync(revPath);
+      const lastRound = session.rounds[session.rounds.length - 1];
+      const lastCheck = lastRound?.timestamp ?? session.startedAt;
+      hasNewOutput = stat.mtime.toISOString() > lastCheck;
+    }
 
-    const stat = fs.statSync(revPath);
-    const lastRound = session.rounds[session.rounds.length - 1];
-    const lastCheck = lastRound?.timestamp ?? session.startedAt;
+    if (hasNewOutput) {
+      // New output arrived — parse and evaluate (skip timeout)
+      const roundNum = session.rounds.length + 1;
+      const round = parseReviewOutput(revPath, roundNum);
+      if (!round) return;
 
-    // Only process if file is newer than our last check
-    if (stat.mtime.toISOString() <= lastCheck) return;
-
-    // Parse the review output
-    const roundNum = session.rounds.length + 1;
-    const round = parseReviewOutput(revPath, roundNum);
-    if (!round) return;
-
-    session.rounds.push(round);
-    log(
-      `PR #${session.request.prNumber} round ${roundNum}: ${round.findingCount} findings, ${round.suggestedDiffLines} suggested diff lines`,
-    );
-
-    // Evaluate termination
-    const stopSignalPath = path.join(options.stateDir, "stop-signal");
-    const ctx: TerminationContext = {
-      round: roundNum,
-      rounds: session.rounds,
-      stopSignalPath,
-      config: terminationConfig,
-    };
-
-    const result = evaluate(ctx);
-
-    if (result.verdict === "stop") {
+      session.rounds.push(round);
       log(
-        `PR #${session.request.prNumber} terminated: ${result.reason} (${result.strategy})`,
+        `PR #${session.request.prNumber} round ${roundNum}: ${round.findingCount} findings, ${round.suggestedDiffLines} suggested diff lines`,
       );
-      completeSession(session);
-    } else {
-      log(`PR #${session.request.prNumber} continues to round ${roundNum + 1}`);
-      dispatchFollowUp(session, roundNum + 1);
+
+      // Evaluate termination
+      const stopSignalPath = path.join(options.stateDir, "stop-signal");
+      const ctx: TerminationContext = {
+        round: roundNum,
+        rounds: session.rounds,
+        stopSignalPath,
+        config: terminationConfig,
+      };
+
+      const result = evaluate(ctx);
+
+      if (result.verdict === "stop") {
+        log(
+          `PR #${session.request.prNumber} terminated: ${result.reason} (${result.strategy})`,
+        );
+        completeSession(session);
+      } else {
+        log(
+          `PR #${session.request.prNumber} continues to round ${roundNum + 1}`,
+        );
+        dispatchFollowUp(session, roundNum + 1);
+      }
+      return;
+    }
+
+    // No new output — apply timeout checks.
+
+    // Session timeout: no output at all after SESSION_TIMEOUT_MS
+    const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+    const elapsed = Date.now() - new Date(session.startedAt).getTime();
+    if (elapsed > SESSION_TIMEOUT_MS && session.rounds.length === 0) {
+      log(
+        `PR #${session.request.prNumber} timed out — no output after ${Math.round(elapsed / 60000)}min. Releasing session.`,
+      );
+      state.activeSession = null;
+      return;
+    }
+
+    // Round timeout: no new output between rounds for ROUND_TIMEOUT_MS
+    const ROUND_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes between rounds
+    if (session.rounds.length > 0) {
+      const lastRoundTime = new Date(
+        session.rounds[session.rounds.length - 1]!.timestamp,
+      ).getTime();
+      if (Date.now() - lastRoundTime > ROUND_TIMEOUT_MS) {
+        log(
+          `PR #${session.request.prNumber} round timeout — no new output after ${Math.round((Date.now() - lastRoundTime) / 60000)}min. Completing session.`,
+        );
+        completeSession(session);
+        return;
+      }
     }
   }
 
@@ -252,6 +323,9 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
         `Headless review loop started (${envConfig?.role ?? "reviewer"}, poll ${options.pollIntervalMs}ms, max ${terminationConfig.maxRounds} rounds)`,
       );
 
+      // Write initial state
+      writeStateFile();
+
       // Initial poll
       pollOnce();
 
@@ -265,6 +339,7 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
         clearInterval(timer);
         timer = null;
       }
+      writeStateFile();
       log("Headless review loop stopped");
     },
 

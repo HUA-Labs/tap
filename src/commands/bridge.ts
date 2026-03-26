@@ -3,6 +3,8 @@ import { loadState, saveState, updateInstanceState } from "../state.js";
 import {
   startBridge,
   stopBridge,
+  restartBridge,
+  inferRestartMode,
   getBridgeStatus,
   loadBridgeState,
   getHeartbeatAge,
@@ -20,6 +22,7 @@ import {
   createAdapterContext,
   resolveInstanceId,
   parseArgs,
+  parseIntFlag,
   log,
   logSuccess,
   logError,
@@ -55,7 +58,7 @@ Subcommands:
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
-                                   Saved to state — only needed on first start
+                                   Overrides the stored name from 'tap add' when needed
   --all                            Start all registered app-server instances
   --busy-mode <steer|wait>         How to handle active turns (default: steer)
   --poll-seconds <n>               Inbox poll interval (default: 5)
@@ -93,14 +96,16 @@ function formatAppServerState(appServer: AppServerState): string {
 }
 
 function redactProtectedUrl(url: string): string {
+  // Subprotocol auth: token is no longer in the URL.
+  // Keep function for backward compat with old state files that may contain query tokens.
   try {
     const parsed = new URL(url);
     if (parsed.searchParams.has("tap_token")) {
-      parsed.searchParams.set("tap_token", "***");
+      parsed.searchParams.delete("tap_token");
     }
     return parsed.toString().replace(/\/$/, "");
   } catch {
-    return url.replace(/tap_token=[^&]+/g, "tap_token=***");
+    return url.replace(/[?&]tap_token=[^&]+/g, "");
   }
 }
 
@@ -371,18 +376,48 @@ async function bridgeStart(
       };
     }
     const busyMode = busyModeRaw as "steer" | "wait" | undefined;
-    const pollSeconds =
+    const pollSecondsRaw =
       typeof flags["poll-seconds"] === "string"
-        ? parseInt(flags["poll-seconds"], 10)
+        ? flags["poll-seconds"]
         : undefined;
-    const reconnectSeconds =
+    const reconnectSecondsRaw =
       typeof flags["reconnect-seconds"] === "string"
-        ? parseInt(flags["reconnect-seconds"], 10)
+        ? flags["reconnect-seconds"]
         : undefined;
-    const messageLookbackMinutes =
+    const lookbackRaw =
       typeof flags["message-lookback-minutes"] === "string"
-        ? parseInt(flags["message-lookback-minutes"], 10)
+        ? flags["message-lookback-minutes"]
         : undefined;
+
+    let pollSeconds: number | undefined;
+    let reconnectSeconds: number | undefined;
+    let messageLookbackMinutes: number | undefined;
+    try {
+      pollSeconds = parseIntFlag(pollSecondsRaw, "--poll-seconds", 1, 3600);
+      reconnectSeconds = parseIntFlag(
+        reconnectSecondsRaw,
+        "--reconnect-seconds",
+        1,
+        3600,
+      );
+      messageLookbackMinutes = parseIntFlag(
+        lookbackRaw,
+        "--message-lookback-minutes",
+        1,
+        10080,
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        command: "bridge",
+        instanceId,
+        runtime: instance.runtime,
+        code: "TAP_INVALID_ARGUMENT",
+        message: err instanceof Error ? err.message : String(err),
+        warnings: [],
+        data: {},
+      };
+    }
     const threadId =
       typeof flags["thread-id"] === "string" ? flags["thread-id"] : undefined;
     const ephemeral = flags["ephemeral"] === true;
@@ -463,8 +498,8 @@ async function bridgeStart(
       }
     }
 
-    // Update state with bridge info
-    const updated = { ...instance, bridge };
+    // Update state with bridge info + mode for restart preservation
+    const updated = { ...instance, bridge, manageAppServer, noAuth };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
 
@@ -1067,6 +1102,156 @@ function bridgeStatusOne(identifier: string): CommandResult {
 
 // ─── Command Router ────────────────────────────────────────────
 
+async function bridgeRestart(
+  identifier: string,
+  flags: Record<string, string | boolean>,
+): Promise<CommandResult> {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const resolved = resolveInstanceId(identifier, state);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: resolved.code,
+      message: resolved.message,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const instanceId = resolved.instanceId;
+  const inst = state.instances[instanceId];
+  if (!inst) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_INSTANCE_NOT_FOUND",
+      message: `Instance not found: ${instanceId}`,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const adapter = getAdapter(inst.runtime);
+  const ctx = {
+    ...createAdapterContext(state.commsDir, repoRoot),
+    instanceId,
+  };
+  const bridgeScript = adapter.resolveBridgeScript?.(ctx);
+
+  if (!bridgeScript) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_SCRIPT_MISSING",
+      message: `Bridge script not found for ${instanceId}`,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const { config: resolvedConfig } = resolveConfig({}, repoRoot);
+  const drainStr =
+    typeof flags["drain-timeout"] === "string"
+      ? flags["drain-timeout"]
+      : undefined;
+  let drainTimeout: number;
+  try {
+    drainTimeout = parseIntFlag(drainStr, "--drain-timeout", 1, 300) ?? 30;
+  } catch (err) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: instance.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message: err instanceof Error ? err.message : String(err),
+      warnings: [],
+      data: {},
+    };
+  }
+
+  logHeader(`@hua-labs/tap bridge restart ${instanceId}`);
+  log(`Drain timeout: ${drainTimeout}s`);
+
+  try {
+    // Use production helper for mode inference (tested in identity-restart.test.ts)
+    // Priority: flags > saved instance mode > bridge state inference
+    const currentBridgeState = loadBridgeState(ctx.stateDir, instanceId);
+    const { manageAppServer, noAuth } = inferRestartMode(
+      currentBridgeState,
+      {
+        noServer: flags["no-server"] === true ? true : undefined,
+        noAuth: flags["no-auth"] === true ? true : undefined,
+      },
+      {
+        manageAppServer: inst.manageAppServer,
+        noAuth: inst.noAuth,
+      },
+    );
+
+    const bridge = await restartBridge({
+      instanceId,
+      runtime: inst.runtime,
+      stateDir: ctx.stateDir,
+      commsDir: ctx.commsDir,
+      bridgeScript,
+      platform: ctx.platform,
+      agentName: inst.agentName ?? undefined,
+      runtimeCommand: resolvedConfig.runtimeCommand,
+      appServerUrl: resolvedConfig.appServerUrl,
+      repoRoot,
+      port: inst.port ?? undefined,
+      headless: inst.headless,
+      drainTimeoutSeconds: drainTimeout,
+      manageAppServer,
+      noAuth,
+    });
+
+    logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
+
+    // Save bridge mode for next restart (#799 follow-up)
+    const updated = { ...inst, bridge, manageAppServer, noAuth };
+    const newState = updateInstanceState(state, instanceId, updated);
+    saveState(repoRoot, newState);
+
+    return {
+      ok: true,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_OK",
+      message: `Bridge for ${instanceId} restarted (PID: ${bridge.pid})`,
+      warnings: [],
+      data: { pid: bridge.pid },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(msg);
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_BRIDGE_START_FAILED",
+      message: msg,
+      warnings: [],
+      data: {},
+    };
+  }
+}
+
 export async function bridgeCommand(args: string[]): Promise<CommandResult> {
   const { positional, flags } = parseArgs(args);
   const subcommand = positional[0];
@@ -1132,12 +1317,27 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
       return bridgeStatusAll();
     }
 
+    case "restart": {
+      if (!identifierArg) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message:
+            "Missing instance. Usage: npx @hua-labs/tap bridge restart <instance>",
+          warnings: [],
+          data: {},
+        };
+      }
+      return bridgeRestart(identifierArg, flags);
+    }
+
     default:
       return {
         ok: false,
         command: "bridge",
         code: "TAP_INVALID_ARGUMENT",
-        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, status`,
+        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status`,
         warnings: [],
         data: {},
       };

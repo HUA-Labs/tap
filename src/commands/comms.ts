@@ -3,7 +3,7 @@
  * M108: GitHub/comms repo connection.
  */
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
@@ -32,11 +32,6 @@ Examples:
 
 function isGitRepo(dir: string): boolean {
   return fs.existsSync(path.join(dir, ".git"));
-}
-
-function getCommsRepoUrl(repoRoot: string): string | null {
-  const config = loadSharedConfig(repoRoot);
-  return config?.commsRepoUrl ?? null;
 }
 
 function commsPull(commsDir: string): CommandResult {
@@ -124,10 +119,24 @@ function commsPush(commsDir: string): CommandResult {
 
     // Commit
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    execSync(`git commit -m "chore(comms): sync ${timestamp}"`, {
-      cwd: commsDir,
-      stdio: "pipe",
-    });
+    const commitResult = spawnSync(
+      "git",
+      ["commit", "-m", `chore(comms): sync ${timestamp}`],
+      { cwd: commsDir, stdio: "pipe", encoding: "utf-8" },
+    );
+    if (commitResult.status !== 0) {
+      const msg =
+        commitResult.stderr ||
+        `git commit exited with code ${commitResult.status}`;
+      return {
+        ok: false,
+        command: "comms",
+        code: "TAP_COMMS_PUSH_FAILED",
+        message: `Commit failed: ${msg}`,
+        warnings: [],
+        data: { commsDir },
+      };
+    }
 
     // Push
     execSync("git push", { cwd: commsDir, stdio: "pipe" });

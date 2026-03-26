@@ -31,6 +31,8 @@ Add a runtime instance (claude, codex, gemini). Patches the runtime's config fil
 
 ```bash
 tap add claude
+tap add codex
+tap add codex --agent-name reviewer
 tap add codex --name reviewer --port 4502
 tap add gemini
 ```
@@ -38,6 +40,7 @@ tap add gemini
 **Options:**
 
 - `--name <name>` — Instance name suffix (e.g. `codex-reviewer`)
+- `--agent-name <name>` — Stored display/bridge name for codex; defaults to the instance ID if omitted
 - `--port <number>` — Bridge port (auto-assigned from 4501 if omitted)
 - `--headless` — Enable headless mode (codex only)
 - `--role <role>` — Headless role: `reviewer`, `validator`, `long-running`
@@ -106,7 +109,7 @@ tap bridge status codex
 
 **Start options:**
 
-- `--agent-name <name>` — Agent identity (saved to state, only needed on first start)
+- `--agent-name <name>` — Agent identity override for bridge start; `tap add codex` already stores one by default
 - `--all` — Start all registered app-server instances
 - `--no-server` — Don't auto-start app-server (connect to existing)
 - `--no-auth` — Skip auth gateway; app-server listens directly on public port (localhost only)

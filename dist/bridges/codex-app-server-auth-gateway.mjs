@@ -4,7 +4,7 @@ import { resolve } from "path";
 import { pathToFileURL } from "url";
 import { timingSafeEqual } from "crypto";
 import { WebSocket, WebSocketServer } from "ws";
-var AUTH_QUERY_PARAM = "tap_token";
+var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 var CLOSE_UNAUTHORIZED = 4401;
 var CLOSE_UPSTREAM_ERROR = 1013;
 function normalizeUrl(value) {
@@ -105,7 +105,9 @@ async function main() {
   const host = listen.hostname === "localhost" ? "127.0.0.1" : listen.hostname;
   const port = Number.parseInt(listen.port, 10);
   if (!Number.isFinite(port) || port <= 0) {
-    throw new Error(`Gateway listen URL must include a valid port: ${options.listenUrl}`);
+    throw new Error(
+      `Gateway listen URL must include a valid port: ${options.listenUrl}`
+    );
   }
   const server = new WebSocketServer({
     host,
@@ -114,8 +116,14 @@ async function main() {
     perMessageDeflate: false
   });
   server.on("connection", (client, request) => {
+    const protocols = request.headers["sec-websocket-protocol"]?.split(",").map((s) => s.trim()) ?? [];
+    const authProtocol = protocols.find(
+      (p) => p.startsWith(AUTH_SUBPROTOCOL_PREFIX)
+    );
+    const subprotocolToken = authProtocol?.slice(AUTH_SUBPROTOCOL_PREFIX.length) ?? null;
     const requestUrl = new URL(request.url ?? "/", options.listenUrl);
-    const presentedToken = requestUrl.searchParams.get(AUTH_QUERY_PARAM);
+    const queryToken = requestUrl.searchParams.get("tap_token");
+    const presentedToken = subprotocolToken ?? queryToken;
     if (!tokensMatch(presentedToken, options.token)) {
       closeSocket(client, CLOSE_UNAUTHORIZED, "Unauthorized");
       return;

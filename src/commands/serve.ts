@@ -1,15 +1,44 @@
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { buildManagedMcpServerSpec } from "../adapters/common.js";
-import { createAdapterContext, findRepoRoot } from "../utils.js";
+import { createAdapterContext, findRepoRoot, log } from "../utils.js";
 import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
+
+const SERVE_HELP = `
+Usage:
+  tap-comms serve [options]
+
+Description:
+  Start the tap-comms MCP server over stdio. This command takes over the
+  process — it is intended to be launched by an MCP host (e.g. Claude Code).
+
+Options:
+  --comms-dir <path>    Override comms directory (also reads TAP_COMMS_DIR env)
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap serve
+  npx @hua-labs/tap serve --comms-dir /shared/comms
+`.trim();
 
 /**
  * serve is special: it takes over the process on success.
  * Only returns a CommandResult on error.
  */
 export async function serveCommand(args: string[]): Promise<CommandResult> {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(SERVE_HELP);
+    return {
+      ok: true,
+      command: "serve",
+      code: "TAP_NO_OP",
+      message: SERVE_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const repoRoot = findRepoRoot();
 
   let commsDir: string | undefined;
@@ -51,15 +80,23 @@ export async function serveCommand(args: string[]): Promise<CommandResult> {
     return {
       ok: false,
       command: "serve",
-      code: managed.sourcePath ? "TAP_SERVE_BUN_REQUIRED" : "TAP_SERVE_NO_SERVER",
+      code: managed.sourcePath
+        ? "TAP_SERVE_BUN_REQUIRED"
+        : "TAP_SERVE_NO_SERVER",
       message: fallbackMessage,
       warnings: [],
       data: {},
     };
   }
 
-  // Start MCP server using managed spec (bun or node fallback)
-  const child = spawn(managed.command, managed.args, {
+  // For serve, always use direct path (not npx launcher which would recurse)
+  const serveCommand = managed.command === "npx" ? "node" : managed.command;
+  const serveArgs = managed.command === "npx" && managed.sourcePath
+    ? [managed.sourcePath]
+    : managed.args;
+
+  // Start MCP server
+  const child = spawn(serveCommand, serveArgs, {
     stdio: "inherit",
     env: {
       ...process.env,

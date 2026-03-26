@@ -18,6 +18,8 @@ export interface AdapterContext {
   platform: Platform;
   /** Instance ID for TAP_AGENT_ID env injection. Set by 'tap add'. */
   instanceId?: string;
+  /** Agent name from state. Injected as TAP_AGENT_NAME in MCP config. */
+  agentName?: string;
 }
 
 // ─── Probe ──────────────────────────────────────────────────────
@@ -121,7 +123,7 @@ export interface HeadlessConfig {
 // ─── State ──────────────────────────────────────────────────────
 
 export interface AppServerAuthState {
-  mode: "query-token";
+  mode: "subprotocol" | "query-token";
   protectedUrl: string;
   upstreamUrl: string;
   tokenPath: string;
@@ -167,6 +169,10 @@ export interface InstanceState {
   bridge: BridgeState | null;
   /** Headless mode configuration. null = interactive (default). */
   headless: HeadlessConfig | null;
+  /** Whether bridge manages its own app-server process. Saved for restart mode preservation. */
+  manageAppServer?: boolean;
+  /** Whether bridge runs without auth gateway. Saved for restart mode preservation. */
+  noAuth?: boolean;
   warnings: string[];
 }
 

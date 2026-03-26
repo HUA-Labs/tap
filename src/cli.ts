@@ -12,7 +12,7 @@ import { doctorCommand } from "./commands/doctor.js";
 import { commsCommand } from "./commands/comms.js";
 import { version } from "./version.js";
 import { extractJsonFlag, emitResult, exitCode } from "./output.js";
-import { setJsonMode } from "./utils.js";
+import { resetLoggedWarnings, setJsonMode } from "./utils.js";
 import type { CommandName, CommandResult } from "./types.js";
 
 const HELP = `
@@ -72,6 +72,7 @@ function normalizeCommandName(command: string | undefined): CommandName {
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
   const { jsonMode, cleanArgs } = extractJsonFlag(rawArgs);
+  resetLoggedWarnings();
   setJsonMode(jsonMode);
   const command = cleanArgs[0];
 
@@ -134,8 +135,8 @@ async function main(): Promise<void> {
       case "serve": {
         // serve takes over stdio for MCP protocol — don't emit result on stdout
         const serveResult = await serveCommand(commandArgs);
-        if (!serveResult.ok) {
-          // Only emit on error (before MCP server starts)
+        if (!serveResult.ok || serveResult.code === "TAP_NO_OP") {
+          // Emit on error OR help (help returns ok+TAP_NO_OP but needs output)
           emitResult(serveResult, jsonMode);
         }
         process.exit(exitCode(serveResult));

@@ -10,6 +10,8 @@ interface AdapterContext {
     platform: Platform;
     /** Instance ID for TAP_AGENT_ID env injection. Set by 'tap add'. */
     instanceId?: string;
+    /** Agent name from state. Injected as TAP_AGENT_NAME in MCP config. */
+    agentName?: string;
 }
 interface ProbeResult {
     installed: boolean;
@@ -86,7 +88,7 @@ interface HeadlessConfig {
     qualitySeverityFloor: "critical" | "high" | "medium";
 }
 interface AppServerAuthState {
-    mode: "query-token";
+    mode: "subprotocol" | "query-token";
     protectedUrl: string;
     upstreamUrl: string;
     tokenPath: string;
@@ -129,6 +131,10 @@ interface InstanceState {
     bridge: BridgeState | null;
     /** Headless mode configuration. null = interactive (default). */
     headless: HeadlessConfig | null;
+    /** Whether bridge manages its own app-server process. Saved for restart mode preservation. */
+    manageAppServer?: boolean;
+    /** Whether bridge runs without auth gateway. Saved for restart mode preservation. */
+    noAuth?: boolean;
     warnings: string[];
 }
 /** @deprecated Use InstanceState. Kept for v1 state migration. */
@@ -199,6 +205,8 @@ interface TapSharedConfig {
     appServerUrl?: string;
     /** GitHub URL for the comms repository (used by `tap comms pull/push`). */
     commsRepoUrl?: string;
+    /** Control tower agent name. Used for auto-notify on new agent join (M111). */
+    towerName?: string;
 }
 /**
  * Local config (tap-config.local.json) — gitignored, machine-specific overrides.
@@ -214,6 +222,7 @@ interface TapResolvedConfig {
     stateDir: string;
     runtimeCommand: string;
     appServerUrl: string;
+    towerName: string | null;
 }
 /** Config resolution source for diagnostics. */
 type ConfigSource = "cli-flag" | "env" | "local-config" | "shared-config" | "legacy-shell-config" | "auto";
@@ -239,6 +248,46 @@ declare function resolveConfig(overrides?: ConfigOverrides, startDir?: string): 
 declare function saveSharedConfig(repoRoot: string, config: TapSharedConfig): void;
 declare function saveLocalConfig(repoRoot: string, config: TapLocalConfig): void;
 
+interface BridgeStartOptions {
+    instanceId: InstanceId;
+    runtime: RuntimeName;
+    stateDir: string;
+    commsDir: string;
+    bridgeScript: string;
+    platform: Platform;
+    agentName?: string;
+    runtimeCommand?: string;
+    appServerUrl?: string;
+    repoRoot?: string;
+    port?: number;
+    /** Headless configuration. Passed as env vars to the bridge process. */
+    headless?: HeadlessConfig | null;
+    /** Bridge script operational flags (forwarded to codex-app-server-bridge.ts) */
+    busyMode?: "steer" | "wait";
+    pollSeconds?: number;
+    reconnectSeconds?: number;
+    messageLookbackMinutes?: number;
+    threadId?: string;
+    ephemeral?: boolean;
+    processExistingMessages?: boolean;
+    manageAppServer?: boolean;
+    /** Skip auth gateway — app-server listens directly on the public port (localhost only). */
+    noAuth?: boolean;
+}
+interface RestartBridgeOptions extends BridgeStartOptions {
+    /** Max seconds to wait for active turn to complete before killing. Default: 30 */
+    drainTimeoutSeconds?: number;
+}
+/**
+ * Graceful bridge restart: wait for active turn → cleanup → stop → start.
+ * Prevents message loss during restart by draining active work first
+ * and replaying unprocessed messages on the new instance.
+ *
+ * For headless instances: drain phase cleans up headless dispatch files
+ * to prevent the new bridge from re-injecting completed review requests.
+ * (별 finding: eager marking + replay collision)
+ */
+declare function restartBridge(options: RestartBridgeOptions): Promise<BridgeState>;
 declare function rotateLog(logPath: string): void;
 /**
  * Update the heartbeat timestamp for a running bridge.
@@ -355,6 +404,19 @@ declare function startAgents(options?: AgentControlOptions): Promise<AgentContro
  * Always operates on the cwd-based repo (same as CLI commands).
  */
 declare function stopAgents(): Promise<AgentControlResult>;
+interface HealthReport {
+    ok: boolean;
+    timestamp: string;
+    bridges: DashboardSnapshot["bridges"];
+    agents: DashboardSnapshot["agents"];
+    warnings: DashboardSnapshot["warnings"];
+    headless: Record<string, unknown>[];
+}
+/**
+ * Health check that combines dashboard snapshot with headless state.
+ * Consumed by monitoring tools (Uptime Kuma, cron, autopilot).
+ */
+declare function getHealthReport(options?: StateApiOptions): HealthReport;
 /**
  * Resolve tap configuration for API consumers.
  * Returns paths and settings without requiring CLI args.
@@ -380,6 +442,8 @@ declare function getConfig(options?: StateApiOptions): {
 interface HttpServerOptions extends StateApiOptions {
     /** Port to listen on (default: 4580) */
     port?: number;
+    /** Pre-set API token (default: auto-generated) */
+    token?: string;
 }
 /**
  * Start a localhost-only HTTP server for the tap State API.
@@ -387,6 +451,7 @@ interface HttpServerOptions extends StateApiOptions {
  */
 declare function startHttpServer(options?: HttpServerOptions): Promise<{
     port: number;
+    token: string;
     close: () => Promise<void>;
 }>;
 
@@ -431,4 +496,4 @@ declare function resolveNodeRuntime(configCommand: string, repoRoot: string): Re
  */
 declare function buildRuntimeEnv(repoRoot: string, baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 
-export { type AdapterContext, type AgentControlOptions, type AgentControlResult, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startAgents, startHttpServer, stateExists, stopAgents, streamEvents, updateBridgeHeartbeat, version };
+export { type AdapterContext, type AgentControlOptions, type AgentControlResult, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type HealthReport, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHealthReport, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, restartBridge, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startAgents, startHttpServer, stateExists, stopAgents, streamEvents, updateBridgeHeartbeat, version };

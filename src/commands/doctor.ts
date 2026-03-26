@@ -15,6 +15,7 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { loadState, saveState, getInstalledInstances } from "../state.js";
 import {
@@ -326,41 +327,289 @@ function checkMcpServer(repoRoot: string): Check[] {
   const checks: Check[] = [];
 
   const mcpJson = join(repoRoot, ".mcp.json");
-  if (existsSync(mcpJson)) {
-    try {
-      const config = JSON.parse(readFileSync(mcpJson, "utf-8"));
-      const hasTapComms = config?.mcpServers?.["tap-comms"];
-      checks.push({
-        name: "MCP config (.mcp.json)",
-        status: hasTapComms ? PASS : WARN,
-        message: hasTapComms
-          ? `command: ${hasTapComms.command}`
-          : "tap-comms not configured",
-      });
-
-      // Check if MCP command path exists
-      if (hasTapComms?.args?.[0]) {
-        const mcpScript = hasTapComms.args[0];
-        checks.push({
-          name: "MCP server script",
-          status: existsSync(mcpScript) ? PASS : FAIL,
-          message: existsSync(mcpScript)
-            ? mcpScript
-            : `Not found: ${mcpScript}`,
-        });
-      }
-    } catch {
-      checks.push({
-        name: "MCP config (.mcp.json)",
-        status: WARN,
-        message: "File exists but invalid JSON",
-      });
-    }
-  } else {
+  if (!existsSync(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
       message: "Not found — MCP channel notifications won't work",
+    });
+    return checks;
+  }
+
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(readFileSync(mcpJson, "utf-8"));
+  } catch {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "File exists but invalid JSON",
+    });
+    return checks;
+  }
+
+  const hasTapComms = (config?.mcpServers as Record<string, unknown>)?.[
+    "tap-comms"
+  ] as
+    | {
+        command?: string;
+        args?: string[];
+        cwd?: string;
+        env?: Record<string, string>;
+      }
+    | undefined;
+
+  if (!hasTapComms) {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "tap-comms not configured",
+    });
+    return checks;
+  }
+
+  checks.push({
+    name: "MCP config (.mcp.json)",
+    status: PASS,
+    message: `command: ${hasTapComms.command}`,
+  });
+
+  // Check if MCP command is available (absolute path or PATH lookup)
+  if (hasTapComms.command) {
+    const cmd = hasTapComms.command;
+    let cmdAvailable = existsSync(cmd); // Absolute path check
+    if (!cmdAvailable) {
+      // PATH-based command — try running with --version
+      try {
+        execSync(`"${cmd}" --version`, {
+          stdio: "pipe",
+          timeout: 5000,
+        });
+        cmdAvailable = true;
+      } catch {
+        // command not found or failed
+      }
+    }
+    checks.push({
+      name: "MCP command binary",
+      status: cmdAvailable ? PASS : FAIL,
+      message: cmdAvailable
+        ? cmd
+        : `Not found: ${cmd} (checked PATH and absolute)`,
+    });
+  }
+
+  // Check if MCP server script/args exist
+  if (hasTapComms.args?.[0]) {
+    const mcpScript = hasTapComms.args[0];
+    checks.push({
+      name: "MCP server script",
+      status: existsSync(mcpScript) ? PASS : FAIL,
+      message: existsSync(mcpScript) ? mcpScript : `Not found: ${mcpScript}`,
+    });
+
+    // Warn if using compiled .mjs with node (bun:sqlite fallback)
+    if (
+      mcpScript.endsWith(".mjs") &&
+      hasTapComms.command &&
+      !hasTapComms.command.includes("bun")
+    ) {
+      checks.push({
+        name: "MCP SQLite support",
+        status: WARN,
+        message:
+          "Node + .mjs = no SQLite (bun:sqlite unavailable). Use bun or .ts source for full features.",
+      });
+    }
+  }
+
+  // Check cwd field — missing cwd caused MCP connection failures in Gen 11
+  if (!hasTapComms.cwd) {
+    checks.push({
+      name: "MCP cwd field",
+      status: WARN,
+      message:
+        "No cwd in .mcp.json — worktree sessions may fail to resolve MCP server dependencies",
+    });
+  } else {
+    checks.push({
+      name: "MCP cwd field",
+      status: PASS,
+      message: hasTapComms.cwd,
+    });
+  }
+
+  // Check TAP_COMMS_DIR in env
+  const envCommsDir = hasTapComms.env?.TAP_COMMS_DIR;
+  if (!envCommsDir) {
+    checks.push({
+      name: "MCP TAP_COMMS_DIR",
+      status: FAIL,
+      message:
+        "TAP_COMMS_DIR not set in .mcp.json env — server will fail to start",
+    });
+  } else {
+    checks.push({
+      name: "MCP TAP_COMMS_DIR",
+      status: existsSync(envCommsDir) ? PASS : FAIL,
+      message: existsSync(envCommsDir)
+        ? envCommsDir
+        : `Directory not found: ${envCommsDir}`,
+    });
+  }
+
+  // Note about --resume/--continue cache behavior
+  // (Can't detect at runtime, but document in output)
+  checks.push({
+    name: "MCP session cache",
+    status: PASS,
+    message:
+      "If .mcp.json was changed mid-session, restart Claude (Ctrl+C → claude --resume) to reload",
+  });
+
+  return checks;
+}
+
+// ── Bridge Turn Health (zombie detection) ───────────────────────────
+
+function checkBridgeTurnHealth(repoRoot: string): Check[] {
+  const checks: Check[] = [];
+  const tmpDir = join(repoRoot, ".tmp");
+  if (!existsSync(tmpDir)) return checks;
+
+  // Only scan dirs that belong to active instances or their agents
+  const state = loadState(repoRoot);
+  const activeMatchers = new Set<string>();
+  if (state) {
+    for (const [id, inst] of Object.entries(state.instances)) {
+      if (inst?.installed && inst.bridgeMode === "app-server") {
+        activeMatchers.add(id);
+        // Also match agentName-based dirs (manual runbook pattern)
+        if (inst.agentName) activeMatchers.add(inst.agentName);
+      }
+    }
+  }
+
+  let dirs: string[];
+  try {
+    dirs = readdirSync(tmpDir).filter((d) => {
+      if (!d.startsWith("codex-app-server-bridge")) return false;
+      const suffix = d.replace("codex-app-server-bridge-", "");
+      if (activeMatchers.size === 0) return true; // No state → scan all
+      for (const matcher of activeMatchers) {
+        if (suffix === matcher || suffix.startsWith(matcher)) return true;
+      }
+      return false;
+    });
+  } catch {
+    return checks;
+  }
+
+  for (const dir of dirs) {
+    const heartbeatPath = join(tmpDir, dir, "heartbeat.json");
+    if (!existsSync(heartbeatPath)) continue;
+
+    let heartbeat: {
+      updatedAt?: string;
+      activeTurnId?: string | null;
+      lastTurnStatus?: string;
+      lastNotificationAt?: string;
+      lastNotificationMethod?: string;
+      connected?: boolean;
+      initialized?: boolean;
+      consecutiveFailureCount?: number;
+      lastError?: string | null;
+    };
+
+    try {
+      heartbeat = JSON.parse(readFileSync(heartbeatPath, "utf-8"));
+    } catch {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: WARN,
+        message: "heartbeat.json unreadable",
+      });
+      continue;
+    }
+
+    // Calculate heartbeat age
+    const heartbeatAge = heartbeat.updatedAt
+      ? Math.floor(
+          (Date.now() - new Date(heartbeat.updatedAt).getTime()) / 1000,
+        )
+      : null;
+
+    // Not connected
+    if (heartbeat.connected === false || heartbeat.initialized === false) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: FAIL,
+        message: `disconnected (connected=${heartbeat.connected}, initialized=${heartbeat.initialized})${heartbeat.lastError ? ` — ${heartbeat.lastError}` : ""}`,
+      });
+      continue;
+    }
+
+    // Dead — no heartbeat update for 5+ minutes
+    if (heartbeatAge !== null && heartbeatAge > 300) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: FAIL,
+        message: `dead — heartbeat ${Math.round(heartbeatAge)}s ago, no updates`,
+      });
+      continue;
+    }
+
+    // Zombie — active turn with no notification progress for 30+ minutes (Fix 1)
+    if (heartbeat.activeTurnId) {
+      const ZOMBIE_THRESHOLD = 30 * 60; // 30 minutes
+      const lastNotifAge = heartbeat.lastNotificationAt
+        ? Math.floor(
+            (Date.now() - new Date(heartbeat.lastNotificationAt).getTime()) /
+              1000,
+          )
+        : null;
+
+      // Primary: use lastNotificationAt to detect stuck turns
+      if (lastNotifAge !== null && lastNotifAge > ZOMBIE_THRESHOLD) {
+        checks.push({
+          name: `turn: ${dir}`,
+          status: WARN,
+          message: `zombie — active turn ${heartbeat.activeTurnId}, last notification ${Math.round(lastNotifAge / 60)}m ago (${heartbeat.lastNotificationMethod ?? "?"}). MCP tools may not be exposed in app-server turns — try bridge restart${heartbeat.lastError ? `. Error: ${heartbeat.lastError}` : ""}`,
+        });
+        continue;
+      }
+
+      // Fallback: consecutive failures + active turn = zombie signal
+      const failures = heartbeat.consecutiveFailureCount ?? 0;
+      if (failures > 0 && heartbeatAge !== null && heartbeatAge < 60) {
+        checks.push({
+          name: `turn: ${dir}`,
+          status: WARN,
+          message: `zombie — active turn ${heartbeat.activeTurnId}, ${failures} consecutive failures. MCP tools may not be exposed in app-server turns — try bridge restart${heartbeat.lastError ? `. Error: ${heartbeat.lastError}` : ""}`,
+        });
+        continue;
+      }
+    }
+
+    // Slow — heartbeat fresh but lots of failures
+    const failures = heartbeat.consecutiveFailureCount ?? 0;
+    if (failures > 5) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: WARN,
+        message: `slow — ${failures} consecutive failures, last: ${heartbeat.lastError ?? "unknown"}`,
+      });
+      continue;
+    }
+
+    // Healthy
+    const turnInfo = heartbeat.activeTurnId
+      ? `active turn ${heartbeat.activeTurnId}`
+      : `idle (last: ${heartbeat.lastTurnStatus ?? "none"})`;
+    checks.push({
+      name: `turn: ${dir}`,
+      status: PASS,
+      message: `healthy — ${turnInfo}, heartbeat ${heartbeatAge ?? "?"}s ago`,
     });
   }
 
@@ -382,9 +631,39 @@ function renderCheck(check: Check, fixMode: boolean): string {
   return `  ${icon} ${check.name}${msg}`;
 }
 
+const DOCTOR_HELP = `
+Usage:
+  tap-comms doctor [options]
+
+Description:
+  Diagnose tap infrastructure health: comms directory, instances, bridges,
+  message lifecycle, and MCP server configuration.
+
+Options:
+  --fix                 Auto-repair detected issues where possible
+  --comms-dir <path>    Override comms directory
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap doctor
+  npx @hua-labs/tap doctor --fix
+`.trim();
+
 // ── Command ─────────────────────────────────────────────────────────────
 
 export async function doctorCommand(args: string[]): Promise<CommandResult> {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(DOCTOR_HELP);
+    return {
+      ok: true,
+      command: "doctor",
+      code: "TAP_NO_OP",
+      message: DOCTOR_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const repoRoot = findRepoRoot();
 
   // Parse flags
@@ -413,12 +692,19 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
     checks.push(...checkInstances(repoRoot, config.stateDir));
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
+    checks.push(...checkBridgeTurnHealth(repoRoot));
     return checks;
   }
 
   // Initial scan
   const initialChecks = runAllChecks();
-  for (const section of ["Comms", "Instances", "Messages", "MCP"] as const) {
+  for (const section of [
+    "Comms",
+    "Instances",
+    "Messages",
+    "MCP",
+    "Turns",
+  ] as const) {
     const sectionChecks = {
       Comms: initialChecks.filter((c) =>
         [
@@ -441,6 +727,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
       MCP: initialChecks.filter(
         (c) => c.name.startsWith("MCP") || c.name === "MCP server script",
       ),
+      Turns: initialChecks.filter((c) => c.name.startsWith("turn:")),
     }[section];
     if (sectionChecks.length > 0) {
       log(`${section}:`);

@@ -60,6 +60,19 @@ export function canWriteOrCreate(filePath: string): boolean {
   }
 }
 
+/** Detect paths that are ephemeral (npm _npx cache, fnm multishell, temp dirs). */
+function isEphemeralPath(p: string): boolean {
+  const normalized = p.replace(/\\/g, "/").toLowerCase();
+  return (
+    normalized.includes("/_npx/") ||
+    normalized.includes("\\_npx\\") ||
+    normalized.includes("/fnm_multishells/") ||
+    normalized.includes("\\fnm_multishells\\") ||
+    normalized.includes("/tmp/") ||
+    normalized.includes("\\temp\\")
+  );
+}
+
 export function findLocalTapCommsSource(ctx: AdapterContext): string | null {
   const candidates = [
     path.join(
@@ -144,8 +157,10 @@ export function buildManagedMcpServerSpec(
   const issues: string[] = [];
 
   const env: Record<string, string> = {
-    TAP_AGENT_NAME: "<set-per-session>",
+    TAP_AGENT_NAME: ctx.agentName ?? "<set-per-session>",
     TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
+    TAP_STATE_DIR: toForwardSlashPath(ctx.stateDir),
+    TAP_REPO_ROOT: toForwardSlashPath(ctx.repoRoot),
   };
   if (instanceId) {
     env.TAP_AGENT_ID = instanceId;
@@ -160,10 +175,32 @@ export function buildManagedMcpServerSpec(
 
   // Prefer bun for .ts source files; for compiled .mjs, node works too
   const isBundled = sourcePath.endsWith(".mjs");
+  const isEphemeralSource = isEphemeralPath(sourcePath);
   let command: string | null = bunCommand;
+  let args: string[] = [toForwardSlashPath(sourcePath)];
 
-  if (!command && isBundled) {
-    command = process.execPath; // node — .mjs is compiled JS
+  // Ephemeral source path (npx cache) → always use stable launcher, even with bun
+  // This prevents persisting _npx cache paths in .mcp.json / config.toml
+  if (isEphemeralSource && isBundled) {
+    command = "npx";
+    args = ["@hua-labs/tap", "serve"];
+    warnings.push(
+      "Detected npx cache path. Using `npx @hua-labs/tap serve` as stable MCP launcher.",
+    );
+  } else if (!command && isBundled) {
+    // No bun, bundled .mjs — check node path stability
+    const isEphemeralNode = isEphemeralPath(process.execPath);
+
+    if (isEphemeralNode) {
+      // fnm multishell node → use bare `node` (resolved from PATH at runtime)
+      command = "node";
+      warnings.push(
+        "Detected ephemeral node path. Using `node` from PATH for MCP config stability.",
+      );
+    } else {
+      command = toForwardSlashPath(process.execPath);
+    }
+
     warnings.push(
       "bun not found; using node to run the compiled MCP server. Install bun for better performance.",
     );
@@ -177,10 +214,8 @@ export function buildManagedMcpServerSpec(
   }
 
   return {
-    command: isBundled && command === process.execPath
-      ? toForwardSlashPath(command)
-      : command,
-    args: [toForwardSlashPath(sourcePath)],
+    command,
+    args,
     env,
     sourcePath,
     warnings,

@@ -60,6 +60,7 @@ export {
   updateBridgeHeartbeat,
   getHeartbeatAge,
   rotateLog,
+  restartBridge,
 } from "./engine/bridge.js";
 
 // Dashboard / State API
@@ -78,11 +79,13 @@ export type {
   EventStreamOptions,
   AgentControlOptions,
   AgentControlResult,
+  HealthReport,
 } from "./api/state.js";
 export {
   getDashboardSnapshot,
   streamEvents,
   getConfig,
+  getHealthReport,
   startAgents,
   stopAgents,
 } from "./api/state.js";

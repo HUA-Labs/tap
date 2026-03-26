@@ -12,7 +12,34 @@ import { rollbackRuntime } from "../engine/rollback.js";
 import { stopBridge } from "../engine/bridge.js";
 import type { CommandResult } from "../types.js";
 
+const REMOVE_HELP = `
+Usage:
+  tap-comms remove <instance>
+
+Description:
+  Remove a registered instance, stop its bridge, and rollback config changes.
+
+Arguments:
+  <instance>    Instance ID or runtime name (e.g. claude, codex-reviewer)
+
+Examples:
+  npx @hua-labs/tap remove claude
+  npx @hua-labs/tap remove codex-reviewer
+`.trim();
+
 export async function removeCommand(args: string[]): Promise<CommandResult> {
+  if (args.includes("--help") || args.includes("-h")) {
+    log(REMOVE_HELP);
+    return {
+      ok: true,
+      command: "remove",
+      code: "TAP_NO_OP",
+      message: REMOVE_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const identifier = args.find((a) => !a.startsWith("-"));
 
   if (!identifier) {

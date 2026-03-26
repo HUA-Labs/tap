@@ -453,14 +453,43 @@ function createHeadlessLoop(options) {
     lastPollAt: null
   };
   let timer = null;
-  function log(msg) {
+  function log2(msg) {
     const ts = (/* @__PURE__ */ new Date()).toISOString();
     console.error(`[${ts}] [headless-loop] ${msg}`);
+  }
+  function writeStateFile() {
+    try {
+      const payload = {
+        running: state.running,
+        agentName: options.agentName,
+        generation: options.generation,
+        pollIntervalMs: options.pollIntervalMs,
+        completedSessions: state.completedSessions,
+        lastPollAt: state.lastPollAt,
+        activeReview: state.activeSession ? {
+          prNumber: state.activeSession.request.prNumber,
+          round: state.activeSession.rounds.length + 1,
+          startedAt: state.activeSession.startedAt,
+          sender: state.activeSession.request.sender
+        } : null,
+        terminationConfig: {
+          maxRounds: terminationConfig.maxRounds,
+          qualitySeverityFloor: terminationConfig.qualitySeverityFloor
+        },
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const filePath = path6.join(options.stateDir, "headless-state.json");
+      const tmp = `${filePath}.tmp.${process.pid}`;
+      fs7.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+      fs7.renameSync(tmp, filePath);
+    } catch {
+    }
   }
   function pollOnce() {
     state.lastPollAt = (/* @__PURE__ */ new Date()).toISOString();
     if (state.activeSession) {
       checkActiveSession();
+      writeStateFile();
       return;
     }
     const requests = scanInboxForReviews(
@@ -469,12 +498,16 @@ function createHeadlessLoop(options) {
       options.generation,
       options.agentName
     );
-    if (requests.length === 0) return;
+    if (requests.length === 0) {
+      writeStateFile();
+      return;
+    }
     const request = requests[0];
     startReviewSession(request);
+    writeStateFile();
   }
   function startReviewSession(request) {
-    log(`Starting review for PR #${request.prNumber}`);
+    log2(`Starting review for PR #${request.prNumber}`);
     markAsProcessed(options.stateDir, request);
     try {
       writeReviewReceipt(options.commsDir, request, options.agentName);
@@ -500,9 +533,9 @@ function createHeadlessLoop(options) {
           options.agentName
         )
       };
-      log(`Dispatched review prompt for PR #${request.prNumber} (round 1)`);
+      log2(`Dispatched review prompt for PR #${request.prNumber} (round 1)`);
     } catch (err) {
-      log(
+      log2(
         `Failed to start review for PR #${request.prNumber}: ${err instanceof Error ? err.message : String(err)}`
       );
       unmarkProcessed(options.stateDir, request);
@@ -512,34 +545,63 @@ function createHeadlessLoop(options) {
     if (!state.activeSession) return;
     const session = state.activeSession;
     const revPath = session.reviewFilePath;
-    if (!fs7.existsSync(revPath)) return;
-    const stat = fs7.statSync(revPath);
-    const lastRound = session.rounds[session.rounds.length - 1];
-    const lastCheck = lastRound?.timestamp ?? session.startedAt;
-    if (stat.mtime.toISOString() <= lastCheck) return;
-    const roundNum = session.rounds.length + 1;
-    const round = parseReviewOutput(revPath, roundNum);
-    if (!round) return;
-    session.rounds.push(round);
-    log(
-      `PR #${session.request.prNumber} round ${roundNum}: ${round.findingCount} findings, ${round.suggestedDiffLines} suggested diff lines`
-    );
-    const stopSignalPath = path6.join(options.stateDir, "stop-signal");
-    const ctx = {
-      round: roundNum,
-      rounds: session.rounds,
-      stopSignalPath,
-      config: terminationConfig
-    };
-    const result = evaluate(ctx);
-    if (result.verdict === "stop") {
-      log(
-        `PR #${session.request.prNumber} terminated: ${result.reason} (${result.strategy})`
+    let hasNewOutput = false;
+    if (fs7.existsSync(revPath)) {
+      const stat = fs7.statSync(revPath);
+      const lastRound = session.rounds[session.rounds.length - 1];
+      const lastCheck = lastRound?.timestamp ?? session.startedAt;
+      hasNewOutput = stat.mtime.toISOString() > lastCheck;
+    }
+    if (hasNewOutput) {
+      const roundNum = session.rounds.length + 1;
+      const round = parseReviewOutput(revPath, roundNum);
+      if (!round) return;
+      session.rounds.push(round);
+      log2(
+        `PR #${session.request.prNumber} round ${roundNum}: ${round.findingCount} findings, ${round.suggestedDiffLines} suggested diff lines`
       );
-      completeSession(session);
-    } else {
-      log(`PR #${session.request.prNumber} continues to round ${roundNum + 1}`);
-      dispatchFollowUp(session, roundNum + 1);
+      const stopSignalPath = path6.join(options.stateDir, "stop-signal");
+      const ctx = {
+        round: roundNum,
+        rounds: session.rounds,
+        stopSignalPath,
+        config: terminationConfig
+      };
+      const result = evaluate(ctx);
+      if (result.verdict === "stop") {
+        log2(
+          `PR #${session.request.prNumber} terminated: ${result.reason} (${result.strategy})`
+        );
+        completeSession(session);
+      } else {
+        log2(
+          `PR #${session.request.prNumber} continues to round ${roundNum + 1}`
+        );
+        dispatchFollowUp(session, roundNum + 1);
+      }
+      return;
+    }
+    const SESSION_TIMEOUT_MS = 10 * 60 * 1e3;
+    const elapsed = Date.now() - new Date(session.startedAt).getTime();
+    if (elapsed > SESSION_TIMEOUT_MS && session.rounds.length === 0) {
+      log2(
+        `PR #${session.request.prNumber} timed out \u2014 no output after ${Math.round(elapsed / 6e4)}min. Releasing session.`
+      );
+      state.activeSession = null;
+      return;
+    }
+    const ROUND_TIMEOUT_MS = 5 * 60 * 1e3;
+    if (session.rounds.length > 0) {
+      const lastRoundTime = new Date(
+        session.rounds[session.rounds.length - 1].timestamp
+      ).getTime();
+      if (Date.now() - lastRoundTime > ROUND_TIMEOUT_MS) {
+        log2(
+          `PR #${session.request.prNumber} round timeout \u2014 no new output after ${Math.round((Date.now() - lastRoundTime) / 6e4)}min. Completing session.`
+        );
+        completeSession(session);
+        return;
+      }
     }
   }
   function dispatchFollowUp(session, round) {
@@ -565,20 +627,21 @@ function createHeadlessLoop(options) {
     }
     state.activeSession = null;
     state.completedSessions++;
-    log(
+    log2(
       `PR #${session.request.prNumber} review complete (${session.rounds.length} rounds)`
     );
   }
   return {
     start() {
       if (!isHeadlessReviewer()) {
-        log("Not in headless mode \u2014 loop not started");
+        log2("Not in headless mode \u2014 loop not started");
         return;
       }
       state.running = true;
-      log(
+      log2(
         `Headless review loop started (${envConfig?.role ?? "reviewer"}, poll ${options.pollIntervalMs}ms, max ${terminationConfig.maxRounds} rounds)`
       );
+      writeStateFile();
       pollOnce();
       timer = setInterval(pollOnce, options.pollIntervalMs);
     },
@@ -588,7 +651,8 @@ function createHeadlessLoop(options) {
         clearInterval(timer);
         timer = null;
       }
-      log("Headless review loop stopped");
+      writeStateFile();
+      log2("Headless review loop stopped");
     },
     getState() {
       return { ...state };
@@ -620,6 +684,10 @@ var _noGitWarned = false;
 function _setNoGitWarned() {
   _noGitWarned = true;
 }
+var _jsonMode = false;
+function log(message) {
+  if (!_jsonMode) console.log(`  ${message}`);
+}
 
 // src/config/resolve.ts
 var SHARED_CONFIG_FILE = "tap-config.json";
@@ -634,8 +702,8 @@ function findRepoRoot(startDir = process.cwd()) {
     if (fs2.existsSync(path2.join(dir, "package.json"))) {
       if (!_noGitWarned) {
         _setNoGitWarned();
-        console.error(
-          "[tap] warning: No .git directory found. Resolved via package.json. Use --comms-dir to specify explicitly."
+        log(
+          "No .git directory found. Resolved tap root via package.json. That's fine outside git; use --comms-dir to choose a different comms location."
         );
       }
       return dir;
@@ -646,8 +714,8 @@ function findRepoRoot(startDir = process.cwd()) {
   }
   if (!_noGitWarned) {
     _setNoGitWarned();
-    console.error(
-      "[tap] warning: No git repository found. Using cwd as root. Run 'git init' or use --comms-dir."
+    log(
+      "No git repository or package.json found. Using the current directory as tap root. That's fine outside git; use --comms-dir to choose a different comms location."
     );
   }
   return process.cwd();
@@ -693,7 +761,8 @@ function resolveConfig(overrides = {}, startDir) {
     commsDir: "auto",
     stateDir: "auto",
     runtimeCommand: "auto",
-    appServerUrl: "auto"
+    appServerUrl: "auto",
+    towerName: "auto"
   };
   let commsDir;
   if (overrides.commsDir) {
@@ -762,8 +831,16 @@ function resolveConfig(overrides = {}, startDir) {
   } else {
     appServerUrl = DEFAULT_APP_SERVER_URL;
   }
+  const towerName = local.towerName ?? shared.towerName ?? null;
   return {
-    config: { repoRoot, commsDir, stateDir, runtimeCommand, appServerUrl },
+    config: {
+      repoRoot,
+      commsDir,
+      stateDir,
+      runtimeCommand,
+      appServerUrl,
+      towerName
+    },
     sources
   };
 }

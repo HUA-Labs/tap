@@ -14,6 +14,7 @@ interface Options {
     waitAfterDispatchSeconds: number;
     appServerUrl: string;
     connectAppServerUrl: string;
+    gatewayToken: string | null;
     gatewayTokenFile: string | null;
     busyMode: BusyMode;
     threadId: string | null;

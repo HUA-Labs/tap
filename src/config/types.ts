@@ -15,6 +15,8 @@ export interface TapSharedConfig {
   appServerUrl?: string;
   /** GitHub URL for the comms repository (used by `tap comms pull/push`). */
   commsRepoUrl?: string;
+  /** Control tower agent name. Used for auto-notify on new agent join (M111). */
+  towerName?: string;
 }
 
 /**
@@ -32,6 +34,7 @@ export interface TapResolvedConfig {
   stateDir: string;
   runtimeCommand: string;
   appServerUrl: string;
+  towerName: string | null;
 }
 
 /** Config resolution source for diagnostics. */

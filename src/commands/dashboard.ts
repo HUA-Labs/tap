@@ -110,10 +110,43 @@ function renderSnapshot(snapshot: DashboardSnapshot): void {
   }
 }
 
+const DASHBOARD_HELP = `
+Usage:
+  tap-comms dashboard [options]
+
+Description:
+  Display a unified ops dashboard: agents, bridges, PRs, and warnings.
+
+Options:
+  --json                Output snapshot as JSON
+  --watch               Refresh dashboard on an interval
+  --interval <seconds>  Refresh interval in seconds (default: 5, min: 2)
+  --comms-dir <path>    Override comms directory
+  --help, -h            Show help
+
+Examples:
+  npx @hua-labs/tap dashboard
+  npx @hua-labs/tap dashboard --watch --interval 10
+  npx @hua-labs/tap dashboard --json
+`.trim();
+
 // ─── Command ───────────────────────────────────────────────────
 
 export async function dashboardCommand(args: string[]): Promise<CommandResult> {
   const { flags } = parseArgs(args);
+
+  if (flags["help"] === true || flags["h"] === true) {
+    log(DASHBOARD_HELP);
+    return {
+      ok: true,
+      command: "dashboard",
+      code: "TAP_NO_OP",
+      message: DASHBOARD_HELP,
+      warnings: [],
+      data: {},
+    };
+  }
+
   const jsonMode = flags["json"] === true;
   const watchMode = flags["watch"] === true;
   const intervalStr =

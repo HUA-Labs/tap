@@ -391,7 +391,7 @@ export async function initWorktreeCommand(
       ok: true,
       command: "init-worktree",
       code: "TAP_NO_OP",
-      message: "init-worktree help",
+      message: INIT_WORKTREE_HELP,
       warnings: [],
       data: {},
     };

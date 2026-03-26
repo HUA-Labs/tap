@@ -127,15 +127,16 @@ function verifyManagedToml(
   }
 
   if (mainTable && managed.command) {
+    const expectedArgs = managed.args
+      .map((a) => `"${a.replace(/\\/g, "\\\\")}"`)
+      .join(", ");
     checks.push({
       name: "Managed command configured",
       passed:
         mainTable.includes(
           `command = "${managed.command.replace(/\\/g, "\\\\")}"`,
         ) &&
-        mainTable.includes(
-          `args = ["${managed.args[0]?.replace(/\\/g, "\\\\") ?? ""}"]`,
-        ),
+        mainTable.includes(`args = [${expectedArgs}]`),
       message: "Managed tap-comms command/args do not match expected values",
     });
   }

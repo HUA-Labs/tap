@@ -6,10 +6,13 @@
  * M105 P2: startAgents, stopAgents (write — wraps tap up/down)
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { collectDashboardSnapshot } from "../engine/dashboard.js";
 import type { DashboardSnapshot } from "../engine/dashboard.js";
 import { findRepoRoot } from "../utils.js";
 import { resolveConfig } from "../config/index.js";
+import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
 
 export interface StateApiOptions {
@@ -117,6 +120,85 @@ export async function stopAgents(): Promise<AgentControlResult> {
     message: result.message,
     snapshot,
     commandResult: result,
+  };
+}
+
+// ── Health ──────────────────────────────────────────────────────
+
+export interface HealthReport {
+  ok: boolean;
+  timestamp: string;
+  bridges: DashboardSnapshot["bridges"];
+  agents: DashboardSnapshot["agents"];
+  warnings: DashboardSnapshot["warnings"];
+  headless: Record<string, unknown>[];
+}
+
+/**
+ * Health check that combines dashboard snapshot with headless state.
+ * Consumed by monitoring tools (Uptime Kuma, cron, autopilot).
+ */
+export function getHealthReport(options?: StateApiOptions): HealthReport {
+  const repoRoot = options?.repoRoot ?? findRepoRoot();
+  const snapshot = collectDashboardSnapshot(repoRoot, options?.commsDir);
+
+  // Collect headless state from .tmp/ dirs — active instances only
+  // (same filter as doctor checkBridgeTurnHealth to avoid stale session debris)
+  const headlessStates: Record<string, unknown>[] = [];
+  try {
+    const state = loadState(repoRoot);
+    const activeMatchers = new Set<string>();
+    if (state) {
+      for (const [id, inst] of Object.entries(state.instances)) {
+        if (inst?.installed && inst.bridgeMode === "app-server") {
+          activeMatchers.add(id);
+          if (inst.agentName) activeMatchers.add(inst.agentName);
+        }
+      }
+    }
+
+    const tmpDir = path.join(repoRoot, ".tmp");
+    if (fs.existsSync(tmpDir)) {
+      for (const dir of fs.readdirSync(tmpDir)) {
+        if (!dir.startsWith("codex-app-server-bridge")) continue;
+        const suffix = dir.replace("codex-app-server-bridge-", "");
+        // Filter to active instances (skip past session debris)
+        if (activeMatchers.size > 0) {
+          let matched = false;
+          for (const matcher of activeMatchers) {
+            if (suffix === matcher || suffix.startsWith(matcher)) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) continue;
+        }
+        const hsPath = path.join(tmpDir, dir, "headless-state.json");
+        if (!fs.existsSync(hsPath)) continue;
+        try {
+          const hs = JSON.parse(fs.readFileSync(hsPath, "utf-8"));
+          headlessStates.push({ instanceDir: dir, ...hs });
+        } catch {
+          // skip corrupted
+        }
+      }
+    }
+  } catch {
+    // .tmp doesn't exist or state load failed
+  }
+
+  const hasFailures = snapshot.warnings.some((w) => w.level === "error");
+  const hasBridgeDown = snapshot.bridges.some(
+    (b) => b.status === "stale" || b.status === "stopped",
+  );
+
+  return {
+    ok: !hasFailures && !hasBridgeDown,
+    timestamp: snapshot.generatedAt,
+    bridges: snapshot.bridges,
+    agents: snapshot.agents,
+    warnings: snapshot.warnings,
+    headless: headlessStates,
   };
 }
 

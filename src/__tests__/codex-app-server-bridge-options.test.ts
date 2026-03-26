@@ -126,9 +126,9 @@ describe("codex app-server bridge option building", () => {
 
     expect(options.appServerUrl).toBe("ws://127.0.0.1:4510");
     expect(options.gatewayTokenFile).toBe(tokenFile);
-    expect(options.connectAppServerUrl).toBe(
-      "ws://127.0.0.1:4510?tap_token=secret-token",
-    );
+    // Subprotocol auth: token no longer in URL
+    expect(options.connectAppServerUrl).toBe("ws://127.0.0.1:4510");
+    expect(options.gatewayToken).toBe("secret-token");
   });
 
   it("matches inbox recipients by both agent id and agent name", () => {
