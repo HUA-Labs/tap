@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync, execSync } from "node:child_process";
@@ -90,6 +91,8 @@ const APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5_000;
 const APP_SERVER_HEALTH_RETRY_MS = 250;
 const AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 const APP_SERVER_AUTH_FILE_MODE = 0o600;
+const WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
+const WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1000;
 
 function appServerLogFilePath(
   stateDir: string,
@@ -142,6 +145,79 @@ function removeFileIfExists(filePath: string | null | undefined): void {
   } catch {
     // Best-effort cleanup only.
   }
+}
+
+function toPowerShellSingleQuotedString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function toPowerShellStringArrayLiteral(values: string[]): string {
+  return `@(${values.map(toPowerShellSingleQuotedString).join(", ")})`;
+}
+
+function cleanupStaleWindowsSpawnWrappers(now = Date.now()): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(os.tmpdir());
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (
+      !entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) ||
+      !/\.(cmd|ps1)$/i.test(entry)
+    ) {
+      continue;
+    }
+
+    const wrapperPath = path.join(os.tmpdir(), entry);
+
+    try {
+      const stats = fs.statSync(wrapperPath);
+      if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
+        continue;
+      }
+      fs.unlinkSync(wrapperPath);
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+}
+
+function buildWindowsDetachedWrapperScript(
+  command: string,
+  args: string[],
+  logPath: string,
+  stderrLogPath: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const lines = ["$ErrorActionPreference = 'Stop'"];
+
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && value !== process.env[key]) {
+      lines.push(
+        `[Environment]::SetEnvironmentVariable(${toPowerShellSingleQuotedString(key)}, ${toPowerShellSingleQuotedString(value)}, 'Process')`,
+      );
+    }
+  }
+
+  lines.push(
+    `$logPath = ${toPowerShellSingleQuotedString(logPath)}`,
+    `$stderrLogPath = ${toPowerShellSingleQuotedString(stderrLogPath)}`,
+    `$commandPath = ${toPowerShellSingleQuotedString(command)}`,
+    `$commandArgs = ${toPowerShellStringArrayLiteral(args)}`,
+    "$exitCode = 1",
+    "try {",
+    "  & $commandPath @commandArgs >> $logPath 2>> $stderrLogPath",
+    "  $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
+    "} finally {",
+    "  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+    "}",
+    "exit $exitCode",
+  );
+
+  return `${lines.join("\r\n")}\r\n`;
 }
 
 function getWebSocketCtor(): WebSocketCtor | null {
@@ -467,6 +543,23 @@ function findReusableManagedAppServer(
   return null;
 }
 
+/**
+ * Start a background process on Windows without creating a visible console window.
+ *
+ * Node.js `spawn({ detached: true })` sets `DETACHED_PROCESS` in CreateProcess,
+ * which forces Windows to allocate a new console for console apps — even with
+ * `windowsHide: true` (which only sets SW_HIDE, not CREATE_NO_WINDOW).
+ * These two flags are mutually exclusive in the Windows API.
+ *
+ * Instead, we use PowerShell `Start-Process -WindowStyle Hidden` which internally
+ * sets `ProcessStartInfo.CreateNoWindow = true`, preventing console allocation
+ * entirely. A temp `.ps1` wrapper handles environment variables, robust argument
+ * passing, append-mode log redirection, and self-cleans on normal exit.
+ *
+ * The returned PID is of the hidden PowerShell wrapper process, which stays alive
+ * while the child runs.
+ * `taskkill /PID <pid> /F /T` (used by stopBridge) kills the entire tree.
+ */
 function startWindowsDetachedProcess(
   command: string,
   args: string[],
@@ -474,40 +567,59 @@ function startWindowsDetachedProcess(
   logPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): number | null {
-  const ext = path.extname(command).toLowerCase();
   const stderrLogPath = stderrLogFilePath(logPath);
-  const stdoutFd = fs.openSync(logPath, "a");
-  const stderrFd = fs.openSync(stderrLogPath, "a");
+  const powerShellCommand = resolvePowerShellCommand();
 
-  try {
-    const child =
-      ext === ".ps1"
-        ? spawn(
-            resolvePowerShellCommand(),
-            ["-NoLogo", "-NoProfile", "-File", command, ...args],
-            {
-              cwd: repoRoot,
-              detached: true,
-              stdio: ["ignore", stdoutFd, stderrFd],
-              env,
-              windowsHide: true,
-            },
-          )
-        : spawn(command, args, {
-            cwd: repoRoot,
-            detached: true,
-            stdio: ["ignore", stdoutFd, stderrFd],
-            env,
-            windowsHide: true,
-            shell: ext === ".cmd" || ext === ".bat",
-          });
+  cleanupStaleWindowsSpawnWrappers();
 
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    fs.closeSync(stdoutFd);
-    fs.closeSync(stderrFd);
+  const wrapperPath = path.join(
+    os.tmpdir(),
+    `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`,
+  );
+  fs.writeFileSync(
+    wrapperPath,
+    buildWindowsDetachedWrapperScript(
+      command,
+      args,
+      logPath,
+      stderrLogPath,
+      env,
+    ),
+  );
+
+  // Use PowerShell Start-Process with -WindowStyle Hidden to launch without
+  // a visible console window. -PassThru returns the process object for PID.
+  const psCommand = [
+    "$p = Start-Process",
+    `-FilePath ${toPowerShellSingleQuotedString(powerShellCommand)}`,
+    `-ArgumentList ${toPowerShellStringArrayLiteral(["-NoLogo", "-NoProfile", "-File", wrapperPath])}`,
+    `-WorkingDirectory ${toPowerShellSingleQuotedString(repoRoot)}`,
+    "-WindowStyle Hidden",
+    "-PassThru",
+    "; Write-Output $p.Id",
+  ].join(" ");
+
+  const result = spawnSync(
+    powerShellCommand,
+    ["-NoLogo", "-NoProfile", "-Command", psCommand],
+    {
+      encoding: "utf-8",
+      windowsHide: true,
+    },
+  );
+
+  if (result.status !== 0) {
+    removeFileIfExists(wrapperPath);
+    return null;
   }
+
+  const pid = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(pid)) {
+    removeFileIfExists(wrapperPath);
+    return null;
+  }
+
+  return pid;
 }
 
 function startWindowsCodexAppServer(
@@ -1028,9 +1140,38 @@ function runtimeHeartbeatFilePath(runtimeStateDir: string): string {
   return path.join(runtimeStateDir, "heartbeat.json");
 }
 
-function loadRuntimeHeartbeatTimestamp(
-  runtimeStateDir: string | null | undefined,
-): string | null {
+function runtimeThreadStateFilePath(runtimeStateDir: string): string {
+  return path.join(runtimeStateDir, "thread.json");
+}
+
+export interface RuntimeBridgeHeartbeat {
+  updatedAt?: string;
+  threadId?: string | null;
+  threadCwd?: string | null;
+  activeTurnId?: string | null;
+  lastTurnStatus?: string | null;
+  lastError?: string | null;
+  connected?: boolean;
+  initialized?: boolean;
+}
+
+export interface RuntimeBridgeThreadState {
+  threadId: string;
+  updatedAt?: string;
+  appServerUrl?: string;
+  ephemeral?: boolean;
+  cwd?: string | null;
+}
+
+export function loadRuntimeBridgeHeartbeat(
+  bridgeState:
+    | {
+        runtimeStateDir?: string | null;
+      }
+    | null
+    | undefined,
+): RuntimeBridgeHeartbeat | null {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
   if (!runtimeStateDir) {
     return null;
   }
@@ -1041,12 +1182,47 @@ function loadRuntimeHeartbeatTimestamp(
   }
 
   try {
-    const raw = fs.readFileSync(heartbeatPath, "utf-8");
-    const parsed = JSON.parse(raw) as { updatedAt?: string };
-    return typeof parsed.updatedAt === "string" ? parsed.updatedAt : null;
+    return JSON.parse(
+      fs.readFileSync(heartbeatPath, "utf-8"),
+    ) as RuntimeBridgeHeartbeat;
   } catch {
     return null;
   }
+}
+
+export function loadRuntimeBridgeThreadState(
+  bridgeState:
+    | {
+        runtimeStateDir?: string | null;
+      }
+    | null
+    | undefined,
+): RuntimeBridgeThreadState | null {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+
+  const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
+  if (!fs.existsSync(threadPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(threadPath, "utf-8"),
+    ) as RuntimeBridgeThreadState;
+    return parsed.threadId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadRuntimeHeartbeatTimestamp(
+  runtimeStateDir: string | null | undefined,
+): string | null {
+  const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
+  return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
 }
 
 function resolveHeartbeatTimestamp(
@@ -1331,6 +1507,9 @@ export async function startBridge(
               options.messageLookbackMinutes,
             ),
           }
+        : {}),
+      ...(process.env.TAP_COLD_START_WARMUP === "true"
+        ? { TAP_COLD_START_WARMUP: "true" }
         : {}),
       ...(options.threadId ? { TAP_THREAD_ID: options.threadId } : {}),
       ...(options.ephemeral ? { TAP_EPHEMERAL: "true" } : {}),

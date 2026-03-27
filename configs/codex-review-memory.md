@@ -55,7 +55,7 @@ Default stance:
 
 ## HUA Hotspots
 
-### tap-comms
+### tap
 
 - Race conditions, file locks, Windows encoding, and filename parsing
 - Direct vs broadcast routing

@@ -200,3 +200,8 @@ describe("loadState auto-migration", () => {
     expect(loaded!.instances["codex-reviewer"].port).toBe(4501);
   });
 });
+
+// M123 MCP key migration adapter-level tests are in:
+// - codex-adapter.test.ts (TOML migration via real codexAdapter.apply)
+// - gemini-adapter.test.ts (JSON migration via real geminiAdapter.apply)
+// - claude-adapter.test.ts (JSON migration via real claudeAdapter.apply)

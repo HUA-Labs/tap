@@ -11,11 +11,11 @@ sandbox = "elevated"
 [features]
 multi_agent = true
 
-[mcp_servers.tap-comms]
+[mcp_servers.tap]
 command = "C:/Users/echon/AppData/Roaming/npm/bun.cmd"
 args = ["D:/HUA/hua-platform/packages/tap-plugin/channels/tap-comms.ts"]
 
-[mcp_servers.tap-comms.env]
+[mcp_servers.tap.env]
 # Override per session with tap_set_name when needed.
 TAP_AGENT_NAME = "<set-per-session>"
 TAP_COMMS_DIR = "D:/HUA/hua-comms"

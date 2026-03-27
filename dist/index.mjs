@@ -558,7 +558,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   if (!sourcePath) {
     issues.push(
-      "tap-comms MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
+      "tap MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -588,7 +588,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   if (!command) {
     issues.push(
-      "bun is required to run the repo-local tap-comms MCP server (.ts source). Install bun: https://bun.sh"
+      "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh"
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -782,6 +782,7 @@ var init_runtime = __esm({
 // src/engine/bridge.ts
 import * as fs7 from "fs";
 import * as net from "net";
+import * as os2 from "os";
 import * as path7 from "path";
 import { randomBytes } from "crypto";
 import { spawn, spawnSync as spawnSync2, execSync as execSync2 } from "child_process";
@@ -822,12 +823,66 @@ function removeFileIfExists(filePath) {
   } catch {
   }
 }
+function toPowerShellSingleQuotedString(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function toPowerShellStringArrayLiteral(values) {
+  return `@(${values.map(toPowerShellSingleQuotedString).join(", ")})`;
+}
+function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
+  let entries;
+  try {
+    entries = fs7.readdirSync(os2.tmpdir());
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) || !/\.(cmd|ps1)$/i.test(entry)) {
+      continue;
+    }
+    const wrapperPath = path7.join(os2.tmpdir(), entry);
+    try {
+      const stats = fs7.statSync(wrapperPath);
+      if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
+        continue;
+      }
+      fs7.unlinkSync(wrapperPath);
+    } catch {
+    }
+  }
+}
+function buildWindowsDetachedWrapperScript(command, args, logPath, stderrLogPath, env) {
+  const lines = ["$ErrorActionPreference = 'Stop'"];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== void 0 && value !== process.env[key]) {
+      lines.push(
+        `[Environment]::SetEnvironmentVariable(${toPowerShellSingleQuotedString(key)}, ${toPowerShellSingleQuotedString(value)}, 'Process')`
+      );
+    }
+  }
+  lines.push(
+    `$logPath = ${toPowerShellSingleQuotedString(logPath)}`,
+    `$stderrLogPath = ${toPowerShellSingleQuotedString(stderrLogPath)}`,
+    `$commandPath = ${toPowerShellSingleQuotedString(command)}`,
+    `$commandArgs = ${toPowerShellStringArrayLiteral(args)}`,
+    "$exitCode = 1",
+    "try {",
+    "  & $commandPath @commandArgs >> $logPath 2>> $stderrLogPath",
+    "  $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
+    "} finally {",
+    "  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+    "}",
+    "exit $exitCode"
+  );
+  return `${lines.join("\r\n")}\r
+`;
+}
 function getWebSocketCtor() {
   const candidate = globalThis.WebSocket;
   return typeof candidate === "function" ? candidate : null;
 }
 function delay(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 function isLoopbackHost(hostname) {
   return hostname === "127.0.0.1" || hostname === "localhost";
@@ -879,7 +934,7 @@ function getBridgeRuntimeStateDir(repoRoot, instanceId) {
 }
 async function allocateLoopbackPort(hostname) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve8, reject) => {
+  return await new Promise((resolve9, reject) => {
     const server = net.createServer();
     server.unref();
     server.once("error", reject);
@@ -897,7 +952,7 @@ async function allocateLoopbackPort(hostname) {
           reject(error);
           return;
         }
-        resolve8(port);
+        resolve9(port);
       });
     });
   });
@@ -1080,35 +1135,50 @@ function findReusableManagedAppServer(stateDir, publicUrl) {
   return null;
 }
 function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
-  const ext = path7.extname(command).toLowerCase();
   const stderrLogPath = stderrLogFilePath(logPath);
-  const stdoutFd = fs7.openSync(logPath, "a");
-  const stderrFd = fs7.openSync(stderrLogPath, "a");
-  try {
-    const child = ext === ".ps1" ? spawn(
-      resolvePowerShellCommand(),
-      ["-NoLogo", "-NoProfile", "-File", command, ...args],
-      {
-        cwd: repoRoot,
-        detached: true,
-        stdio: ["ignore", stdoutFd, stderrFd],
-        env,
-        windowsHide: true
-      }
-    ) : spawn(command, args, {
-      cwd: repoRoot,
-      detached: true,
-      stdio: ["ignore", stdoutFd, stderrFd],
-      env,
-      windowsHide: true,
-      shell: ext === ".cmd" || ext === ".bat"
-    });
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    fs7.closeSync(stdoutFd);
-    fs7.closeSync(stderrFd);
+  const powerShellCommand = resolvePowerShellCommand();
+  cleanupStaleWindowsSpawnWrappers();
+  const wrapperPath = path7.join(
+    os2.tmpdir(),
+    `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`
+  );
+  fs7.writeFileSync(
+    wrapperPath,
+    buildWindowsDetachedWrapperScript(
+      command,
+      args,
+      logPath,
+      stderrLogPath,
+      env
+    )
+  );
+  const psCommand = [
+    "$p = Start-Process",
+    `-FilePath ${toPowerShellSingleQuotedString(powerShellCommand)}`,
+    `-ArgumentList ${toPowerShellStringArrayLiteral(["-NoLogo", "-NoProfile", "-File", wrapperPath])}`,
+    `-WorkingDirectory ${toPowerShellSingleQuotedString(repoRoot)}`,
+    "-WindowStyle Hidden",
+    "-PassThru",
+    "; Write-Output $p.Id"
+  ].join(" ");
+  const result = spawnSync2(
+    powerShellCommand,
+    ["-NoLogo", "-NoProfile", "-Command", psCommand],
+    {
+      encoding: "utf-8",
+      windowsHide: true
+    }
+  );
+  if (result.status !== 0) {
+    removeFileIfExists(wrapperPath);
+    return null;
   }
+  const pid = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(pid)) {
+    removeFileIfExists(wrapperPath);
+    return null;
+  }
+  return pid;
 }
 function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
   return startWindowsDetachedProcess(
@@ -1170,12 +1240,12 @@ function resolveAppServerUrl(baseUrl, port) {
 }
 async function isTcpPortAvailable(hostname, port) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve8) => {
+  return await new Promise((resolve9) => {
     const server = net.createServer();
     server.unref();
-    server.once("error", () => resolve8(false));
+    server.once("error", () => resolve9(false));
     server.listen(port, bindHost, () => {
-      server.close((error) => resolve8(!error));
+      server.close((error) => resolve9(!error));
     });
   });
 }
@@ -1210,7 +1280,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
   if (!WebSocket) {
     return false;
   }
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let settled = false;
     let socket = null;
     const finish = (healthy) => {
@@ -1223,7 +1293,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
         socket?.close();
       } catch {
       }
-      resolve8(healthy);
+      resolve9(healthy);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
@@ -1547,7 +1617,11 @@ function logFilePath(stateDir, instanceId) {
 function runtimeHeartbeatFilePath(runtimeStateDir) {
   return path7.join(runtimeStateDir, "heartbeat.json");
 }
-function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
+function runtimeThreadStateFilePath(runtimeStateDir) {
+  return path7.join(runtimeStateDir, "thread.json");
+}
+function loadRuntimeBridgeHeartbeat(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
   if (!runtimeStateDir) {
     return null;
   }
@@ -1556,12 +1630,34 @@ function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
     return null;
   }
   try {
-    const raw = fs7.readFileSync(heartbeatPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed.updatedAt === "string" ? parsed.updatedAt : null;
+    return JSON.parse(
+      fs7.readFileSync(heartbeatPath, "utf-8")
+    );
   } catch {
     return null;
   }
+}
+function loadRuntimeBridgeThreadState(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+  const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
+  if (!fs7.existsSync(threadPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(
+      fs7.readFileSync(threadPath, "utf-8")
+    );
+    return parsed.threadId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
+  const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
+  return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
 }
 function resolveHeartbeatTimestamp(state) {
   return loadRuntimeHeartbeatTimestamp(state?.runtimeStateDir) ?? state?.lastHeartbeat ?? null;
@@ -1732,6 +1828,7 @@ async function startBridge(options) {
           options.messageLookbackMinutes
         )
       } : {},
+      ...process.env.TAP_COLD_START_WARMUP === "true" ? { TAP_COLD_START_WARMUP: "true" } : {},
       ...options.threadId ? { TAP_THREAD_ID: options.threadId } : {},
       ...options.ephemeral ? { TAP_EPHEMERAL: "true" } : {},
       ...options.processExistingMessages ? { TAP_PROCESS_EXISTING: "true" } : {}
@@ -1868,7 +1965,7 @@ function getBridgeStatus(stateDir, instanceId) {
   }
   return "running";
 }
-var DEFAULT_APP_SERVER_URL2, APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_START_TIMEOUT_MS, APP_SERVER_GATEWAY_START_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, AUTH_SUBPROTOCOL_PREFIX, APP_SERVER_AUTH_FILE_MODE;
+var DEFAULT_APP_SERVER_URL2, APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_START_TIMEOUT_MS, APP_SERVER_GATEWAY_START_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, AUTH_SUBPROTOCOL_PREFIX, APP_SERVER_AUTH_FILE_MODE, WINDOWS_SPAWN_WRAPPER_PREFIX, WINDOWS_SPAWN_WRAPPER_STALE_MS;
 var init_bridge = __esm({
   "src/engine/bridge.ts"() {
     "use strict";
@@ -1882,6 +1979,8 @@ var init_bridge = __esm({
     APP_SERVER_HEALTH_RETRY_MS = 250;
     AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
     APP_SERVER_AUTH_FILE_MODE = 384;
+    WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
+    WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
   }
 });
 
@@ -2082,13 +2181,14 @@ function setNestedKey(obj, keyPath, value) {
 function normalizeTapCommsDir(value) {
   return typeof value === "string" ? path9.resolve(value).replace(/\\/g, "/") : "";
 }
-var MCP_SERVER_KEY, claudeAdapter;
+var MCP_SERVER_KEY, OLD_MCP_SERVER_KEY, claudeAdapter;
 var init_claude = __esm({
   "src/adapters/claude.ts"() {
     "use strict";
     init_state();
     init_common();
-    MCP_SERVER_KEY = "tap-comms";
+    MCP_SERVER_KEY = "tap";
+    OLD_MCP_SERVER_KEY = "tap-comms";
     claudeAdapter = {
       runtime: "claude",
       async probe(ctx) {
@@ -2145,6 +2245,11 @@ var init_claude = __esm({
                 `Existing "${MCP_SERVER_KEY}" entry in .mcp.json will be overwritten.`
               );
             }
+            if (config.mcpServers?.[OLD_MCP_SERVER_KEY]) {
+              conflicts.push(
+                `Legacy "${OLD_MCP_SERVER_KEY}" entry will be migrated to "${MCP_SERVER_KEY}".`
+              );
+            }
           } catch {
             warnings.push(
               ".mcp.json exists but is not valid JSON. Will be overwritten."
@@ -2154,7 +2259,7 @@ var init_claude = __esm({
         const serverEntry = buildMcpServerEntry(ctx);
         if (!serverEntry) {
           warnings.push(
-            "tap-comms MCP server entry not found. Skipping .mcp.json patch. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
+            "tap MCP server entry not found. Skipping .mcp.json patch. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
           );
           return {
             runtime: "claude",
@@ -2207,6 +2312,10 @@ var init_claude = __esm({
                   );
                 }
               }
+              const servers = config.mcpServers;
+              if (servers?.[OLD_MCP_SERVER_KEY]) {
+                delete servers[OLD_MCP_SERVER_KEY];
+              }
               if (op.key) {
                 setNestedKey(config, op.key, op.value);
               }
@@ -2255,7 +2364,7 @@ var init_claude = __esm({
               checks.push({ name: "Config is valid JSON", passed: true });
               const entry = config.mcpServers?.[MCP_SERVER_KEY];
               checks.push({
-                name: "tap-comms entry present",
+                name: "tap entry present",
                 passed: !!entry,
                 message: entry ? void 0 : `mcpServers.${MCP_SERVER_KEY} not found`
               });
@@ -2362,6 +2471,14 @@ function extractTomlTable(content, selector) {
   const range = findTableRange(lines, selector);
   if (!range) return null;
   return `${lines.slice(range.start, range.end).join("\n")}
+`;
+}
+function removeTomlTable(content, selector) {
+  const lines = splitLines(content);
+  const range = findTableRange(lines, selector);
+  if (!range) return content;
+  const next = [...lines.slice(0, range.start), ...lines.slice(range.end)];
+  return `${trimTomlDocument(next.join("\n"))}
 `;
 }
 function replaceTomlTable(content, selector, replacement) {
@@ -2489,12 +2606,12 @@ function verifyManagedToml(content, ctx, configPath) {
     message: fs11.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
-    name: "tap-comms MCP table present",
+    name: "tap MCP table present",
     passed: !!mainTable,
     message: mainTable ? void 0 : `${MCP_SELECTOR} not found`
   });
   checks.push({
-    name: "tap-comms env table present",
+    name: "tap env table present",
     passed: !!envTable,
     message: envTable ? void 0 : `${ENV_SELECTOR} not found`
   });
@@ -2514,12 +2631,12 @@ function verifyManagedToml(content, ctx, configPath) {
       passed: mainTable.includes(
         `command = "${managed.command.replace(/\\/g, "\\\\")}"`
       ) && mainTable.includes(`args = [${expectedArgs}]`),
-      message: "Managed tap-comms command/args do not match expected values"
+      message: "Managed tap command/args do not match expected values"
     });
   }
   return checks;
 }
-var MCP_SELECTOR, ENV_SELECTOR, codexAdapter;
+var MCP_SELECTOR, ENV_SELECTOR, OLD_MCP_SELECTOR, OLD_ENV_SELECTOR, codexAdapter;
 var init_codex = __esm({
   "src/adapters/codex.ts"() {
     "use strict";
@@ -2527,8 +2644,10 @@ var init_codex = __esm({
     init_artifact_backups();
     init_toml();
     init_common();
-    MCP_SELECTOR = "mcp_servers.tap-comms";
-    ENV_SELECTOR = "mcp_servers.tap-comms.env";
+    MCP_SELECTOR = "mcp_servers.tap";
+    ENV_SELECTOR = "mcp_servers.tap.env";
+    OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
+    OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
     codexAdapter = {
       runtime: "codex",
       async probe(ctx) {
@@ -2573,6 +2692,11 @@ var init_codex = __esm({
           const content = readConfigOrEmpty(configPath);
           if (extractTomlTable(content, MCP_SELECTOR)) {
             conflicts.push(`Existing ${MCP_SELECTOR} table will be updated.`);
+          }
+          if (extractTomlTable(content, OLD_MCP_SELECTOR)) {
+            conflicts.push(
+              `Legacy ${OLD_MCP_SELECTOR} table will be migrated to ${MCP_SELECTOR}.`
+            );
           }
           if (extractTomlTable(content, ENV_SELECTOR)) {
             conflicts.push(`Existing ${ENV_SELECTOR} table will be updated.`);
@@ -2639,6 +2763,12 @@ var init_codex = __esm({
           return { ...artifact, backupPath };
         });
         let nextContent = existingContent;
+        if (extractTomlTable(nextContent, OLD_ENV_SELECTOR)) {
+          nextContent = removeTomlTable(nextContent, OLD_ENV_SELECTOR);
+        }
+        if (extractTomlTable(nextContent, OLD_MCP_SELECTOR)) {
+          nextContent = removeTomlTable(nextContent, OLD_MCP_SELECTOR);
+        }
         nextContent = replaceTomlTable(
           nextContent,
           MCP_SELECTOR,
@@ -2815,7 +2945,7 @@ function verifyGeminiConfig(config, configPath, ctx) {
     message: fs12.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
-    name: "tap-comms entry present",
+    name: "tap entry present",
     passed: !!entry,
     message: entry ? void 0 : `${GEMINI_SELECTOR} not found`
   });
@@ -2833,14 +2963,15 @@ function verifyGeminiConfig(config, configPath, ctx) {
   }
   return checks;
 }
-var GEMINI_SELECTOR, geminiAdapter;
+var GEMINI_SELECTOR, OLD_GEMINI_SELECTOR, geminiAdapter;
 var init_gemini = __esm({
   "src/adapters/gemini.ts"() {
     "use strict";
     init_state();
     init_artifact_backups();
     init_common();
-    GEMINI_SELECTOR = "mcpServers.tap-comms";
+    GEMINI_SELECTOR = "mcpServers.tap";
+    OLD_GEMINI_SELECTOR = "mcpServers.tap-comms";
     geminiAdapter = {
       runtime: "gemini",
       async probe(ctx) {
@@ -2888,6 +3019,11 @@ var init_gemini = __esm({
             const config = readJsonFile(configPath);
             if (readNestedKey(config, GEMINI_SELECTOR) !== void 0) {
               conflicts.push(`Existing ${GEMINI_SELECTOR} entry will be updated.`);
+            }
+            if (readNestedKey(config, OLD_GEMINI_SELECTOR) !== void 0) {
+              conflicts.push(
+                `Legacy ${OLD_GEMINI_SELECTOR} entry will be migrated to ${GEMINI_SELECTOR}.`
+              );
             }
           } catch {
             warnings.push(
@@ -2956,6 +3092,13 @@ var init_gemini = __esm({
           existed: previousValue !== void 0,
           value: previousValue
         });
+        const oldValue = readNestedKey(config, OLD_GEMINI_SELECTOR);
+        if (oldValue !== void 0) {
+          const servers = config.mcpServers;
+          if (servers) {
+            delete servers["tap-comms"];
+          }
+        }
         setNestedKey2(config, GEMINI_SELECTOR, {
           command: managed.command,
           args: managed.args,
@@ -3072,6 +3215,21 @@ function redactProtectedUrl(url) {
 }
 function loadCurrentBridgeState(stateDir, instanceId, fallback) {
   return loadBridgeState(stateDir, instanceId) ?? fallback ?? null;
+}
+function formatThreadSummary(threadId, cwd) {
+  if (!threadId) {
+    return "-";
+  }
+  return cwd ? `${threadId} (${cwd})` : threadId;
+}
+function normalizeComparablePath(value) {
+  return path13.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+function sameOptionalPath(left, right) {
+  if (!left || !right) {
+    return left === right;
+  }
+  return normalizeComparablePath(left) === normalizeComparablePath(right);
 }
 function getSharedAppServerUsers(state, stateDir, currentInstanceId, appServerUrl) {
   const shared = [];
@@ -3685,12 +3843,18 @@ function bridgeStatusAll() {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null
       };
       continue;
     }
     const status = getBridgeStatus(stateDir, instanceId);
     const bridgeState = loadBridgeState(stateDir, instanceId);
+    const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+    const savedThread = loadRuntimeBridgeThreadState(bridgeState);
     const age = getHeartbeatAge(stateDir, instanceId);
     const pid = bridgeState?.pid ?? null;
     const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
@@ -3712,12 +3876,26 @@ function bridgeStatusAll() {
         );
       }
     }
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `  Thread:     ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`
+      );
+    }
+    if (savedThread?.threadId && (savedThread.threadId !== runtimeHeartbeat?.threadId || !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))) {
+      log(
+        `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
+      );
+    }
     bridges[instanceId] = {
       status,
       runtime: inst.runtime,
       pid,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null
     };
   }
@@ -3793,6 +3971,10 @@ function bridgeStatusOne(identifier) {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null
       }
     };
@@ -3801,6 +3983,8 @@ function bridgeStatusOne(identifier) {
   const stateDir = resolvedCfg2.stateDir;
   const status = getBridgeStatus(stateDir, instanceId);
   const bridgeState = loadBridgeState(stateDir, instanceId);
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
   const age = getHeartbeatAge(stateDir, instanceId);
   const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
   log(`Status:      ${status}`);
@@ -3809,6 +3993,16 @@ function bridgeStatusOne(identifier) {
     log(
       `Heartbeat:   ${heartbeat ?? "-"}${age !== null ? ` (${formatAge(age)})` : ""}`
     );
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `Thread:      ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`
+      );
+    }
+    if (savedThread?.threadId && (savedThread.threadId !== runtimeHeartbeat?.threadId || !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))) {
+      log(
+        `Saved:       ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
+      );
+    }
     log(
       `Log:         ${path13.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
     );
@@ -3857,6 +4051,10 @@ function bridgeStatusOne(identifier) {
       pid: bridgeState?.pid ?? null,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null
     }
   };
@@ -4084,7 +4282,7 @@ var init_bridge2 = __esm({
     init_utils();
     BRIDGE_HELP = `
 Usage:
-  tap-comms bridge <subcommand> [instance] [options]
+  tap bridge <subcommand> [instance] [options]
 
 Subcommands:
   start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
@@ -4142,7 +4340,18 @@ async function upCommand(args) {
     };
   }
   const repoRoot = findRepoRoot();
-  const result = await bridgeCommand(["start", "--all", ...args]);
+  const previousColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
+  process.env.TAP_COLD_START_WARMUP = "true";
+  let result;
+  try {
+    result = await bridgeCommand(["start", "--all", ...args]);
+  } finally {
+    if (previousColdStartWarmup === void 0) {
+      delete process.env.TAP_COLD_START_WARMUP;
+    } else {
+      process.env.TAP_COLD_START_WARMUP = previousColdStartWarmup;
+    }
+  }
   const snapshot = collectDashboardSnapshot(repoRoot);
   const activeBridges = snapshot.bridges.filter(
     (bridge) => bridge.status === "running"
@@ -4178,7 +4387,7 @@ var init_up = __esm({
     init_utils();
     UP_HELP = `
 Usage:
-  tap-comms up [bridge-start options]
+  tap up [bridge-start options]
 
 Description:
   Start all registered app-server bridge daemons with one command.
@@ -4243,7 +4452,7 @@ var init_down = __esm({
     init_utils();
     DOWN_HELP = `
 Usage:
-  tap-comms down
+  tap down
 
 Description:
   Stop all running bridge daemons and managed app-servers.
@@ -4297,14 +4506,14 @@ async function* streamEvents(options) {
   const repoRoot = options?.repoRoot ?? findRepoRoot();
   while (!options?.signal?.aborted) {
     yield collectDashboardSnapshot(repoRoot, options?.commsDir);
-    await new Promise((resolve8) => {
+    await new Promise((resolve9) => {
       const onAbort = () => {
         clearTimeout(timer);
-        resolve8();
+        resolve9();
       };
       const timer = setTimeout(() => {
         options?.signal?.removeEventListener("abort", onAbort);
-        resolve8();
+        resolve9();
       }, intervalMs);
       options?.signal?.addEventListener("abort", onAbort, { once: true });
     });
@@ -4545,18 +4754,18 @@ async function startHttpServer(options) {
       }
     }
   );
-  await new Promise((resolve8, reject) => {
+  await new Promise((resolve9, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
       server.removeListener("error", reject);
-      resolve8();
+      resolve9();
     });
   });
   return {
     port,
     token,
-    close: () => new Promise((resolve8, reject) => {
-      server.close((err) => err ? reject(err) : resolve8());
+    close: () => new Promise((resolve9, reject) => {
+      server.close((err) => err ? reject(err) : resolve9());
     })
   };
 }

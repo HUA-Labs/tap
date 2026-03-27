@@ -30,10 +30,10 @@ import type {
 
 const ADD_HELP = `
 Usage:
-  tap-comms add <claude|codex|gemini> [options]
+  tap add <claude|codex|gemini> [options]
 
 Description:
-  Install a runtime instance and configure it to use tap-comms.
+  Install a runtime instance and configure it to use tap.
 
 Options:
   --name <name>         Instance name (default: runtime name)

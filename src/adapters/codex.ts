@@ -8,6 +8,7 @@ import {
 } from "../artifact-backups.js";
 import {
   extractTomlTable,
+  removeTomlTable,
   renderTomlTable,
   replaceTomlTable,
 } from "../toml.js";
@@ -30,8 +31,12 @@ import {
   probeCommand,
 } from "./common.js";
 
-const MCP_SELECTOR = "mcp_servers.tap-comms";
-const ENV_SELECTOR = "mcp_servers.tap-comms.env";
+const MCP_SELECTOR = "mcp_servers.tap";
+const ENV_SELECTOR = "mcp_servers.tap.env";
+
+// Legacy key names — used for auto-migration from pre-0.3 configs
+const OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
+const OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
 
 function findCodexConfigPath(): string {
   return path.join(getHomeDir(), ".codex", "config.toml");
@@ -103,12 +108,12 @@ function verifyManagedToml(
     message: fs.existsSync(configPath) ? undefined : `${configPath} not found`,
   });
   checks.push({
-    name: "tap-comms MCP table present",
+    name: "tap MCP table present",
     passed: !!mainTable,
     message: mainTable ? undefined : `${MCP_SELECTOR} not found`,
   });
   checks.push({
-    name: "tap-comms env table present",
+    name: "tap env table present",
     passed: !!envTable,
     message: envTable ? undefined : `${ENV_SELECTOR} not found`,
   });
@@ -135,9 +140,8 @@ function verifyManagedToml(
       passed:
         mainTable.includes(
           `command = "${managed.command.replace(/\\/g, "\\\\")}"`,
-        ) &&
-        mainTable.includes(`args = [${expectedArgs}]`),
-      message: "Managed tap-comms command/args do not match expected values",
+        ) && mainTable.includes(`args = [${expectedArgs}]`),
+      message: "Managed tap command/args do not match expected values",
     });
   }
 
@@ -195,6 +199,11 @@ export const codexAdapter: RuntimeAdapter = {
       const content = readConfigOrEmpty(configPath);
       if (extractTomlTable(content, MCP_SELECTOR)) {
         conflicts.push(`Existing ${MCP_SELECTOR} table will be updated.`);
+      }
+      if (extractTomlTable(content, OLD_MCP_SELECTOR)) {
+        conflicts.push(
+          `Legacy ${OLD_MCP_SELECTOR} table will be migrated to ${MCP_SELECTOR}.`,
+        );
       }
       if (extractTomlTable(content, ENV_SELECTOR)) {
         conflicts.push(`Existing ${ENV_SELECTOR} table will be updated.`);
@@ -273,6 +282,15 @@ export const codexAdapter: RuntimeAdapter = {
     });
 
     let nextContent = existingContent;
+
+    // Migrate: remove legacy "tap-comms" keys if present
+    if (extractTomlTable(nextContent, OLD_ENV_SELECTOR)) {
+      nextContent = removeTomlTable(nextContent, OLD_ENV_SELECTOR);
+    }
+    if (extractTomlTable(nextContent, OLD_MCP_SELECTOR)) {
+      nextContent = removeTomlTable(nextContent, OLD_MCP_SELECTOR);
+    }
+
     nextContent = replaceTomlTable(
       nextContent,
       MCP_SELECTOR,

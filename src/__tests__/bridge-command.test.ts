@@ -151,6 +151,103 @@ describe("bridgeCommand with initialized state", () => {
     vi.restoreAllMocks();
   });
 
+  it("status exposes active and saved thread metadata", async () => {
+    const runtimeStateDir = path.join(tmpDir, ".tmp", "codex-app-server-bridge");
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: null,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        threadId: "thread-active",
+        threadCwd: tmpDir,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-saved",
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: path.join(tmpDir, "..", "other"),
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      threadId: "thread-active",
+      threadCwd: tmpDir,
+      savedThreadId: "thread-saved",
+      savedThreadCwd: path.join(tmpDir, "..", "other"),
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("does not print a saved thread line when cwd differs only by path format", async () => {
+    const runtimeStateDir = path.join(tmpDir, ".tmp", "codex-app-server-bridge");
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: null,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        threadId: "thread-same",
+        threadCwd: tmpDir.replace(/\\/g, "/"),
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-same",
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: tmpDir.toUpperCase(),
+      }),
+      "utf-8",
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(
+      logSpy.mock.calls.some(([line]) =>
+        typeof line === "string" && line.includes("Saved:"),
+      ),
+    ).toBe(false);
+    vi.restoreAllMocks();
+  });
+
   it("stop with no running bridge returns BRIDGE_NOT_RUNNING", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const result = await bridgeCommand(["stop", "codex"]);

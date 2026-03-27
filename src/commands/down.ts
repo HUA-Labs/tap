@@ -8,7 +8,7 @@ import type { CommandResult } from "../types.js";
 
 const DOWN_HELP = `
 Usage:
-  tap-comms down
+  tap down
 
 Description:
   Stop all running bridge daemons and managed app-servers.

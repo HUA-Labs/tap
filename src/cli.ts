@@ -13,17 +13,18 @@ import { commsCommand } from "./commands/comms.js";
 import { version } from "./version.js";
 import { extractJsonFlag, emitResult, exitCode } from "./output.js";
 import { resetLoggedWarnings, setJsonMode } from "./utils.js";
+import { suggestCommand } from "./cli-suggest.js";
 import type { CommandName, CommandResult } from "./types.js";
 
 const HELP = `
 @hua-labs/tap — Cross-model AI agent communication setup
 
 Usage:
-  tap-comms <command> [options]
+  tap <command> [options]
 
 Commands:
   init                  Initialize comms directory and state
-  init-worktree         Set up a new git worktree with tap-comms
+  init-worktree         Set up a new git worktree with tap
   add <runtime>         Add a runtime instance (claude, codex, gemini)
   remove <instance>     Remove an instance and rollback config
   status                Show installed instances and bridge status
@@ -33,7 +34,7 @@ Commands:
   comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
   doctor                Diagnose tap infrastructure health
-  serve                 Start tap-comms MCP server (stdio)
+  serve                 Start tap MCP server (stdio)
   version               Show version
 
 Options:
@@ -142,15 +143,21 @@ async function main(): Promise<void> {
         process.exit(exitCode(serveResult));
         break;
       }
-      default:
+      default: {
+        const suggestion = suggestCommand(command);
+        const hint = suggestion
+          ? `\n\nDid you mean: tap ${suggestion}?`
+          : "\n\nRun tap --help for a list of commands.";
         result = {
           ok: false,
           command: "unknown",
           code: "TAP_INVALID_ARGUMENT",
-          message: `Unknown command: ${command}`,
+          message: `Unknown command: ${command}${hint}`,
           warnings: [],
-          data: { requestedCommand: command },
+          data: { requestedCommand: command, suggestion },
         };
+        break;
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

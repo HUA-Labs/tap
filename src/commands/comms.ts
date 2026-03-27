@@ -19,7 +19,7 @@ import type { CommandResult } from "../types.js";
 
 const COMMS_HELP = `
 Usage:
-  tap-comms comms <subcommand>
+  tap comms <subcommand>
 
 Subcommands:
   pull    Pull latest changes from comms remote repo

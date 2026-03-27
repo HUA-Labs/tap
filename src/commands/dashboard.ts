@@ -112,7 +112,7 @@ function renderSnapshot(snapshot: DashboardSnapshot): void {
 
 const DASHBOARD_HELP = `
 Usage:
-  tap-comms dashboard [options]
+  tap dashboard [options]
 
 Description:
   Display a unified ops dashboard: agents, bridges, PRs, and warnings.

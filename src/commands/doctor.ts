@@ -12,22 +12,42 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
-import { execSync } from "node:child_process";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { dirname, join, resolve } from "node:path";
+import { buildManagedMcpServerSpec } from "../adapters/common.js";
 import { loadState, saveState, getInstalledInstances } from "../state.js";
 import {
   isBridgeRunning,
   getHeartbeatAge,
   loadBridgeState,
+  loadRuntimeBridgeHeartbeat,
+  loadRuntimeBridgeThreadState,
   saveBridgeState,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
-import { findRepoRoot, log, logHeader, logSuccess, logWarn } from "../utils.js";
+import {
+  createAdapterContext,
+  findRepoRoot,
+  log,
+  logHeader,
+  logSuccess,
+  logWarn,
+} from "../utils.js";
+import {
+  extractTomlTable,
+  parseTomlAssignments,
+  removeTomlTable,
+  renderTomlTable,
+  replaceTomlTable,
+} from "../toml.js";
 import { version } from "../version.js";
-import type { CommandResult } from "../types.js";
+import type { CommandResult, TapState } from "../types.js";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -43,6 +63,176 @@ interface Check {
 const PASS = "pass" as const;
 const WARN = "warn" as const;
 const FAIL = "fail" as const;
+const CODEX_ENV_DRIFT_KEYS = [
+  "TAP_COMMS_DIR",
+  "TAP_STATE_DIR",
+  "TAP_REPO_ROOT",
+] as const;
+
+function normalizeComparablePath(value: string): string {
+  return resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizeComparablePath(left) === normalizeComparablePath(right);
+}
+
+function looksLikePathToken(value: string): boolean {
+  return (
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    value.startsWith(".") ||
+    value.includes("/") ||
+    value.includes("\\")
+  );
+}
+
+function sameCommandToken(left: string, right: string): boolean {
+  return looksLikePathToken(left) || looksLikePathToken(right)
+    ? samePath(left, right)
+    : left === right;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => sameCommandToken(value, right[index] ?? ""))
+  );
+}
+
+function appendWarningMessage(message: string, extra: string): string {
+  return message.includes(extra) ? message : `${message}; ${extra}`;
+}
+
+function findCodexConfigPath(): string {
+  return join(homedir(), ".codex", "config.toml");
+}
+
+function canonicalizeTrustPath(targetPath: string): string {
+  let resolved = resolve(targetPath).replace(/\//g, "\\");
+  const driveRoot = /^[A-Za-z]:\\$/;
+  if (!driveRoot.test(resolved)) {
+    resolved = resolved.replace(/\\+$/g, "");
+  }
+  return resolved.startsWith("\\\\?\\") ? resolved : `\\\\?\\${resolved}`;
+}
+
+function trustSelector(targetPath: string): string {
+  return `projects.'${canonicalizeTrustPath(targetPath)}'`;
+}
+
+function writeTomlAtomically(filePath: string, content: string): void {
+  const dir = dirname(filePath);
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, filePath);
+}
+
+function hasInstalledCodexInstance(state: TapState | null): boolean {
+  return !!state
+    ? Object.values(state.instances).some(
+        (instance) => instance.runtime === "codex" && instance.installed,
+      )
+    : false;
+}
+
+function getCodexTrustTargets(repoRoot: string): string[] {
+  return [...new Set([repoRoot, process.cwd()].map((value) => resolve(value)))];
+}
+
+function buildCodexDoctorSpec(repoRoot: string, commsDir: string) {
+  const state = loadState(repoRoot);
+  if (!hasInstalledCodexInstance(state)) {
+    return null;
+  }
+
+  const ctx = createAdapterContext(commsDir, repoRoot);
+  const managed = buildManagedMcpServerSpec(ctx);
+
+  return {
+    configPath: findCodexConfigPath(),
+    trustTargets: getCodexTrustTargets(repoRoot),
+    managed,
+  };
+}
+
+function repairCodexConfig(repoRoot: string, commsDir: string): string {
+  const spec = buildCodexDoctorSpec(repoRoot, commsDir);
+  if (!spec) {
+    throw new Error("No installed Codex instance found in tap state.");
+  }
+  if (!spec.managed.command || spec.managed.issues.length > 0) {
+    throw new Error(
+      spec.managed.issues[0] ??
+        "Unable to resolve the managed tap MCP server for Codex.",
+    );
+  }
+
+  const existingContent = existsSync(spec.configPath)
+    ? readFileSync(spec.configPath, "utf-8")
+    : "";
+  const existingTapEnvTable = extractTomlTable(existingContent, "mcp_servers.tap.env");
+  const existingLegacyEnvTable = extractTomlTable(
+    existingContent,
+    "mcp_servers.tap-comms.env",
+  );
+  const preservedEnv = parseTomlAssignments(
+    existingTapEnvTable ?? existingLegacyEnvTable ?? "",
+  );
+  const repairedEnv = {
+    ...preservedEnv,
+    ...Object.fromEntries(
+      CODEX_ENV_DRIFT_KEYS.map((key) => [key, spec.managed.env[key]]),
+    ),
+  };
+
+  let nextContent = existingContent;
+  if (extractTomlTable(nextContent, "mcp_servers.tap-comms.env")) {
+    nextContent = removeTomlTable(nextContent, "mcp_servers.tap-comms.env");
+  }
+  if (extractTomlTable(nextContent, "mcp_servers.tap-comms")) {
+    nextContent = removeTomlTable(nextContent, "mcp_servers.tap-comms");
+  }
+
+  nextContent = replaceTomlTable(
+    nextContent,
+    "mcp_servers.tap",
+    renderTomlTable(
+      "mcp_servers.tap",
+      {
+        command: spec.managed.command,
+        args: spec.managed.args,
+      },
+      extractTomlTable(existingContent, "mcp_servers.tap"),
+    ),
+  );
+  nextContent = replaceTomlTable(
+    nextContent,
+    "mcp_servers.tap.env",
+    renderTomlTable(
+      "mcp_servers.tap.env",
+      repairedEnv,
+      existingTapEnvTable ?? existingLegacyEnvTable,
+    ),
+  );
+  for (const trustTarget of spec.trustTargets) {
+    const selector = trustSelector(trustTarget);
+    nextContent = replaceTomlTable(
+      nextContent,
+      selector,
+      renderTomlTable(
+        selector,
+        { trust_level: "trusted" },
+        extractTomlTable(existingContent, selector),
+      ),
+    );
+  }
+
+  writeTomlAtomically(spec.configPath, nextContent);
+  return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
+}
 
 function countFiles(dir: string, ext = ".md"): number {
   if (!existsSync(dir)) return 0;
@@ -70,35 +260,6 @@ function recentFileCount(dir: string, withinMs: number): number {
     // skip
   }
   return count;
-}
-
-function loadBridgeRuntimeHeartbeat(
-  bridgeState:
-    | {
-        runtimeStateDir?: string | null;
-      }
-    | null
-    | undefined,
-): {
-  lastError?: string | null;
-} | null {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) {
-    return null;
-  }
-
-  const heartbeatPath = join(runtimeStateDir, "heartbeat.json");
-  if (!existsSync(heartbeatPath)) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(readFileSync(heartbeatPath, "utf-8")) as {
-      lastError?: string | null;
-    };
-  } catch {
-    return null;
-  }
 }
 
 // ── Checks ──────────────────────────────────────────────────────────────
@@ -206,7 +367,8 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
       const running = isBridgeRunning(stateDir, id);
       const bridgeState = loadBridgeState(stateDir, id);
       const heartbeatAge = getHeartbeatAge(stateDir, id);
-      const runtimeHeartbeat = loadBridgeRuntimeHeartbeat(bridgeState);
+      const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+      const savedThread = loadRuntimeBridgeThreadState(bridgeState);
 
       let status: "pass" | "warn" | "fail";
       let message: string;
@@ -260,8 +422,43 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
 
       const lastRuntimeError = runtimeHeartbeat?.lastError?.trim();
       if (lastRuntimeError) {
-        status = status === FAIL ? FAIL : WARN;
+        status = WARN;
         message = `${message}; bridge last error: ${lastRuntimeError}`;
+      }
+
+      if (
+        savedThread?.threadId &&
+        savedThread.cwd &&
+        !samePath(savedThread.cwd, repoRoot)
+      ) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `saved thread cwd mismatch (${savedThread.cwd})`,
+        );
+      }
+
+      if (
+        runtimeHeartbeat?.threadId &&
+        savedThread?.threadId &&
+        runtimeHeartbeat.threadId !== savedThread.threadId
+      ) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `saved thread ${savedThread.threadId} differs from active thread ${runtimeHeartbeat.threadId}`,
+        );
+      }
+
+      if (
+        runtimeHeartbeat?.threadCwd &&
+        !samePath(runtimeHeartbeat.threadCwd, repoRoot)
+      ) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `active thread cwd mismatch (${runtimeHeartbeat.threadCwd})`,
+        );
       }
 
       checks.push({ name: `bridge: ${id}`, status, message, fix });
@@ -348,9 +545,8 @@ function checkMcpServer(repoRoot: string): Check[] {
     return checks;
   }
 
-  const hasTapComms = (config?.mcpServers as Record<string, unknown>)?.[
-    "tap-comms"
-  ] as
+  const mcpServers = config?.mcpServers as Record<string, unknown> | undefined;
+  const hasTap = mcpServers?.["tap"] as
     | {
         command?: string;
         args?: string[];
@@ -358,15 +554,30 @@ function checkMcpServer(repoRoot: string): Check[] {
         env?: Record<string, string>;
       }
     | undefined;
+  const hasOldKey = mcpServers?.["tap-comms"] as
+    | Record<string, unknown>
+    | undefined;
 
-  if (!hasTapComms) {
+  if (hasOldKey) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
-      message: "tap-comms not configured",
+      message:
+        'Legacy "tap-comms" key found. Run "tap add claude" to migrate to the new "tap" key.',
+    });
+  }
+
+  if (!hasTap && !hasOldKey) {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "tap not configured",
     });
     return checks;
   }
+
+  // Use new key if available, fall back to old key for backward compat
+  const hasTapComms = hasTap ?? (hasOldKey as typeof hasTap);
 
   checks.push({
     name: "MCP config (.mcp.json)",
@@ -381,11 +592,12 @@ function checkMcpServer(repoRoot: string): Check[] {
     if (!cmdAvailable) {
       // PATH-based command — try running with --version
       try {
-        execSync(`"${cmd}" --version`, {
+        const result = spawnSync(cmd, ["--version"], {
           stdio: "pipe",
           timeout: 5000,
+          shell: process.platform === "win32",
         });
-        cmdAvailable = true;
+        cmdAvailable = result.status === 0;
       } catch {
         // command not found or failed
       }
@@ -465,6 +677,99 @@ function checkMcpServer(repoRoot: string): Check[] {
     status: PASS,
     message:
       "If .mcp.json was changed mid-session, restart Claude (Ctrl+C → claude --resume) to reload",
+  });
+
+  return checks;
+}
+
+function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
+  const spec = buildCodexDoctorSpec(repoRoot, commsDir);
+  if (!spec) {
+    return [];
+  }
+
+  const checks: Check[] = [];
+  const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
+
+  if (!existsSync(spec.configPath)) {
+    checks.push({
+      name: "MCP config (~/.codex/config.toml)",
+      status: WARN,
+      message: `${spec.configPath} not found. ${fixHint}`,
+      fix: () => repairCodexConfig(repoRoot, commsDir),
+    });
+    return checks;
+  }
+
+  const content = readFileSync(spec.configPath, "utf-8");
+  const tapTable = extractTomlTable(content, "mcp_servers.tap");
+  const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
+  const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
+  const legacyEnvTable = extractTomlTable(content, "mcp_servers.tap-comms.env");
+  const selectedMain = parseTomlAssignments(tapTable ?? "");
+  const selectedEnv = parseTomlAssignments(
+    tapEnvTable ?? legacyEnvTable ?? "",
+  );
+  const issues: string[] = [];
+
+  if (legacyTable || legacyEnvTable) {
+    issues.push('legacy "tap-comms" key present');
+  }
+  if (!tapTable && !legacyTable) {
+    issues.push("tap MCP table missing");
+  }
+  if (!tapEnvTable && !legacyEnvTable) {
+    issues.push("tap MCP env table missing");
+  }
+  if (tapTable && spec.managed.command) {
+    const actualCommand = selectedMain.command;
+    if (typeof actualCommand !== "string") {
+      issues.push("tap MCP command missing");
+    } else if (!sameCommandToken(actualCommand, spec.managed.command)) {
+      issues.push(`tap MCP command drift (${actualCommand})`);
+    }
+
+    const actualArgs = selectedMain.args;
+    if (!Array.isArray(actualArgs)) {
+      issues.push("tap MCP args missing");
+    } else if (!sameStringArray(actualArgs, spec.managed.args)) {
+      issues.push(`tap MCP args drift (${JSON.stringify(actualArgs)})`);
+    }
+  }
+
+  for (const key of CODEX_ENV_DRIFT_KEYS) {
+    const expected = spec.managed.env[key];
+    const actual = selectedEnv[key];
+    if (typeof actual !== "string") {
+      issues.push(`${key} missing`);
+      continue;
+    }
+    if (!samePath(actual, expected)) {
+      issues.push(`${key} drift (${actual})`);
+    }
+  }
+
+  for (const trustTarget of spec.trustTargets) {
+    const trustTable = extractTomlTable(content, trustSelector(trustTarget));
+    if (!trustTable || !trustTable.includes('trust_level = "trusted"')) {
+      issues.push(`missing trust for ${trustTarget}`);
+    }
+  }
+
+  if (issues.length === 0) {
+    checks.push({
+      name: "MCP config (~/.codex/config.toml)",
+      status: PASS,
+      message: spec.configPath,
+    });
+    return checks;
+  }
+
+  checks.push({
+    name: "MCP config (~/.codex/config.toml)",
+    status: WARN,
+    message: `${issues.join("; ")}. ${fixHint}`,
+    fix: () => repairCodexConfig(repoRoot, commsDir),
   });
 
   return checks;
@@ -633,7 +938,7 @@ function renderCheck(check: Check, fixMode: boolean): string {
 
 const DOCTOR_HELP = `
 Usage:
-  tap-comms doctor [options]
+  tap doctor [options]
 
 Description:
   Diagnose tap infrastructure health: comms directory, instances, bridges,
@@ -692,6 +997,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
     checks.push(...checkInstances(repoRoot, config.stateDir));
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
+    checks.push(...checkCodexConfig(repoRoot, commsDir));
     checks.push(...checkBridgeTurnHealth(repoRoot));
     return checks;
   }

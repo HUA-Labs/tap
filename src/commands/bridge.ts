@@ -9,6 +9,8 @@ import {
   loadBridgeState,
   getHeartbeatAge,
   getBridgeHeartbeatTimestamp,
+  loadRuntimeBridgeHeartbeat,
+  loadRuntimeBridgeThreadState,
   saveBridgeState,
   stopManagedAppServer,
   resolveAppServerUrl,
@@ -46,7 +48,7 @@ function formatAge(seconds: number): string {
 
 const BRIDGE_HELP = `
 Usage:
-  tap-comms bridge <subcommand> [instance] [options]
+  tap bridge <subcommand> [instance] [options]
 
 Subcommands:
   start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
@@ -115,6 +117,32 @@ function loadCurrentBridgeState(
   fallback: BridgeState | null | undefined,
 ): BridgeState | null {
   return loadBridgeState(stateDir, instanceId) ?? fallback ?? null;
+}
+
+function formatThreadSummary(
+  threadId: string | null | undefined,
+  cwd: string | null | undefined,
+): string {
+  if (!threadId) {
+    return "-";
+  }
+
+  return cwd ? `${threadId} (${cwd})` : threadId;
+}
+
+function normalizeComparablePath(value: string): string {
+  return path.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function sameOptionalPath(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return normalizeComparablePath(left) === normalizeComparablePath(right);
 }
 
 function getSharedAppServerUsers(
@@ -870,6 +898,10 @@ function bridgeStatusAll(): CommandResult {
       pid: number | null;
       port: number | null;
       lastHeartbeat: string | null;
+      threadId: string | null;
+      threadCwd: string | null;
+      savedThreadId: string | null;
+      savedThreadCwd: string | null;
       appServer: AppServerState | null;
     }
   > = {};
@@ -896,6 +928,10 @@ function bridgeStatusAll(): CommandResult {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null,
       };
       continue;
@@ -903,6 +939,8 @@ function bridgeStatusAll(): CommandResult {
 
     const status = getBridgeStatus(stateDir, instanceId);
     const bridgeState = loadBridgeState(stateDir, instanceId);
+    const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+    const savedThread = loadRuntimeBridgeThreadState(bridgeState);
     const age = getHeartbeatAge(stateDir, instanceId);
 
     const pid = bridgeState?.pid ?? null;
@@ -932,6 +970,20 @@ function bridgeStatusAll(): CommandResult {
         );
       }
     }
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `  Thread:     ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`,
+      );
+    }
+    if (
+      savedThread?.threadId &&
+      (savedThread.threadId !== runtimeHeartbeat?.threadId ||
+        !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))
+    ) {
+      log(
+        `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`,
+      );
+    }
 
     bridges[instanceId] = {
       status,
@@ -939,6 +991,10 @@ function bridgeStatusAll(): CommandResult {
       pid,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null,
     };
   }
@@ -1026,6 +1082,10 @@ function bridgeStatusOne(identifier: string): CommandResult {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null,
       },
     };
@@ -1035,6 +1095,8 @@ function bridgeStatusOne(identifier: string): CommandResult {
   const stateDir = resolvedCfg2.stateDir;
   const status = getBridgeStatus(stateDir, instanceId);
   const bridgeState = loadBridgeState(stateDir, instanceId);
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
   const age = getHeartbeatAge(stateDir, instanceId);
   const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
 
@@ -1045,6 +1107,20 @@ function bridgeStatusOne(identifier: string): CommandResult {
     log(
       `Heartbeat:   ${heartbeat ?? "-"}${age !== null ? ` (${formatAge(age)})` : ""}`,
     );
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `Thread:      ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`,
+      );
+    }
+    if (
+      savedThread?.threadId &&
+      (savedThread.threadId !== runtimeHeartbeat?.threadId ||
+        !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))
+    ) {
+      log(
+        `Saved:       ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`,
+      );
+    }
     log(
       `Log:         ${path.join(stateDir, "logs", `bridge-${instanceId}.log`)}`,
     );
@@ -1095,6 +1171,10 @@ function bridgeStatusOne(identifier: string): CommandResult {
       pid: bridgeState?.pid ?? null,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null,
     },
   };

@@ -5,10 +5,12 @@ import * as path from "node:path";
 import {
   buildOptions,
   buildUserInput,
+  chooseLoadedThreadForCwd,
   isOwnMessageSender,
   recipientMatchesAgent,
   resolveAddressLabel,
   resolveCurrentAgentName,
+  threadCwdMatches,
 } from "../../../../scripts/codex-app-server-bridge.ts";
 
 describe("codex app-server bridge option building", () => {
@@ -198,5 +200,40 @@ describe("codex app-server bridge option building", () => {
     expect(recipientMatchesAgent("별", "codex-reviewer", "별")).toBe(true);
     expect(recipientMatchesAgent("묵", "codex-reviewer", "별")).toBe(false);
     expect(isOwnMessageSender("별", "codex-reviewer", "별")).toBe(true);
+  });
+
+  it("matches thread cwd across slash and case differences", () => {
+    expect(
+      threadCwdMatches("C:/hua-wt-review", "c:\\HUA-WT-REVIEW"),
+    ).toBe(true);
+    expect(threadCwdMatches("C:/hua-wt-review", "C:/hua-wt-1")).toBe(false);
+  });
+
+  it("chooses the active loaded thread whose cwd matches the repo", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-mismatch",
+        cwd: "C:/hua-wt-1",
+        updatedAt: 300,
+        statusType: "active",
+        thread: { id: "thread-mismatch", cwd: "C:/hua-wt-1" },
+      },
+      {
+        id: "thread-match-idle",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 200,
+        statusType: "idle",
+        thread: { id: "thread-match-idle", cwd: "C:/hua-wt-review" },
+      },
+      {
+        id: "thread-match-active",
+        cwd: "c:\\hua-wt-review",
+        updatedAt: 100,
+        statusType: "active",
+        thread: { id: "thread-match-active", cwd: "c:\\hua-wt-review" },
+      },
+    ]);
+
+    expect(chosen?.id).toBe("thread-match-active");
   });
 });

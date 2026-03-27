@@ -8,7 +8,7 @@ import type { CommandResult } from "../types.js";
 
 const UP_HELP = `
 Usage:
-  tap-comms up [bridge-start options]
+  tap up [bridge-start options]
 
 Description:
   Start all registered app-server bridge daemons with one command.
@@ -38,7 +38,18 @@ export async function upCommand(args: string[]): Promise<CommandResult> {
   }
 
   const repoRoot = findRepoRoot();
-  const result = await bridgeCommand(["start", "--all", ...args]);
+  const previousColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
+  process.env.TAP_COLD_START_WARMUP = "true";
+  let result: CommandResult;
+  try {
+    result = await bridgeCommand(["start", "--all", ...args]);
+  } finally {
+    if (previousColdStartWarmup === undefined) {
+      delete process.env.TAP_COLD_START_WARMUP;
+    } else {
+      process.env.TAP_COLD_START_WARMUP = previousColdStartWarmup;
+    }
+  }
   const snapshot = collectDashboardSnapshot(repoRoot);
   const activeBridges = snapshot.bridges.filter(
     (bridge) => bridge.status === "running",

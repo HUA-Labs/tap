@@ -15,7 +15,7 @@ import type { CommandResult } from "../types.js";
 
 const INIT_WORKTREE_HELP = `
 Usage:
-  tap-comms init-worktree [options]
+  tap init-worktree [options]
 
 Options:
   --path <dir>         Worktree directory (required, e.g. ../hua-wt-3)
@@ -257,7 +257,7 @@ function step4GenerateMcpJson(opts: WorktreeOptions, warnings: string[]): void {
 
   const mcpConfig = {
     mcpServers: {
-      "tap-comms": {
+      tap: {
         command: bunAbs,
         args: [channelEntry],
         cwd: wtAbs,

@@ -148,7 +148,7 @@ When using managed mode, the output includes a `TUI connect:` line:
 
 ### `serve`
 
-Start the tap-comms MCP server (stdio transport). Used internally by runtime configs.
+Start the tap MCP server (stdio transport). Used internally by runtime configs.
 
 ```bash
 tap serve
@@ -163,7 +163,7 @@ tap serve
 
 ### `init-worktree`
 
-Set up a new git worktree with tap-comms configuration.
+Set up a new git worktree with tap configuration.
 
 ```bash
 tap init-worktree --path ../hua-wt-3 --branch feat/my-feature

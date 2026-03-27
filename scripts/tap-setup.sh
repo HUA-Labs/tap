@@ -76,15 +76,15 @@ cp "$MAIN_DIR/.claude/settings.local.json" "$WORKTREE_PATH/.claude/settings.loca
 git -C "$WORKTREE_PATH" update-index --skip-worktree .claude/settings.local.json 2>/dev/null || true
 ok "Permissions copied + skip-worktree set"
 
-# 4. Generate .mcp.json for tap-comms channel
-step "4/9 Generate .mcp.json (tap-comms channel)"
+# 4. Generate .mcp.json for tap channel
+step "4/9 Generate .mcp.json (tap channel)"
 # Convert POSIX paths to Windows format for bun fs.watch compatibility
 WIN_COMMS_DIR=$(echo "$COMMS_DIR" | sed -E 's|^/([a-zA-Z])/|\U\1:/|')
 WIN_MAIN_DIR=$(echo "$MAIN_DIR" | sed -E 's|^/([a-zA-Z])/|\U\1:/|')
 cat > "$WORKTREE_PATH/.mcp.json" << MCPEOF
 {
   "mcpServers": {
-    "tap-comms": {
+    "tap": {
       "command": "bun",
       "args": ["$WIN_MAIN_DIR/packages/tap-plugin/channels/tap-comms.ts"],
       "env": {
@@ -131,7 +131,7 @@ step "8/9 Verify bun"
 if command -v bun &>/dev/null; then
   ok "bun $(bun --version)"
 else
-  warn "bun not installed — tap-comms channel won't work. Install: npm i -g bun"
+  warn "bun not installed — tap channel won't work. Install: npm i -g bun"
 fi
 
 # 9. Done
@@ -142,11 +142,11 @@ echo
 echo -e "${DIM}════════════════════════════════════════${NC}"
 echo -e "${BOLD}${GREEN}  Worktree ready at:${NC} $WORKTREE_PATH"
 echo -e "${BOLD}${GREEN}  Branch:${NC} $BRANCH"
-echo -e "${BOLD}${GREEN}  Channel:${NC} tap-comms (TAP_AGENT_NAME: unnamed)"
+echo -e "${BOLD}${GREEN}  Channel:${NC} tap (TAP_AGENT_NAME: unnamed)"
 echo
 echo -e "  ${DIM}Launch:${NC}"
 echo -e "    cd $WORKTREE_PATH"
-echo -e "    claude --dangerously-load-development-channels server:tap-comms"
+echo -e "    claude --dangerously-load-development-channels server:tap"
 echo
 echo -e "  ${DIM}First message to agent:${NC}"
 echo -e "    Read docs/missions/{name}.md and start."

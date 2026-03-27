@@ -865,6 +865,7 @@ function normalizeTapPath(input) {
 // src/engine/bridge.ts
 import * as fs4 from "fs";
 import * as net from "net";
+import * as os from "os";
 import * as path4 from "path";
 import { randomBytes } from "crypto";
 import { spawn, spawnSync, execSync as execSync2 } from "child_process";
@@ -1031,6 +1032,7 @@ function buildRuntimeEnv(repoRoot, baseEnv = process.env) {
 
 // src/engine/bridge.ts
 var DEFAULT_APP_SERVER_URL2 = "ws://127.0.0.1:4501";
+var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
 function resolveAppServerUrl(baseUrl, port) {
   const resolvedBase = (baseUrl ?? DEFAULT_APP_SERVER_URL2).replace(/\/$/, "");
   if (port == null) {

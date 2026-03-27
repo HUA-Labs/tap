@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "tap-comms": {
+    "tap": {
       "command": "bun",
       "args": ["./packages/tap-plugin/channels/tap-comms.ts"],
       "env": {

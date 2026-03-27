@@ -14,7 +14,7 @@ import type { CommandResult } from "../types.js";
 
 const REMOVE_HELP = `
 Usage:
-  tap-comms remove <instance>
+  tap remove <instance>
 
 Description:
   Remove a registered instance, stop its bridge, and rollback config changes.

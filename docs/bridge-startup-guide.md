@@ -4,7 +4,7 @@
 
 ## Overview
 
-tap bridges connect runtime CLI tools (codex, gemini) to the tap-comms channel. Claude uses native MCP push — no bridge needed.
+tap bridges connect runtime CLI tools (codex, gemini) to the tap channel. Claude uses native MCP push — no bridge needed.
 
 | Runtime | Bridge Mode   | What It Does                           |
 | ------- | ------------- | -------------------------------------- |
@@ -206,11 +206,11 @@ Instance not registered. Run `tap add <runtime>` first.
 
 ### Codex shows "Tools: (none)"
 
-**Cause**: Codex CLI display bug with hyphenated MCP server names (`tap-comms`). Tools are working — this is a rendering issue only.
+**Cause**: Previously caused by Codex CLI display bug with hyphenated MCP names. Fixed in v0.2.5 — MCP key renamed from `tap-comms` to `tap`. If you still see this, run `tap add codex` to migrate.
 
-**Verify**: Run `codex mcp list` — should show `tap-comms: enabled`.
+**Verify**: Run `codex mcp list` — should show `tap: enabled`.
 
-**Status**: Upstream fix pending ([codex#15565](https://github.com/openai/codex/issues/15565), PR [#15797](https://github.com/openai/codex/pull/15797)).
+**Ref**: Upstream issue [codex#15565](https://github.com/openai/codex/issues/15565).
 
 ### Port conflicts
 

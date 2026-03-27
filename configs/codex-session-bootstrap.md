@@ -17,7 +17,7 @@ Use this checklist to attach a fresh Codex session to HUA review and ops work.
 Verify:
 
 - model and reasoning effort
-- `tap-comms` MCP registration
+- `tap` MCP registration
 - `TAP_COMMS_DIR`
 - trust and sandbox expectations
 

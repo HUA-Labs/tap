@@ -320,4 +320,67 @@ describe("startBridge agent name requirement", () => {
     if (origAgent) process.env.TAP_AGENT_NAME = origAgent;
     if (origCodex) process.env.CODEX_TAP_AGENT_NAME = origCodex;
   });
+
+  it("does not forward cold-start warmup unless the caller opted in", async () => {
+    const outputPath = path.join(tmpDir, "warmup-env.txt");
+    const bridgeScript = path.join(tmpDir, "record-warmup-env.js");
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+    const originalWarmup = process.env.TAP_COLD_START_WARMUP;
+    delete process.env.TAP_COLD_START_WARMUP;
+
+    fs.writeFileSync(
+      bridgeScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(outputPath)}, process.env.TAP_COLD_START_WARMUP ?? '', 'utf8');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pid: number | null = null;
+
+    try {
+      const result = await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (fs.existsSync(outputPath)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      expect(fs.existsSync(outputPath)).toBe(true);
+      expect(fs.readFileSync(outputPath, "utf-8")).toBe("");
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex");
+      if (originalWarmup === undefined) {
+        delete process.env.TAP_COLD_START_WARMUP;
+      } else {
+        process.env.TAP_COLD_START_WARMUP = originalWarmup;
+      }
+    }
+  });
 });

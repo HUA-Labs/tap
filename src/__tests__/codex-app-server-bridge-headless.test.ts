@@ -12,6 +12,7 @@ import {
 describe("codex app-server bridge headless cold-start", () => {
   const createdDirs: string[] = [];
   const originalHeadless = process.env.TAP_HEADLESS;
+  const originalColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
 
   afterEach(() => {
     while (createdDirs.length > 0) {
@@ -25,6 +26,12 @@ describe("codex app-server bridge headless cold-start", () => {
       delete process.env.TAP_HEADLESS;
     } else {
       process.env.TAP_HEADLESS = originalHeadless;
+    }
+
+    if (originalColdStartWarmup === undefined) {
+      delete process.env.TAP_COLD_START_WARMUP;
+    } else {
+      process.env.TAP_COLD_START_WARMUP = originalColdStartWarmup;
     }
 
     vi.restoreAllMocks();
@@ -69,6 +76,30 @@ describe("codex app-server bridge headless cold-start", () => {
 
   it("starts a warmup turn for headless cold-start when inbox is empty", async () => {
     process.env.TAP_HEADLESS = "true";
+    const options = makeOptions();
+
+    const client = {
+      activeTurnId: null as string | null,
+      lastTurnStatus: null as string | null,
+      startTurn: vi.fn(async (inputText: string) => {
+        expect(inputText).toBe(HEADLESS_WARMUP_PROMPT);
+        client.activeTurnId = "turn-1";
+        return "turn-1";
+      }),
+      refreshCurrentThreadState: vi.fn(async () => {
+        client.activeTurnId = null;
+        client.lastTurnStatus = "completed";
+      }),
+    };
+
+    await expect(
+      maybeBootstrapHeadlessTurn(options, new Date(0), client),
+    ).resolves.toBe(true);
+    expect(client.startTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts a warmup turn for tap up cold-start without TAP_HEADLESS", async () => {
+    process.env.TAP_COLD_START_WARMUP = "true";
     const options = makeOptions();
 
     const client = {

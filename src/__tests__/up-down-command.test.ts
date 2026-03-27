@@ -83,6 +83,25 @@ describe("up/down orchestration commands", () => {
     expect(result.data).toHaveProperty("snapshot");
   });
 
+  it("enables cold-start warmup only while tap up delegates to bridge start", async () => {
+    delete process.env.TAP_COLD_START_WARMUP;
+    bridgeCommandMock.mockImplementation(async () => {
+      expect(process.env.TAP_COLD_START_WARMUP).toBe("true");
+      return {
+        ok: true,
+        command: "bridge",
+        code: "TAP_BRIDGE_START_OK",
+        message: "Started 1/1 bridge(s): codex",
+        warnings: [],
+        data: { started: ["codex"], failed: [] },
+      };
+    });
+
+    await upCommand([]);
+
+    expect(process.env.TAP_COLD_START_WARMUP).toBeUndefined();
+  });
+
   it("delegates tap down to bridge stop and attaches snapshot", async () => {
     bridgeCommandMock.mockResolvedValue({
       ok: true,

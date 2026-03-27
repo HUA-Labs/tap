@@ -46,10 +46,10 @@ function parsePermissionMode(args: string[]): PermissionMode {
 
 const INIT_HELP = `
 Usage:
-  tap-comms init [options]
+  tap init [options]
 
 Description:
-  Initialize the tap-comms directory structure, state file, and permissions.
+  Initialize the tap directory structure, state file, and permissions.
   Optionally clone a shared comms repository.
 
 Options:

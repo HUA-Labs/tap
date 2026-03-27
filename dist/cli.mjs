@@ -775,10 +775,10 @@ function parsePermissionMode(args) {
 }
 var INIT_HELP = `
 Usage:
-  tap-comms init [options]
+  tap init [options]
 
 Description:
-  Initialize the tap-comms directory structure, state file, and permissions.
+  Initialize the tap directory structure, state file, and permissions.
   Optionally clone a shared comms repository.
 
 Options:
@@ -1077,7 +1077,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   if (!sourcePath) {
     issues.push(
-      "tap-comms MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
+      "tap MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -1107,7 +1107,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   if (!command) {
     issues.push(
-      "bun is required to run the repo-local tap-comms MCP server (.ts source). Install bun: https://bun.sh"
+      "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh"
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -1122,7 +1122,8 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
 }
 
 // src/adapters/claude.ts
-var MCP_SERVER_KEY = "tap-comms";
+var MCP_SERVER_KEY = "tap";
+var OLD_MCP_SERVER_KEY = "tap-comms";
 function findMcpJsonPath(ctx) {
   return path8.join(ctx.repoRoot, ".mcp.json");
 }
@@ -1200,6 +1201,11 @@ var claudeAdapter = {
             `Existing "${MCP_SERVER_KEY}" entry in .mcp.json will be overwritten.`
           );
         }
+        if (config.mcpServers?.[OLD_MCP_SERVER_KEY]) {
+          conflicts.push(
+            `Legacy "${OLD_MCP_SERVER_KEY}" entry will be migrated to "${MCP_SERVER_KEY}".`
+          );
+        }
       } catch {
         warnings.push(
           ".mcp.json exists but is not valid JSON. Will be overwritten."
@@ -1209,7 +1215,7 @@ var claudeAdapter = {
     const serverEntry = buildMcpServerEntry(ctx);
     if (!serverEntry) {
       warnings.push(
-        "tap-comms MCP server entry not found. Skipping .mcp.json patch. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
+        "tap MCP server entry not found. Skipping .mcp.json patch. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available."
       );
       return {
         runtime: "claude",
@@ -1262,6 +1268,10 @@ var claudeAdapter = {
               );
             }
           }
+          const servers = config.mcpServers;
+          if (servers?.[OLD_MCP_SERVER_KEY]) {
+            delete servers[OLD_MCP_SERVER_KEY];
+          }
           if (op.key) {
             setNestedKey(config, op.key, op.value);
           }
@@ -1310,7 +1320,7 @@ var claudeAdapter = {
           checks.push({ name: "Config is valid JSON", passed: true });
           const entry = config.mcpServers?.[MCP_SERVER_KEY];
           checks.push({
-            name: "tap-comms entry present",
+            name: "tap entry present",
             passed: !!entry,
             message: entry ? void 0 : `mcpServers.${MCP_SERVER_KEY} not found`
           });
@@ -1403,8 +1413,10 @@ function readArtifactBackup(backupPath) {
 }
 
 // src/adapters/codex.ts
-var MCP_SELECTOR = "mcp_servers.tap-comms";
-var ENV_SELECTOR = "mcp_servers.tap-comms.env";
+var MCP_SELECTOR = "mcp_servers.tap";
+var ENV_SELECTOR = "mcp_servers.tap.env";
+var OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
+var OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
 function findCodexConfigPath2() {
   return path10.join(getHomeDir(), ".codex", "config.toml");
 }
@@ -1458,12 +1470,12 @@ function verifyManagedToml(content, ctx, configPath) {
     message: fs10.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
-    name: "tap-comms MCP table present",
+    name: "tap MCP table present",
     passed: !!mainTable,
     message: mainTable ? void 0 : `${MCP_SELECTOR} not found`
   });
   checks.push({
-    name: "tap-comms env table present",
+    name: "tap env table present",
     passed: !!envTable,
     message: envTable ? void 0 : `${ENV_SELECTOR} not found`
   });
@@ -1483,7 +1495,7 @@ function verifyManagedToml(content, ctx, configPath) {
       passed: mainTable.includes(
         `command = "${managed.command.replace(/\\/g, "\\\\")}"`
       ) && mainTable.includes(`args = [${expectedArgs}]`),
-      message: "Managed tap-comms command/args do not match expected values"
+      message: "Managed tap command/args do not match expected values"
     });
   }
   return checks;
@@ -1532,6 +1544,11 @@ var codexAdapter = {
       const content = readConfigOrEmpty(configPath);
       if (extractTomlTable(content, MCP_SELECTOR)) {
         conflicts.push(`Existing ${MCP_SELECTOR} table will be updated.`);
+      }
+      if (extractTomlTable(content, OLD_MCP_SELECTOR)) {
+        conflicts.push(
+          `Legacy ${OLD_MCP_SELECTOR} table will be migrated to ${MCP_SELECTOR}.`
+        );
       }
       if (extractTomlTable(content, ENV_SELECTOR)) {
         conflicts.push(`Existing ${ENV_SELECTOR} table will be updated.`);
@@ -1598,6 +1615,12 @@ var codexAdapter = {
       return { ...artifact, backupPath };
     });
     let nextContent = existingContent;
+    if (extractTomlTable(nextContent, OLD_ENV_SELECTOR)) {
+      nextContent = removeTomlTable(nextContent, OLD_ENV_SELECTOR);
+    }
+    if (extractTomlTable(nextContent, OLD_MCP_SELECTOR)) {
+      nextContent = removeTomlTable(nextContent, OLD_MCP_SELECTOR);
+    }
     nextContent = replaceTomlTable(
       nextContent,
       MCP_SELECTOR,
@@ -1711,7 +1734,8 @@ var codexAdapter = {
 // src/adapters/gemini.ts
 import * as fs11 from "fs";
 import * as path11 from "path";
-var GEMINI_SELECTOR = "mcpServers.tap-comms";
+var GEMINI_SELECTOR = "mcpServers.tap";
+var OLD_GEMINI_SELECTOR = "mcpServers.tap-comms";
 function candidateConfigPaths(ctx) {
   const home = getHomeDir();
   return [
@@ -1773,7 +1797,7 @@ function verifyGeminiConfig(config, configPath, ctx) {
     message: fs11.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
-    name: "tap-comms entry present",
+    name: "tap entry present",
     passed: !!entry,
     message: entry ? void 0 : `${GEMINI_SELECTOR} not found`
   });
@@ -1838,6 +1862,11 @@ var geminiAdapter = {
         const config = readJsonFile(configPath);
         if (readNestedKey(config, GEMINI_SELECTOR) !== void 0) {
           conflicts.push(`Existing ${GEMINI_SELECTOR} entry will be updated.`);
+        }
+        if (readNestedKey(config, OLD_GEMINI_SELECTOR) !== void 0) {
+          conflicts.push(
+            `Legacy ${OLD_GEMINI_SELECTOR} entry will be migrated to ${GEMINI_SELECTOR}.`
+          );
         }
       } catch {
         warnings.push(
@@ -1906,6 +1935,13 @@ var geminiAdapter = {
       existed: previousValue !== void 0,
       value: previousValue
     });
+    const oldValue = readNestedKey(config, OLD_GEMINI_SELECTOR);
+    if (oldValue !== void 0) {
+      const servers = config.mcpServers;
+      if (servers) {
+        delete servers["tap-comms"];
+      }
+    }
     setNestedKey2(config, GEMINI_SELECTOR, {
       command: managed.command,
       args: managed.args,
@@ -1987,6 +2023,7 @@ function getAdapter(runtime) {
 // src/engine/bridge.ts
 import * as fs13 from "fs";
 import * as net from "net";
+import * as os3 from "os";
 import * as path13 from "path";
 import { randomBytes } from "crypto";
 import { spawn, spawnSync as spawnSync3, execSync as execSync3 } from "child_process";
@@ -2159,6 +2196,8 @@ var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
 var APP_SERVER_HEALTH_RETRY_MS = 250;
 var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 var APP_SERVER_AUTH_FILE_MODE = 384;
+var WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
+var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
 function appServerLogFilePath(stateDir, instanceId) {
   return path13.join(stateDir, "logs", `app-server-${instanceId}.log`);
 }
@@ -2195,12 +2234,66 @@ function removeFileIfExists(filePath) {
   } catch {
   }
 }
+function toPowerShellSingleQuotedString(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function toPowerShellStringArrayLiteral(values) {
+  return `@(${values.map(toPowerShellSingleQuotedString).join(", ")})`;
+}
+function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
+  let entries;
+  try {
+    entries = fs13.readdirSync(os3.tmpdir());
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) || !/\.(cmd|ps1)$/i.test(entry)) {
+      continue;
+    }
+    const wrapperPath = path13.join(os3.tmpdir(), entry);
+    try {
+      const stats = fs13.statSync(wrapperPath);
+      if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
+        continue;
+      }
+      fs13.unlinkSync(wrapperPath);
+    } catch {
+    }
+  }
+}
+function buildWindowsDetachedWrapperScript(command, args, logPath, stderrLogPath, env) {
+  const lines = ["$ErrorActionPreference = 'Stop'"];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== void 0 && value !== process.env[key]) {
+      lines.push(
+        `[Environment]::SetEnvironmentVariable(${toPowerShellSingleQuotedString(key)}, ${toPowerShellSingleQuotedString(value)}, 'Process')`
+      );
+    }
+  }
+  lines.push(
+    `$logPath = ${toPowerShellSingleQuotedString(logPath)}`,
+    `$stderrLogPath = ${toPowerShellSingleQuotedString(stderrLogPath)}`,
+    `$commandPath = ${toPowerShellSingleQuotedString(command)}`,
+    `$commandArgs = ${toPowerShellStringArrayLiteral(args)}`,
+    "$exitCode = 1",
+    "try {",
+    "  & $commandPath @commandArgs >> $logPath 2>> $stderrLogPath",
+    "  $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
+    "} finally {",
+    "  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+    "}",
+    "exit $exitCode"
+  );
+  return `${lines.join("\r\n")}\r
+`;
+}
 function getWebSocketCtor() {
   const candidate = globalThis.WebSocket;
   return typeof candidate === "function" ? candidate : null;
 }
 function delay(ms) {
-  return new Promise((resolve11) => setTimeout(resolve11, ms));
+  return new Promise((resolve13) => setTimeout(resolve13, ms));
 }
 function isLoopbackHost(hostname) {
   return hostname === "127.0.0.1" || hostname === "localhost";
@@ -2252,7 +2345,7 @@ function getBridgeRuntimeStateDir(repoRoot, instanceId) {
 }
 async function allocateLoopbackPort(hostname) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve11, reject) => {
+  return await new Promise((resolve13, reject) => {
     const server = net.createServer();
     server.unref();
     server.once("error", reject);
@@ -2270,7 +2363,7 @@ async function allocateLoopbackPort(hostname) {
           reject(error);
           return;
         }
-        resolve11(port);
+        resolve13(port);
       });
     });
   });
@@ -2453,35 +2546,50 @@ function findReusableManagedAppServer(stateDir, publicUrl) {
   return null;
 }
 function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
-  const ext = path13.extname(command).toLowerCase();
   const stderrLogPath = stderrLogFilePath(logPath);
-  const stdoutFd = fs13.openSync(logPath, "a");
-  const stderrFd = fs13.openSync(stderrLogPath, "a");
-  try {
-    const child = ext === ".ps1" ? spawn(
-      resolvePowerShellCommand(),
-      ["-NoLogo", "-NoProfile", "-File", command, ...args],
-      {
-        cwd: repoRoot,
-        detached: true,
-        stdio: ["ignore", stdoutFd, stderrFd],
-        env,
-        windowsHide: true
-      }
-    ) : spawn(command, args, {
-      cwd: repoRoot,
-      detached: true,
-      stdio: ["ignore", stdoutFd, stderrFd],
-      env,
-      windowsHide: true,
-      shell: ext === ".cmd" || ext === ".bat"
-    });
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    fs13.closeSync(stdoutFd);
-    fs13.closeSync(stderrFd);
+  const powerShellCommand = resolvePowerShellCommand();
+  cleanupStaleWindowsSpawnWrappers();
+  const wrapperPath = path13.join(
+    os3.tmpdir(),
+    `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`
+  );
+  fs13.writeFileSync(
+    wrapperPath,
+    buildWindowsDetachedWrapperScript(
+      command,
+      args,
+      logPath,
+      stderrLogPath,
+      env
+    )
+  );
+  const psCommand = [
+    "$p = Start-Process",
+    `-FilePath ${toPowerShellSingleQuotedString(powerShellCommand)}`,
+    `-ArgumentList ${toPowerShellStringArrayLiteral(["-NoLogo", "-NoProfile", "-File", wrapperPath])}`,
+    `-WorkingDirectory ${toPowerShellSingleQuotedString(repoRoot)}`,
+    "-WindowStyle Hidden",
+    "-PassThru",
+    "; Write-Output $p.Id"
+  ].join(" ");
+  const result = spawnSync3(
+    powerShellCommand,
+    ["-NoLogo", "-NoProfile", "-Command", psCommand],
+    {
+      encoding: "utf-8",
+      windowsHide: true
+    }
+  );
+  if (result.status !== 0) {
+    removeFileIfExists(wrapperPath);
+    return null;
   }
+  const pid = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(pid)) {
+    removeFileIfExists(wrapperPath);
+    return null;
+  }
+  return pid;
 }
 function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
   return startWindowsDetachedProcess(
@@ -2543,12 +2651,12 @@ function resolveAppServerUrl(baseUrl, port) {
 }
 async function isTcpPortAvailable(hostname, port) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve11) => {
+  return await new Promise((resolve13) => {
     const server = net.createServer();
     server.unref();
-    server.once("error", () => resolve11(false));
+    server.once("error", () => resolve13(false));
     server.listen(port, bindHost, () => {
-      server.close((error) => resolve11(!error));
+      server.close((error) => resolve13(!error));
     });
   });
 }
@@ -2583,7 +2691,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
   if (!WebSocket) {
     return false;
   }
-  return new Promise((resolve11) => {
+  return new Promise((resolve13) => {
     let settled = false;
     let socket = null;
     const finish = (healthy) => {
@@ -2596,7 +2704,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
         socket?.close();
       } catch {
       }
-      resolve11(healthy);
+      resolve13(healthy);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
@@ -2920,7 +3028,11 @@ function logFilePath(stateDir, instanceId) {
 function runtimeHeartbeatFilePath(runtimeStateDir) {
   return path13.join(runtimeStateDir, "heartbeat.json");
 }
-function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
+function runtimeThreadStateFilePath(runtimeStateDir) {
+  return path13.join(runtimeStateDir, "thread.json");
+}
+function loadRuntimeBridgeHeartbeat(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
   if (!runtimeStateDir) {
     return null;
   }
@@ -2929,12 +3041,34 @@ function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
     return null;
   }
   try {
-    const raw = fs13.readFileSync(heartbeatPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed.updatedAt === "string" ? parsed.updatedAt : null;
+    return JSON.parse(
+      fs13.readFileSync(heartbeatPath, "utf-8")
+    );
   } catch {
     return null;
   }
+}
+function loadRuntimeBridgeThreadState(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+  const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
+  if (!fs13.existsSync(threadPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(
+      fs13.readFileSync(threadPath, "utf-8")
+    );
+    return parsed.threadId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
+  const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
+  return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
 }
 function resolveHeartbeatTimestamp(state) {
   return loadRuntimeHeartbeatTimestamp(state?.runtimeStateDir) ?? state?.lastHeartbeat ?? null;
@@ -3105,6 +3239,7 @@ async function startBridge(options) {
           options.messageLookbackMinutes
         )
       } : {},
+      ...process.env.TAP_COLD_START_WARMUP === "true" ? { TAP_COLD_START_WARMUP: "true" } : {},
       ...options.threadId ? { TAP_THREAD_ID: options.threadId } : {},
       ...options.ephemeral ? { TAP_EPHEMERAL: "true" } : {},
       ...options.processExistingMessages ? { TAP_PROCESS_EXISTING: "true" } : {}
@@ -3238,10 +3373,10 @@ function getBridgeStatus(stateDir, instanceId) {
 // src/commands/add.ts
 var ADD_HELP = `
 Usage:
-  tap-comms add <claude|codex|gemini> [options]
+  tap add <claude|codex|gemini> [options]
 
 Description:
-  Install a runtime instance and configure it to use tap-comms.
+  Install a runtime instance and configure it to use tap.
 
 Options:
   --name <name>         Instance name (default: runtime name)
@@ -3598,7 +3733,7 @@ async function addCommand(args) {
 // src/commands/status.ts
 var STATUS_HELP = `
 Usage:
-  tap-comms status
+  tap status
 
 Description:
   Show all installed instances, their bridge status, and configuration info.
@@ -3874,7 +4009,7 @@ function cleanEmptyParents(obj, keyPath) {
 // src/commands/remove.ts
 var REMOVE_HELP = `
 Usage:
-  tap-comms remove <instance>
+  tap remove <instance>
 
 Description:
   Remove a registered instance, stop its bridge, and rollback config changes.
@@ -4003,7 +4138,7 @@ function formatAge(seconds) {
 }
 var BRIDGE_HELP = `
 Usage:
-  tap-comms bridge <subcommand> [instance] [options]
+  tap bridge <subcommand> [instance] [options]
 
 Subcommands:
   start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
@@ -4060,6 +4195,21 @@ function redactProtectedUrl(url) {
 }
 function loadCurrentBridgeState(stateDir, instanceId, fallback) {
   return loadBridgeState(stateDir, instanceId) ?? fallback ?? null;
+}
+function formatThreadSummary(threadId, cwd) {
+  if (!threadId) {
+    return "-";
+  }
+  return cwd ? `${threadId} (${cwd})` : threadId;
+}
+function normalizeComparablePath(value) {
+  return path14.resolve(value).replace(/\\/g, "/").toLowerCase();
+}
+function sameOptionalPath(left, right) {
+  if (!left || !right) {
+    return left === right;
+  }
+  return normalizeComparablePath(left) === normalizeComparablePath(right);
 }
 function getSharedAppServerUsers(state, stateDir, currentInstanceId, appServerUrl) {
   const shared = [];
@@ -4673,12 +4823,18 @@ function bridgeStatusAll() {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null
       };
       continue;
     }
     const status = getBridgeStatus(stateDir, instanceId);
     const bridgeState = loadBridgeState(stateDir, instanceId);
+    const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+    const savedThread = loadRuntimeBridgeThreadState(bridgeState);
     const age = getHeartbeatAge(stateDir, instanceId);
     const pid = bridgeState?.pid ?? null;
     const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
@@ -4700,12 +4856,26 @@ function bridgeStatusAll() {
         );
       }
     }
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `  Thread:     ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`
+      );
+    }
+    if (savedThread?.threadId && (savedThread.threadId !== runtimeHeartbeat?.threadId || !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))) {
+      log(
+        `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
+      );
+    }
     bridges[instanceId] = {
       status,
       runtime: inst.runtime,
       pid,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null
     };
   }
@@ -4781,6 +4951,10 @@ function bridgeStatusOne(identifier) {
         pid: null,
         port: inst.port,
         lastHeartbeat: null,
+        threadId: null,
+        threadCwd: null,
+        savedThreadId: null,
+        savedThreadCwd: null,
         appServer: null
       }
     };
@@ -4789,6 +4963,8 @@ function bridgeStatusOne(identifier) {
   const stateDir = resolvedCfg2.stateDir;
   const status = getBridgeStatus(stateDir, instanceId);
   const bridgeState = loadBridgeState(stateDir, instanceId);
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
   const age = getHeartbeatAge(stateDir, instanceId);
   const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
   log(`Status:      ${status}`);
@@ -4797,6 +4973,16 @@ function bridgeStatusOne(identifier) {
     log(
       `Heartbeat:   ${heartbeat ?? "-"}${age !== null ? ` (${formatAge(age)})` : ""}`
     );
+    if (runtimeHeartbeat?.threadId) {
+      log(
+        `Thread:      ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`
+      );
+    }
+    if (savedThread?.threadId && (savedThread.threadId !== runtimeHeartbeat?.threadId || !sameOptionalPath(savedThread.cwd, runtimeHeartbeat?.threadCwd))) {
+      log(
+        `Saved:       ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
+      );
+    }
     log(
       `Log:         ${path14.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
     );
@@ -4845,6 +5031,10 @@ function bridgeStatusOne(identifier) {
       pid: bridgeState?.pid ?? null,
       port: inst.port,
       lastHeartbeat: heartbeat,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
       appServer: bridgeState?.appServer ?? null
     }
   };
@@ -5214,7 +5404,7 @@ function collectDashboardSnapshot(repoRoot, commsDirOverride) {
 // src/commands/up.ts
 var UP_HELP = `
 Usage:
-  tap-comms up [bridge-start options]
+  tap up [bridge-start options]
 
 Description:
   Start all registered app-server bridge daemons with one command.
@@ -5238,7 +5428,18 @@ async function upCommand(args) {
     };
   }
   const repoRoot = findRepoRoot();
-  const result = await bridgeCommand(["start", "--all", ...args]);
+  const previousColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
+  process.env.TAP_COLD_START_WARMUP = "true";
+  let result;
+  try {
+    result = await bridgeCommand(["start", "--all", ...args]);
+  } finally {
+    if (previousColdStartWarmup === void 0) {
+      delete process.env.TAP_COLD_START_WARMUP;
+    } else {
+      process.env.TAP_COLD_START_WARMUP = previousColdStartWarmup;
+    }
+  }
   const snapshot = collectDashboardSnapshot(repoRoot);
   const activeBridges = snapshot.bridges.filter(
     (bridge) => bridge.status === "running"
@@ -5269,7 +5470,7 @@ async function upCommand(args) {
 // src/commands/down.ts
 var DOWN_HELP = `
 Usage:
-  tap-comms down
+  tap down
 
 Description:
   Stop all running bridge daemons and managed app-servers.
@@ -5320,10 +5521,10 @@ import * as path16 from "path";
 import { spawn as spawn2 } from "child_process";
 var SERVE_HELP = `
 Usage:
-  tap-comms serve [options]
+  tap serve [options]
 
 Description:
-  Start the tap-comms MCP server over stdio. This command takes over the
+  Start the tap MCP server over stdio. This command takes over the
   process \u2014 it is intended to be launched by an MCP host (e.g. Claude Code).
 
 Options:
@@ -5393,9 +5594,9 @@ async function serveCommand(args) {
       TAP_COMMS_DIR: commsDir
     }
   });
-  return new Promise((resolve11) => {
+  return new Promise((resolve13) => {
     child.on("error", (err) => {
-      resolve11({
+      resolve13({
         ok: false,
         command: "serve",
         code: "TAP_INTERNAL_ERROR",
@@ -5405,7 +5606,7 @@ async function serveCommand(args) {
       });
     });
     child.on("exit", (code) => {
-      resolve11({
+      resolve13({
         ok: code === 0,
         command: "serve",
         code: code === 0 ? "TAP_SERVE_OK" : "TAP_INTERNAL_ERROR",
@@ -5423,7 +5624,7 @@ import * as path17 from "path";
 import { execSync as execSync5 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
-  tap-comms init-worktree [options]
+  tap init-worktree [options]
 
 Options:
   --path <dir>         Worktree directory (required, e.g. ../hua-wt-3)
@@ -5606,7 +5807,7 @@ function step4GenerateMcpJson(opts, warnings) {
   );
   const mcpConfig = {
     mcpServers: {
-      "tap-comms": {
+      tap: {
         command: bunAbs,
         args: [channelEntry],
         cwd: wtAbs,
@@ -5870,7 +6071,7 @@ function renderSnapshot(snapshot) {
 }
 var DASHBOARD_HELP = `
 Usage:
-  tap-comms dashboard [options]
+  tap dashboard [options]
 
 Description:
   Display a unified ops dashboard: agents, bridges, PRs, and warnings.
@@ -5959,14 +6160,150 @@ import {
   mkdirSync as mkdirSync10,
   readdirSync as readdirSync4,
   readFileSync as readFileSync14,
+  renameSync as renameSync10,
   statSync as statSync2,
-  unlinkSync as unlinkSync3
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync12
 } from "fs";
-import { execSync as execSync6 } from "child_process";
-import { join as join17 } from "path";
+import { homedir as homedir3 } from "os";
+import { spawnSync as spawnSync4 } from "child_process";
+import { dirname as dirname11, join as join17, resolve as resolve12 } from "path";
 var PASS = "pass";
 var WARN = "warn";
 var FAIL = "fail";
+var CODEX_ENV_DRIFT_KEYS = [
+  "TAP_COMMS_DIR",
+  "TAP_STATE_DIR",
+  "TAP_REPO_ROOT"
+];
+function normalizeComparablePath2(value) {
+  return resolve12(value).replace(/\\/g, "/").toLowerCase();
+}
+function samePath(left, right) {
+  return normalizeComparablePath2(left) === normalizeComparablePath2(right);
+}
+function looksLikePathToken(value) {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("/") || value.startsWith("\\") || value.startsWith(".") || value.includes("/") || value.includes("\\");
+}
+function sameCommandToken(left, right) {
+  return looksLikePathToken(left) || looksLikePathToken(right) ? samePath(left, right) : left === right;
+}
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => sameCommandToken(value, right[index] ?? ""));
+}
+function appendWarningMessage(message, extra) {
+  return message.includes(extra) ? message : `${message}; ${extra}`;
+}
+function findCodexConfigPath3() {
+  return join17(homedir3(), ".codex", "config.toml");
+}
+function canonicalizeTrustPath3(targetPath) {
+  let resolved = resolve12(targetPath).replace(/\//g, "\\");
+  const driveRoot = /^[A-Za-z]:\\$/;
+  if (!driveRoot.test(resolved)) {
+    resolved = resolved.replace(/\\+$/g, "");
+  }
+  return resolved.startsWith("\\\\?\\") ? resolved : `\\\\?\\${resolved}`;
+}
+function trustSelector2(targetPath) {
+  return `projects.'${canonicalizeTrustPath3(targetPath)}'`;
+}
+function writeTomlAtomically(filePath, content) {
+  const dir = dirname11(filePath);
+  mkdirSync10(dir, { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  writeFileSync12(tmp, content, "utf-8");
+  renameSync10(tmp, filePath);
+}
+function hasInstalledCodexInstance(state) {
+  return !!state ? Object.values(state.instances).some(
+    (instance2) => instance2.runtime === "codex" && instance2.installed
+  ) : false;
+}
+function getCodexTrustTargets(repoRoot) {
+  return [...new Set([repoRoot, process.cwd()].map((value) => resolve12(value)))];
+}
+function buildCodexDoctorSpec(repoRoot, commsDir) {
+  const state = loadState(repoRoot);
+  if (!hasInstalledCodexInstance(state)) {
+    return null;
+  }
+  const ctx = createAdapterContext(commsDir, repoRoot);
+  const managed = buildManagedMcpServerSpec(ctx);
+  return {
+    configPath: findCodexConfigPath3(),
+    trustTargets: getCodexTrustTargets(repoRoot),
+    managed
+  };
+}
+function repairCodexConfig(repoRoot, commsDir) {
+  const spec = buildCodexDoctorSpec(repoRoot, commsDir);
+  if (!spec) {
+    throw new Error("No installed Codex instance found in tap state.");
+  }
+  if (!spec.managed.command || spec.managed.issues.length > 0) {
+    throw new Error(
+      spec.managed.issues[0] ?? "Unable to resolve the managed tap MCP server for Codex."
+    );
+  }
+  const existingContent = existsSync16(spec.configPath) ? readFileSync14(spec.configPath, "utf-8") : "";
+  const existingTapEnvTable = extractTomlTable(existingContent, "mcp_servers.tap.env");
+  const existingLegacyEnvTable = extractTomlTable(
+    existingContent,
+    "mcp_servers.tap-comms.env"
+  );
+  const preservedEnv = parseTomlAssignments(
+    existingTapEnvTable ?? existingLegacyEnvTable ?? ""
+  );
+  const repairedEnv = {
+    ...preservedEnv,
+    ...Object.fromEntries(
+      CODEX_ENV_DRIFT_KEYS.map((key) => [key, spec.managed.env[key]])
+    )
+  };
+  let nextContent = existingContent;
+  if (extractTomlTable(nextContent, "mcp_servers.tap-comms.env")) {
+    nextContent = removeTomlTable(nextContent, "mcp_servers.tap-comms.env");
+  }
+  if (extractTomlTable(nextContent, "mcp_servers.tap-comms")) {
+    nextContent = removeTomlTable(nextContent, "mcp_servers.tap-comms");
+  }
+  nextContent = replaceTomlTable(
+    nextContent,
+    "mcp_servers.tap",
+    renderTomlTable(
+      "mcp_servers.tap",
+      {
+        command: spec.managed.command,
+        args: spec.managed.args
+      },
+      extractTomlTable(existingContent, "mcp_servers.tap")
+    )
+  );
+  nextContent = replaceTomlTable(
+    nextContent,
+    "mcp_servers.tap.env",
+    renderTomlTable(
+      "mcp_servers.tap.env",
+      repairedEnv,
+      existingTapEnvTable ?? existingLegacyEnvTable
+    )
+  );
+  for (const trustTarget of spec.trustTargets) {
+    const selector = trustSelector2(trustTarget);
+    nextContent = replaceTomlTable(
+      nextContent,
+      selector,
+      renderTomlTable(
+        selector,
+        { trust_level: "trusted" },
+        extractTomlTable(existingContent, selector)
+      )
+    );
+  }
+  writeTomlAtomically(spec.configPath, nextContent);
+  return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
+}
 function countFiles(dir, ext = ".md") {
   if (!existsSync16(dir)) return 0;
   try {
@@ -5990,21 +6327,6 @@ function recentFileCount(dir, withinMs) {
   } catch {
   }
   return count;
-}
-function loadBridgeRuntimeHeartbeat(bridgeState) {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) {
-    return null;
-  }
-  const heartbeatPath = join17(runtimeStateDir, "heartbeat.json");
-  if (!existsSync16(heartbeatPath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(readFileSync14(heartbeatPath, "utf-8"));
-  } catch {
-    return null;
-  }
 }
 function checkComms(commsDir) {
   const checks = [];
@@ -6089,7 +6411,8 @@ function checkInstances(repoRoot, stateDir) {
       const running = isBridgeRunning(stateDir, id);
       const bridgeState = loadBridgeState(stateDir, id);
       const heartbeatAge = getHeartbeatAge(stateDir, id);
-      const runtimeHeartbeat = loadBridgeRuntimeHeartbeat(bridgeState);
+      const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+      const savedThread = loadRuntimeBridgeThreadState(bridgeState);
       let status;
       let message;
       let fix;
@@ -6135,8 +6458,29 @@ function checkInstances(repoRoot, stateDir) {
       }
       const lastRuntimeError = runtimeHeartbeat?.lastError?.trim();
       if (lastRuntimeError) {
-        status = status === FAIL ? FAIL : WARN;
+        status = WARN;
         message = `${message}; bridge last error: ${lastRuntimeError}`;
+      }
+      if (savedThread?.threadId && savedThread.cwd && !samePath(savedThread.cwd, repoRoot)) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `saved thread cwd mismatch (${savedThread.cwd})`
+        );
+      }
+      if (runtimeHeartbeat?.threadId && savedThread?.threadId && runtimeHeartbeat.threadId !== savedThread.threadId) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `saved thread ${savedThread.threadId} differs from active thread ${runtimeHeartbeat.threadId}`
+        );
+      }
+      if (runtimeHeartbeat?.threadCwd && !samePath(runtimeHeartbeat.threadCwd, repoRoot)) {
+        status = WARN;
+        message = appendWarningMessage(
+          message,
+          `active thread cwd mismatch (${runtimeHeartbeat.threadCwd})`
+        );
       }
       checks.push({ name: `bridge: ${id}`, status, message, fix });
     } else {
@@ -6210,15 +6554,25 @@ function checkMcpServer(repoRoot) {
     });
     return checks;
   }
-  const hasTapComms = config?.mcpServers?.["tap-comms"];
-  if (!hasTapComms) {
+  const mcpServers = config?.mcpServers;
+  const hasTap = mcpServers?.["tap"];
+  const hasOldKey = mcpServers?.["tap-comms"];
+  if (hasOldKey) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
-      message: "tap-comms not configured"
+      message: 'Legacy "tap-comms" key found. Run "tap add claude" to migrate to the new "tap" key.'
+    });
+  }
+  if (!hasTap && !hasOldKey) {
+    checks.push({
+      name: "MCP config (.mcp.json)",
+      status: WARN,
+      message: "tap not configured"
     });
     return checks;
   }
+  const hasTapComms = hasTap ?? hasOldKey;
   checks.push({
     name: "MCP config (.mcp.json)",
     status: PASS,
@@ -6229,11 +6583,12 @@ function checkMcpServer(repoRoot) {
     let cmdAvailable = existsSync16(cmd);
     if (!cmdAvailable) {
       try {
-        execSync6(`"${cmd}" --version`, {
+        const result = spawnSync4(cmd, ["--version"], {
           stdio: "pipe",
-          timeout: 5e3
+          timeout: 5e3,
+          shell: process.platform === "win32"
         });
-        cmdAvailable = true;
+        cmdAvailable = result.status === 0;
       } catch {
       }
     }
@@ -6289,6 +6644,88 @@ function checkMcpServer(repoRoot) {
     name: "MCP session cache",
     status: PASS,
     message: "If .mcp.json was changed mid-session, restart Claude (Ctrl+C \u2192 claude --resume) to reload"
+  });
+  return checks;
+}
+function checkCodexConfig(repoRoot, commsDir) {
+  const spec = buildCodexDoctorSpec(repoRoot, commsDir);
+  if (!spec) {
+    return [];
+  }
+  const checks = [];
+  const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
+  if (!existsSync16(spec.configPath)) {
+    checks.push({
+      name: "MCP config (~/.codex/config.toml)",
+      status: WARN,
+      message: `${spec.configPath} not found. ${fixHint}`,
+      fix: () => repairCodexConfig(repoRoot, commsDir)
+    });
+    return checks;
+  }
+  const content = readFileSync14(spec.configPath, "utf-8");
+  const tapTable = extractTomlTable(content, "mcp_servers.tap");
+  const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
+  const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
+  const legacyEnvTable = extractTomlTable(content, "mcp_servers.tap-comms.env");
+  const selectedMain = parseTomlAssignments(tapTable ?? "");
+  const selectedEnv = parseTomlAssignments(
+    tapEnvTable ?? legacyEnvTable ?? ""
+  );
+  const issues = [];
+  if (legacyTable || legacyEnvTable) {
+    issues.push('legacy "tap-comms" key present');
+  }
+  if (!tapTable && !legacyTable) {
+    issues.push("tap MCP table missing");
+  }
+  if (!tapEnvTable && !legacyEnvTable) {
+    issues.push("tap MCP env table missing");
+  }
+  if (tapTable && spec.managed.command) {
+    const actualCommand = selectedMain.command;
+    if (typeof actualCommand !== "string") {
+      issues.push("tap MCP command missing");
+    } else if (!sameCommandToken(actualCommand, spec.managed.command)) {
+      issues.push(`tap MCP command drift (${actualCommand})`);
+    }
+    const actualArgs = selectedMain.args;
+    if (!Array.isArray(actualArgs)) {
+      issues.push("tap MCP args missing");
+    } else if (!sameStringArray(actualArgs, spec.managed.args)) {
+      issues.push(`tap MCP args drift (${JSON.stringify(actualArgs)})`);
+    }
+  }
+  for (const key of CODEX_ENV_DRIFT_KEYS) {
+    const expected = spec.managed.env[key];
+    const actual = selectedEnv[key];
+    if (typeof actual !== "string") {
+      issues.push(`${key} missing`);
+      continue;
+    }
+    if (!samePath(actual, expected)) {
+      issues.push(`${key} drift (${actual})`);
+    }
+  }
+  for (const trustTarget of spec.trustTargets) {
+    const trustTable = extractTomlTable(content, trustSelector2(trustTarget));
+    if (!trustTable || !trustTable.includes('trust_level = "trusted"')) {
+      issues.push(`missing trust for ${trustTarget}`);
+    }
+  }
+  if (issues.length === 0) {
+    checks.push({
+      name: "MCP config (~/.codex/config.toml)",
+      status: PASS,
+      message: spec.configPath
+    });
+    return checks;
+  }
+  checks.push({
+    name: "MCP config (~/.codex/config.toml)",
+    status: WARN,
+    message: `${issues.join("; ")}. ${fixHint}`,
+    fix: () => repairCodexConfig(repoRoot, commsDir)
   });
   return checks;
 }
@@ -6408,7 +6845,7 @@ function renderCheck(check, fixMode) {
 }
 var DOCTOR_HELP = `
 Usage:
-  tap-comms doctor [options]
+  tap doctor [options]
 
 Description:
   Diagnose tap infrastructure health: comms directory, instances, bridges,
@@ -6456,6 +6893,7 @@ async function doctorCommand(args) {
     checks.push(...checkInstances(repoRoot, config.stateDir));
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
+    checks.push(...checkCodexConfig(repoRoot, commsDir));
     checks.push(...checkBridgeTurnHealth(repoRoot));
     return checks;
   }
@@ -6547,12 +6985,12 @@ async function doctorCommand(args) {
 }
 
 // src/commands/comms.ts
-import { execSync as execSync7, spawnSync as spawnSync4 } from "child_process";
+import { execSync as execSync6, spawnSync as spawnSync5 } from "child_process";
 import * as fs17 from "fs";
 import * as path18 from "path";
 var COMMS_HELP = `
 Usage:
-  tap-comms comms <subcommand>
+  tap comms <subcommand>
 
 Subcommands:
   pull    Pull latest changes from comms remote repo
@@ -6579,7 +7017,7 @@ function commsPull(commsDir) {
     };
   }
   try {
-    const output = execSync7("git pull --rebase", {
+    const output = execSync6("git pull --rebase", {
       cwd: commsDir,
       encoding: "utf-8",
       stdio: "pipe"
@@ -6621,8 +7059,8 @@ function commsPush(commsDir) {
     };
   }
   try {
-    execSync7("git add -A", { cwd: commsDir, stdio: "pipe" });
-    const status = execSync7("git status --porcelain", {
+    execSync6("git add -A", { cwd: commsDir, stdio: "pipe" });
+    const status = execSync6("git status --porcelain", {
       cwd: commsDir,
       encoding: "utf-8",
       stdio: "pipe"
@@ -6639,7 +7077,7 @@ function commsPush(commsDir) {
       };
     }
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const commitResult = spawnSync4(
+    const commitResult = spawnSync5(
       "git",
       ["commit", "-m", `chore(comms): sync ${timestamp}`],
       { cwd: commsDir, stdio: "pipe", encoding: "utf-8" }
@@ -6655,7 +7093,7 @@ function commsPush(commsDir) {
         data: { commsDir }
       };
     }
-    execSync7("git push", { cwd: commsDir, stdio: "pipe" });
+    execSync6("git push", { cwd: commsDir, stdio: "pipe" });
     logSuccess("Comms push complete");
     return {
       ok: true,
@@ -6739,16 +7177,61 @@ function extractJsonFlag(args) {
   return { jsonMode, cleanArgs };
 }
 
+// src/cli-suggest.ts
+var COMMANDS = [
+  "init",
+  "init-worktree",
+  "add",
+  "remove",
+  "status",
+  "bridge",
+  "up",
+  "down",
+  "comms",
+  "dashboard",
+  "doctor",
+  "serve",
+  "version"
+];
+function suggestCommand(input) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const cmd of COMMANDS) {
+    const d = levenshtein(input.toLowerCase(), cmd);
+    if (d < bestDist && d <= Math.max(2, Math.floor(cmd.length / 2))) {
+      bestDist = d;
+      best = cmd;
+    }
+  }
+  return best;
+}
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from(
+    { length: m + 1 },
+    () => Array.from({ length: n + 1 }).fill(0)
+  );
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
 // src/cli.ts
 var HELP = `
 @hua-labs/tap \u2014 Cross-model AI agent communication setup
 
 Usage:
-  tap-comms <command> [options]
+  tap <command> [options]
 
 Commands:
   init                  Initialize comms directory and state
-  init-worktree         Set up a new git worktree with tap-comms
+  init-worktree         Set up a new git worktree with tap
   add <runtime>         Add a runtime instance (claude, codex, gemini)
   remove <instance>     Remove an instance and rollback config
   status                Show installed instances and bridge status
@@ -6758,7 +7241,7 @@ Commands:
   comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
   doctor                Diagnose tap infrastructure health
-  serve                 Start tap-comms MCP server (stdio)
+  serve                 Start tap MCP server (stdio)
   version               Show version
 
 Options:
@@ -6859,15 +7342,21 @@ async function main() {
         process.exit(exitCode(serveResult));
         break;
       }
-      default:
+      default: {
+        const suggestion = suggestCommand(command);
+        const hint = suggestion ? `
+
+Did you mean: tap ${suggestion}?` : "\n\nRun tap --help for a list of commands.";
         result = {
           ok: false,
           command: "unknown",
           code: "TAP_INVALID_ARGUMENT",
-          message: `Unknown command: ${command}`,
+          message: `Unknown command: ${command}${hint}`,
           warnings: [],
-          data: { requestedCommand: command }
+          data: { requestedCommand: command, suggestion }
         };
+        break;
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

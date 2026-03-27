@@ -42,7 +42,7 @@ export type ArtifactKind = "json-path" | "toml-table" | "file";
 export interface OwnedArtifact {
   kind: ArtifactKind;
   path: string;
-  selector: string; // e.g. "mcpServers.tap-comms" or "mcp_servers.tap-comms"
+  selector: string; // e.g. "mcpServers.tap" or "mcp_servers.tap"
   backupPath?: string;
 }
 

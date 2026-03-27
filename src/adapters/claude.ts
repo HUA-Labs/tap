@@ -16,7 +16,10 @@ import type {
   VerifyCheck,
 } from "../types.js";
 
-const MCP_SERVER_KEY = "tap-comms";
+const MCP_SERVER_KEY = "tap";
+
+// Legacy key name — used for auto-migration from pre-0.3 configs
+const OLD_MCP_SERVER_KEY = "tap-comms";
 
 function findMcpJsonPath(ctx: AdapterContext): string {
   return path.join(ctx.repoRoot, ".mcp.json");
@@ -102,7 +105,7 @@ export const claudeAdapter: RuntimeAdapter = {
     const operations: PatchOp[] = [];
     const ownedArtifacts: OwnedArtifact[] = [];
 
-    // Check for existing tap-comms entry
+    // Check for existing tap entry
     if (probe.configExists) {
       const raw = fs.readFileSync(configPath, "utf-8");
       try {
@@ -110,6 +113,11 @@ export const claudeAdapter: RuntimeAdapter = {
         if (config.mcpServers?.[MCP_SERVER_KEY]) {
           conflicts.push(
             `Existing "${MCP_SERVER_KEY}" entry in .mcp.json will be overwritten.`,
+          );
+        }
+        if (config.mcpServers?.[OLD_MCP_SERVER_KEY]) {
+          conflicts.push(
+            `Legacy "${OLD_MCP_SERVER_KEY}" entry will be migrated to "${MCP_SERVER_KEY}".`,
           );
         }
       } catch {
@@ -123,7 +131,7 @@ export const claudeAdapter: RuntimeAdapter = {
 
     if (!serverEntry) {
       warnings.push(
-        "tap-comms MCP server entry not found. Skipping .mcp.json patch. " +
+        "tap MCP server entry not found. Skipping .mcp.json patch. " +
           "Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available.",
       );
       return {
@@ -185,6 +193,14 @@ export const claudeAdapter: RuntimeAdapter = {
                 `${op.path} was invalid JSON. Created backup and starting fresh.`,
               );
             }
+          }
+
+          // Migrate: remove legacy "tap-comms" key if present
+          const servers = config.mcpServers as
+            | Record<string, unknown>
+            | undefined;
+          if (servers?.[OLD_MCP_SERVER_KEY]) {
+            delete servers[OLD_MCP_SERVER_KEY];
           }
 
           // Set nested key
@@ -250,7 +266,7 @@ export const claudeAdapter: RuntimeAdapter = {
           // 3. Managed entry present
           const entry = config.mcpServers?.[MCP_SERVER_KEY];
           checks.push({
-            name: "tap-comms entry present",
+            name: "tap entry present",
             passed: !!entry,
             message: entry
               ? undefined

@@ -10,8 +10,8 @@
       "WebSearch",
       "WebFetch",
       "mcp__ide__getDiagnostics",
-      "mcp__tap-comms__tap_reply",
-      "mcp__tap-comms__tap_set_name",
+      "mcp__tap__tap_reply",
+      "mcp__tap__tap_set_name",
       "Bash(git:*)",
       "Bash(git add:*)",
       "Bash(gh:*)",
@@ -76,7 +76,7 @@
       "Bash(HUSKY=0:*)",
       "Bash(export:*)",
       "Bash(claude:*)",
-      "mcp__tap-comms__tap_list_unread",
+      "mcp__tap__tap_list_unread",
       "Bash(mv \"D:/HUA/hua-platform/docs/areas/tasks/tap-public-writeup-draft.md\" \"D:/HUA/hua-platform/docs/areas/tap/\")",
       "Bash(mv \"D:/HUA/hua-platform/docs/areas/tasks/tap-launch-spec.md\" \"D:/HUA/hua-platform/docs/areas/tap/\")",
       "Bash(mv \"D:/HUA/hua-platform/docs/areas/tasks/codex-app-server-bridge.md\" \"D:/HUA/hua-platform/docs/areas/tap/\")",
@@ -93,6 +93,6 @@
     ]
   },
   "enabledMcpjsonServers": [
-    "tap-comms"
+    "tap"
   ]
 }

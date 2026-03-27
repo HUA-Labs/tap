@@ -7,10 +7,10 @@ import type { CommandResult } from "../types.js";
 
 const SERVE_HELP = `
 Usage:
-  tap-comms serve [options]
+  tap serve [options]
 
 Description:
-  Start the tap-comms MCP server over stdio. This command takes over the
+  Start the tap MCP server over stdio. This command takes over the
   process — it is intended to be launched by an MCP host (e.g. Claude Code).
 
 Options:
@@ -91,9 +91,10 @@ export async function serveCommand(args: string[]): Promise<CommandResult> {
 
   // For serve, always use direct path (not npx launcher which would recurse)
   const serveCommand = managed.command === "npx" ? "node" : managed.command;
-  const serveArgs = managed.command === "npx" && managed.sourcePath
-    ? [managed.sourcePath]
-    : managed.args;
+  const serveArgs =
+    managed.command === "npx" && managed.sourcePath
+      ? [managed.sourcePath]
+      : managed.args;
 
   // Start MCP server
   const child = spawn(serveCommand, serveArgs, {

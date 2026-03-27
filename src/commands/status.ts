@@ -7,7 +7,7 @@ import type { InstanceState, CommandResult } from "../types.js";
 
 const STATUS_HELP = `
 Usage:
-  tap-comms status
+  tap status
 
 Description:
   Show all installed instances, their bridge status, and configuration info.

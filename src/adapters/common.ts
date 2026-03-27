@@ -168,7 +168,7 @@ export function buildManagedMcpServerSpec(
 
   if (!sourcePath) {
     issues.push(
-      "tap-comms MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available.",
+      "tap MCP server entry not found. Reinstall @hua-labs/tap or run from a repo with packages/tap-plugin/channels/ available.",
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -208,7 +208,7 @@ export function buildManagedMcpServerSpec(
 
   if (!command) {
     issues.push(
-      "bun is required to run the repo-local tap-comms MCP server (.ts source). Install bun: https://bun.sh",
+      "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh",
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }

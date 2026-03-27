@@ -31,6 +31,30 @@ var HEADLESS_WARMUP_PROMPT = [
 var HEADLESS_WARMUP_TIMEOUT_MS = 3e4;
 var TURN_COMPLETION_POLL_MS = 250;
 var TURN_COMPLETION_REFRESH_MS = 1e3;
+function normalizeThreadCwd(cwd) {
+  return resolve(cwd).replace(/\\/g, "/").toLowerCase();
+}
+function threadCwdMatches(expectedCwd, actualCwd) {
+  if (!actualCwd) {
+    return false;
+  }
+  return normalizeThreadCwd(expectedCwd) === normalizeThreadCwd(actualCwd);
+}
+function chooseLoadedThreadForCwd(cwd, threads) {
+  const matching = threads.filter((thread) => threadCwdMatches(cwd, thread.cwd));
+  if (matching.length === 0) {
+    return null;
+  }
+  matching.sort((left, right) => {
+    const leftActive = left.statusType === "active" ? 1 : 0;
+    const rightActive = right.statusType === "active" ? 1 : 0;
+    if (leftActive !== rightActive) {
+      return rightActive - leftActive;
+    }
+    return right.updatedAt - left.updatedAt;
+  });
+  return matching[0] ?? null;
+}
 function printHelp() {
   console.log(`Codex App Server bridge
 
@@ -344,12 +368,13 @@ function readThreadState(stateDir) {
   }
   return null;
 }
-function persistThreadState(stateDir, threadId, appServerUrl, ephemeral) {
+function persistThreadState(stateDir, threadId, appServerUrl, ephemeral, cwd) {
   const payload = {
     threadId,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
     appServerUrl,
-    ephemeral
+    ephemeral,
+    cwd
   };
   writeFileSync(
     join(stateDir, "thread.json"),
@@ -646,7 +671,7 @@ async function waitForTurnCompletion(client, turnId, timeoutMs) {
   throw new Error(`Timed out waiting for turn ${turnId} to complete`);
 }
 async function maybeBootstrapHeadlessTurn(options, cutoff, client) {
-  if (process.env.TAP_HEADLESS !== "true") {
+  if (process.env.TAP_HEADLESS !== "true" && process.env.TAP_COLD_START_WARMUP !== "true") {
     return false;
   }
   const { candidates } = getPendingCandidates(options, cutoff);
@@ -714,6 +739,7 @@ var AppServerClient = class {
   connected = false;
   initialized = false;
   threadId = null;
+  currentThreadCwd = null;
   activeTurnId = null;
   lastTurnStatus = null;
   lastNotificationMethod = null;
@@ -797,7 +823,7 @@ var AppServerClient = class {
     this.initialized = false;
     this.socket = null;
   }
-  async ensureThread(explicitThreadId, resumeThreadId, cwd, ephemeral) {
+  async ensureThread(explicitThreadId, savedThread, cwd, ephemeral) {
     if (explicitThreadId) {
       try {
         const resumeResponse = await this.request("thread/resume", {
@@ -820,22 +846,38 @@ var AppServerClient = class {
     if (loadedThreadId) {
       return loadedThreadId;
     }
-    if (resumeThreadId) {
-      try {
-        const resumeResponse = await this.request("thread/resume", {
-          threadId: resumeThreadId,
-          persistExtendedHistory: false
-        });
-        const resumedThreadId = resumeResponse?.thread?.id ?? resumeThreadId;
-        await this.refreshThreadState(resumedThreadId);
+    if (savedThread?.threadId) {
+      if (savedThread.cwd && !threadCwdMatches(cwd, savedThread.cwd)) {
         this.logger(
-          `resumed saved thread ${resumedThreadId}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
+          `saved thread ${savedThread.threadId} cwd ${savedThread.cwd} does not match ${cwd}; skipping saved thread`
         );
-        return resumedThreadId;
-      } catch (error) {
-        this.logger(
-          `saved thread resume failed for ${resumeThreadId}; starting a fresh thread (${String(error)})`
-        );
+      } else {
+        try {
+          const resumeResponse = await this.request("thread/resume", {
+            threadId: savedThread.threadId,
+            persistExtendedHistory: false
+          });
+          const resumedThreadId = resumeResponse?.thread?.id ?? savedThread.threadId;
+          await this.refreshThreadState(resumedThreadId);
+          if (!threadCwdMatches(cwd, this.currentThreadCwd)) {
+            this.logger(
+              `saved thread ${resumedThreadId} cwd ${this.currentThreadCwd ?? "unknown"} does not match ${cwd}; starting a fresh thread`
+            );
+            this.threadId = null;
+            this.currentThreadCwd = null;
+            this.activeTurnId = null;
+            this.lastTurnStatus = null;
+          } else {
+            this.logger(
+              `resumed saved thread ${resumedThreadId}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
+            );
+            return resumedThreadId;
+          }
+        } catch (error) {
+          this.logger(
+            `saved thread resume failed for ${savedThread.threadId}; starting a fresh thread (${String(error)})`
+          );
+        }
       }
     }
     const startResponse = await this.request("thread/start", {
@@ -848,7 +890,9 @@ var AppServerClient = class {
     if (!startedThreadId) {
       throw new Error("thread/start did not return a thread id");
     }
+    this.syncThreadStateFromThread(startResponse?.thread);
     this.threadId = startedThreadId;
+    this.currentThreadCwd = this.currentThreadCwd ?? cwd;
     this.activeTurnId = null;
     this.lastTurnStatus = null;
     this.logger(`started thread ${startedThreadId}`);
@@ -886,20 +930,13 @@ var AppServerClient = class {
         continue;
       }
     }
-    const matching = threads.filter((thread) => thread.cwd === cwd);
-    const candidates = matching.length > 0 ? matching : threads;
-    if (candidates.length === 0) {
+    const chosen = chooseLoadedThreadForCwd(cwd, threads);
+    if (!chosen) {
+      if (threads.length > 0) {
+        this.logger(`loaded threads exist but none match cwd ${cwd}`);
+      }
       return null;
     }
-    candidates.sort((left, right) => {
-      const leftActive = left.statusType === "active" ? 1 : 0;
-      const rightActive = right.statusType === "active" ? 1 : 0;
-      if (leftActive !== rightActive) {
-        return rightActive - leftActive;
-      }
-      return right.updatedAt - left.updatedAt;
-    });
-    const chosen = candidates[0];
     this.syncThreadStateFromThread(chosen.thread);
     this.logger(
       `attached to loaded thread ${chosen.id}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
@@ -972,6 +1009,7 @@ var AppServerClient = class {
     if (typeof thread?.id === "string") {
       this.threadId = thread.id;
     }
+    this.currentThreadCwd = typeof thread?.cwd === "string" ? thread.cwd : null;
     let activeTurnId = null;
     let lastTurnStatus = null;
     const turns = Array.isArray(thread?.turns) ? thread.turns : [];
@@ -1019,6 +1057,9 @@ var AppServerClient = class {
       case "thread/started":
         if (params?.thread?.id) {
           this.threadId = params.thread.id;
+        }
+        if (typeof params?.thread?.cwd === "string") {
+          this.currentThreadCwd = params.thread.cwd;
         }
         this.logger(`thread started ${params?.thread?.id ?? ""}`.trim());
         break;
@@ -1075,6 +1116,16 @@ var AppServerClient = class {
   }
 };
 function writeHeartbeat(options, client, health) {
+  if (client?.threadId) {
+    const savedThread = readThreadState(options.stateDir);
+    persistThreadState(
+      options.stateDir,
+      client.threadId,
+      options.appServerUrl,
+      options.ephemeral,
+      client.currentThreadCwd ?? savedThread?.cwd ?? null
+    );
+  }
   const payload = {
     pid: process.pid,
     agent: options.agentName,
@@ -1084,6 +1135,7 @@ function writeHeartbeat(options, client, health) {
     connected: client?.connected ?? false,
     initialized: client?.initialized ?? false,
     threadId: client?.threadId ?? null,
+    threadCwd: client?.currentThreadCwd ?? null,
     activeTurnId: client?.activeTurnId ?? null,
     lastTurnStatus: client?.lastTurnStatus ?? null,
     lastNotificationMethod: client?.lastNotificationMethod ?? null,
@@ -1235,7 +1287,7 @@ async function main() {
     options.messageLookbackMinutes,
     options.processExistingMessages
   );
-  const savedThread = readThreadState(options.stateDir);
+  const initialSavedThread = readThreadState(options.stateDir);
   logStatus("codex app-server bridge ready");
   console.log(`  repo:       ${options.repoRoot}`);
   console.log(`  comms:      ${options.commsDir}`);
@@ -1251,14 +1303,15 @@ async function main() {
   console.log(
     `  lookback:   ${options.processExistingMessages ? "existing messages" : `${options.messageLookbackMinutes} minute(s)`}`
   );
-  if (options.threadId || savedThread?.threadId) {
-    console.log(`  thread:     ${options.threadId ?? savedThread?.threadId}`);
+  if (options.threadId || initialSavedThread?.threadId) {
+    console.log(
+      `  thread:     ${options.threadId ?? initialSavedThread?.threadId}`
+    );
   }
   if (options.dryRun) {
     logStatus("dry-run mode enabled");
   }
   let client = null;
-  let savedThreadId = savedThread?.threadId ?? null;
   const health = {
     consecutiveFailureCount: 0
   };
@@ -1272,9 +1325,10 @@ async function main() {
             options.gatewayToken
           );
           await client.connect();
+          const savedThread = readThreadState(options.stateDir);
           const threadId = await client.ensureThread(
             options.threadId,
-            savedThreadId,
+            savedThread,
             options.repoRoot,
             options.ephemeral
           );
@@ -1282,9 +1336,9 @@ async function main() {
             options.stateDir,
             threadId,
             options.appServerUrl,
-            options.ephemeral
+            options.ephemeral,
+            client.currentThreadCwd ?? options.repoRoot
           );
-          savedThreadId = threadId;
           writeHeartbeat(options, client, health);
           const bootstrapped = await maybeBootstrapHeadlessTurn(
             options,
@@ -1356,6 +1410,7 @@ export {
   HEADLESS_WARMUP_PROMPT,
   buildOptions,
   buildUserInput,
+  chooseLoadedThreadForCwd,
   isOwnMessageSender,
   main,
   maybeBootstrapHeadlessTurn,
@@ -1363,6 +1418,7 @@ export {
   resolveAddressLabel,
   resolveAgentId,
   resolveCurrentAgentName,
+  threadCwdMatches,
   waitForTurnCompletion
 };
 //# sourceMappingURL=codex-app-server-bridge.mjs.map

@@ -24,7 +24,10 @@ import {
   probeCommand,
 } from "./common.js";
 
-const GEMINI_SELECTOR = "mcpServers.tap-comms";
+const GEMINI_SELECTOR = "mcpServers.tap";
+
+// Legacy key name — used for auto-migration from pre-0.3 configs
+const OLD_GEMINI_SELECTOR = "mcpServers.tap-comms";
 
 function candidateConfigPaths(ctx: AdapterContext): string[] {
   const home = getHomeDir();
@@ -108,7 +111,7 @@ function verifyGeminiConfig(
     message: fs.existsSync(configPath) ? undefined : `${configPath} not found`,
   });
   checks.push({
-    name: "tap-comms entry present",
+    name: "tap entry present",
     passed: !!entry,
     message: entry ? undefined : `${GEMINI_SELECTOR} not found`,
   });
@@ -188,6 +191,11 @@ export const geminiAdapter: RuntimeAdapter = {
         if (readNestedKey(config, GEMINI_SELECTOR) !== undefined) {
           conflicts.push(`Existing ${GEMINI_SELECTOR} entry will be updated.`);
         }
+        if (readNestedKey(config, OLD_GEMINI_SELECTOR) !== undefined) {
+          conflicts.push(
+            `Legacy ${OLD_GEMINI_SELECTOR} entry will be migrated to ${GEMINI_SELECTOR}.`,
+          );
+        }
       } catch {
         warnings.push(
           `${configPath} exists but is not valid JSON. It will be replaced.`,
@@ -262,6 +270,15 @@ export const geminiAdapter: RuntimeAdapter = {
       existed: previousValue !== undefined,
       value: previousValue,
     });
+
+    // Migrate: remove legacy "tap-comms" key if present
+    const oldValue = readNestedKey(config, OLD_GEMINI_SELECTOR);
+    if (oldValue !== undefined) {
+      const servers = config.mcpServers as Record<string, unknown> | undefined;
+      if (servers) {
+        delete servers["tap-comms"];
+      }
+    }
 
     setNestedKey(config, GEMINI_SELECTOR, {
       command: managed.command,
