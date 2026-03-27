@@ -21730,9 +21730,14 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: "Markdown message content."
           },
           cc: {
-            type: "array",
-            items: { type: "string" },
-            description: "Optional CC recipients. Each receives a copy of the message."
+            description: "Optional CC recipients. Each receives a copy of the message. Pass a single string or an array of strings.",
+            oneOf: [
+              { type: "string" },
+              {
+                type: "array",
+                items: { type: "string" }
+              }
+            ]
           }
         },
         required: ["to", "subject", "content"]
@@ -22039,7 +22044,13 @@ Recent active names: ${activeList}`;
     return { content: [{ type: "text", text }] };
   }
   if (req.params.name === "tap_reply") {
-    const { to, subject, content, cc } = req.params.arguments;
+    const {
+      to,
+      subject,
+      content,
+      cc: rawCc
+    } = req.params.arguments;
+    const cc = rawCc == null ? void 0 : Array.isArray(rawCc) ? rawCc : [rawCc];
     const broadcastNames = /* @__PURE__ */ new Set(["\uC804\uCCB4", "all"]);
     const recipientWarnings = [];
     const store = loadHeartbeats();
@@ -22354,7 +22365,10 @@ ${content}`,
     if (!commsDir) {
       return {
         content: [
-          { type: "text", text: "TAP_COMMS_DIR not set. Cannot load onboarding docs." }
+          {
+            type: "text",
+            text: "TAP_COMMS_DIR not set. Cannot load onboarding docs."
+          }
         ]
       };
     }
@@ -22378,12 +22392,17 @@ ${content}`,
     if (!existsSync6(onboardingDir)) {
       return {
         content: [
-          { type: "text", text: "No onboarding directory found at " + onboardingDir }
+          {
+            type: "text",
+            text: "No onboarding directory found at " + onboardingDir
+          }
         ]
       };
     }
     const docs = [];
-    const allFiles = readdirSync5(onboardingDir).filter((f) => f.endsWith(".md"));
+    const allFiles = readdirSync5(onboardingDir).filter(
+      (f) => f.endsWith(".md")
+    );
     const files = [
       ...allFiles.filter((f) => f === "welcome.md"),
       ...allFiles.filter((f) => f !== "welcome.md").sort()
@@ -22402,23 +22421,23 @@ ${content}`);
     }
     if (docs.length === 0) {
       return {
-        content: [
-          { type: "text", text: "Onboarding directory is empty." }
-        ]
+        content: [{ type: "text", text: "Onboarding directory is empty." }]
       };
     }
     if (markerPath && !alreadyOnboarded) {
       try {
         markerStore[agentId] = { onboardedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        writeFileSync2(markerPath, JSON.stringify(markerStore, null, 2), "utf-8");
+        writeFileSync2(
+          markerPath,
+          JSON.stringify(markerStore, null, 2),
+          "utf-8"
+        );
       } catch {
       }
     }
     const prefix = alreadyOnboarded ? "(You have already been onboarded. Showing docs again for reference.)\n\n" : "";
     return {
-      content: [
-        { type: "text", text: prefix + docs.join("\n\n---\n\n") }
-      ]
+      content: [{ type: "text", text: prefix + docs.join("\n\n---\n\n") }]
     };
   }
   throw new Error(`unknown tool: ${req.params.name}`);
