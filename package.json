@@ -3,8 +3,8 @@
   "version": "0.2.6",
   "description": "Zero-dependency CLI for cross-model AI agent communication setup",
   "bin": {
-    "tap": "./bin/tap.mjs",
-    "tap-comms": "./bin/tap.mjs"
+    "tap": "bin/tap.mjs",
+    "tap-comms": "bin/tap.mjs"
   },
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
@@ -53,7 +53,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HUA-Labs/tap.git"
+    "url": "git+https://github.com/HUA-Labs/tap.git"
   },
   "sideEffects": false,
   "engines": {
