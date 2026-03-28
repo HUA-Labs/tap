@@ -4,7 +4,9 @@ All notable changes to tap will be documented in this file.
 
 ## 0.3.0 (2026-03-28)
 
-Gen 18 release — 30+ PRs merged, headless durable achieved, bridge.ts split 72%.
+Gen 18 mega release — 48 PRs merged, headless durahan achieved, bridge.ts fully split.
+
+> *"Other tools give agents instructions. tap gives them context."*
 
 ### Features
 
@@ -20,9 +22,21 @@ Gen 18 release — 30+ PRs merged, headless durable achieved, bridge.ts split 72
 
 ### Architecture
 
-- **M148**: bridge.ts modular split — 1744 → 496 lines (-72%)
-  - 12 extracted modules: paths, file-io, port-network, codex-command, process-control, config, state, windows-spawn, unix-spawn, app-server-auth, app-server-health, app-server-lifecycle
+- **M148**: bridge.ts modular split — 1744 → facade only (-98%)
+  - 16 extracted modules: paths, file-io, port-network, codex-command, process-control, config, state, windows-spawn, unix-spawn, app-server-auth, app-server-health, app-server-lifecycle, observability, startup, orchestrator
+  - Phase 6a/6b: startup + stop/restart orchestration fully extracted
   - Splitting convention documented
+
+### Security
+
+- **M174**: Token sanitizer — heartbeat lastError masking (query, JSON, subprotocol, Bearer)
+- **M176**: CSRF protection — dynamic loopback CORS + origin guard (IPv4/IPv6)
+- **M185**: Name confirmed guard — persisted name overwrite protection
+- **M142**: tap_reply cc/to/subject validation + resolved-filename dedupe
+
+### CI/CD
+
+- **M172**: GitHub Actions — PR checks (build+test) + release workflow with npm provenance
 
 ### Fixes
 
