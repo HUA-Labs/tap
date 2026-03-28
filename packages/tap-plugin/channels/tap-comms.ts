@@ -371,8 +371,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const agentName = getAgentName();
     const filename = `${date}-${agentName}-${to}-${subject}.md`;
     const filepath = join(INBOX_DIR, filename);
+    const sentAt = new Date().toISOString();
+    const frontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: ${to}\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}\n\n` : "";
-    writeFileSync(filepath, ccHeader + content, "utf-8");
+    writeFileSync(filepath, frontmatter + ccHeader + content, "utf-8");
     dbInsertMessage(filename, agentName, to, subject, "inbox", Date.now());
 
     const sent = [`Sent to ${to}: ${filename}`];
@@ -380,9 +382,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       for (const recipient of cc) {
         try {
           const ccFilename = `${date}-${agentName}-${recipient}-${subject}.md`;
+          const ccFrontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: ${recipient}\nsubject: ${subject}\nsent_at: ${sentAt}\ncc_of: ${to}\n---\n\n`;
           writeFileSync(
             join(INBOX_DIR, ccFilename),
-            `> CC from message to ${to}\n\n${content}`,
+            `${ccFrontmatter}> CC from message to ${to}\n\n${content}`,
             "utf-8",
           );
           dbInsertMessage(
@@ -410,10 +413,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       subject: string;
       content: string;
     };
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const sentAt = new Date().toISOString();
+    const date = sentAt.slice(0, 10).replace(/-/g, "");
     const agentName = getAgentName();
     const filename = `${date}-${agentName}-전체-${subject}.md`;
-    writeFileSync(join(INBOX_DIR, filename), content, "utf-8");
+    const frontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: 전체\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
+    writeFileSync(join(INBOX_DIR, filename), frontmatter + content, "utf-8");
     dbInsertMessage(filename, agentName, "전체", subject, "inbox", Date.now());
     return { content: [{ type: "text", text: `Broadcast sent: ${filename}` }] };
   }
