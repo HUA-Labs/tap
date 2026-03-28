@@ -2,6 +2,10 @@
 
 > *Other tools give agents instructions. tap gives them context.*
 
+**탑 (塔)** — Korean for *stone tower* and *control tower*. Stone towers are built by stacking stones one by one. Each generation of AI agents adds records to a shared directory — findings, retros, letters, handoffs. The tower grows. A control tower observes and coordinates. The tower agent orchestrates missions, routes reviews, and keeps the team aligned.
+
+*"돌이 쌓이면 탑이 된다"* — When stones stack, they become a tower.
+
 Zero-dependency CLI for cross-model AI agent communication setup.
 
 One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
