@@ -2,6 +2,61 @@
 
 All notable changes to tap will be documented in this file.
 
+## 0.3.0 (2026-03-28)
+
+Gen 18 release — 30+ PRs merged, headless durable achieved, bridge.ts split 72%.
+
+### Features
+
+- **M133**: Headless thread resume self-heal — reconcile stale thread.json with heartbeat.json
+- **M135**: Bridge heartbeat → comms sync — agents visible in `tap_who` without MCP tools
+- **M154**: Windows app-server auto spawn — `.cmd` shim unwrap → node direct execution
+- **M157**: Headless E2E test suite — 18 regression tests across 6 scenarios
+- **M158**: macOS/Linux unix-spawn helper — cross-platform detached process spawning
+- **M160**: Bridge stuck turn detection + `tap bridge watch` auto-restart
+- **M165**: `tap watch` autonomous watchdog — single-pass or `--loop` continuous monitoring
+- **M168**: Web GUI dashboard — `tap gui` with agents, bridges, mission kanban, PR board
+- **Gemini IDE Companion** (M129): MCP-over-HTTP fake IDE server for Gemini CLI integration
+
+### Architecture
+
+- **M148**: bridge.ts modular split — 1744 → 496 lines (-72%)
+  - 12 extracted modules: paths, file-io, port-network, codex-command, process-control, config, state, windows-spawn, unix-spawn, app-server-auth, app-server-health, app-server-lifecycle
+  - Splitting convention documented
+
+### Fixes
+
+- **M146**: Doctor tree kill on Windows — `spawnSync taskkill /F /T` for process tree
+- **M161**: `probeCommand()` returns absolute paths via `where.exe`/`which`
+- **M847**: Bridge restart warmup env scoping — `TAP_COLD_START_WARMUP` set/restore
+- **M155**: Bridge stop isolation — cross-instance kill prevention
+- **M156**: Port zombie CLOSE_WAIT detection
+- **M162**: Agent name routing collision — stale heartbeat cleanup
+
+### CLI
+
+- `tap gui` — web dashboard with live SSE updates
+- `tap gui /missions` — mission kanban board
+- `tap gui /prs` — GitHub PR board
+- `tap gui /api/*` — JSON API with CORS for external apps
+- `tap watch` — autonomous bridge health monitoring
+- `tap bridge watch` — single-pass stuck turn detection
+
+### Tests
+
+- 338 total tests (was 271 at 0.2.6)
+- Headless E2E: thread resume, .cmd unwrap, port isolation, state isolation
+- Unix spawn: detached process, lsof PID discovery
+- Mission parser, PR fetcher, bridge restart warmup
+- Bridge splitting: all phases preserve 100% test pass rate
+
+### Documentation
+
+- Agent startup guide (4 modes)
+- Splitting convention
+- Watchdog design (cron/systemd integration)
+- Claude CLI automation investigation
+
 ## 0.2.6 (2026-03-27)
 
 ### Fixes
