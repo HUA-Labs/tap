@@ -1,9 +1,21 @@
 {
   "name": "tap",
-  "description": "Multi-session orchestration — parallel worktrees, file-based comms, generational knowledge transfer",
-  "version": "0.1.0",
-  "author": { "name": "HUA Labs" },
-  "homepage": "https://github.com/HUA-Labs/tap-plugin",
+  "description": "Cross-model AI agent communication — file-based messaging, control tower orchestration, generational knowledge transfer. Other tools give agents instructions. tap gives them context.",
+  "version": "0.3.0",
+  "author": { "name": "HUA Labs", "url": "https://github.com/HUA-Labs" },
+  "homepage": "https://github.com/HUA-Labs/tap",
+  "repository": "https://github.com/HUA-Labs/tap",
   "license": "MIT",
-  "keywords": ["multi-agent", "orchestration", "worktree", "parallel", "missions"]
+  "keywords": [
+    "multi-agent",
+    "orchestration",
+    "cross-model",
+    "claude",
+    "codex",
+    "gemini",
+    "mcp",
+    "communication",
+    "file-based",
+    "control-tower"
+  ]
 }
