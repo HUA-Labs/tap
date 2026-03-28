@@ -2,6 +2,13 @@
 
 All notable changes to tap will be documented in this file.
 
+## 0.2.6 (2026-03-27)
+
+### Fixes
+
+- **cc parameter normalization** — `tap_reply` cc field now auto-converts string to array, preventing delivery failures when a single cc recipient is passed as a string
+- npm pkg fix — normalize bin paths and repository URL
+
 ## 0.2.5 (2026-03-27)
 
 Gen 17 release — 13 PRs merged, 6 missions completed, 263 tests passing.

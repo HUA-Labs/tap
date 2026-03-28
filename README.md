@@ -75,7 +75,7 @@ Output shows three status levels:
 
 ### `serve`
 
-Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
+Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
 npx @hua-labs/tap serve
