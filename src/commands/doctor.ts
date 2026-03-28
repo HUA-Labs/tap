@@ -28,6 +28,7 @@ import {
   loadBridgeState,
   loadRuntimeBridgeHeartbeat,
   loadRuntimeBridgeThreadState,
+  saveBridgeState,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
 import {
@@ -130,7 +131,7 @@ function writeTomlAtomically(filePath: string, content: string): void {
 }
 
 function hasInstalledCodexInstance(state: TapState | null): boolean {
-  return state
+  return !!state
     ? Object.values(state.instances).some(
         (instance) => instance.runtime === "codex" && instance.installed,
       )
@@ -172,10 +173,7 @@ function repairCodexConfig(repoRoot: string, commsDir: string): string {
   const existingContent = existsSync(spec.configPath)
     ? readFileSync(spec.configPath, "utf-8")
     : "";
-  const existingTapEnvTable = extractTomlTable(
-    existingContent,
-    "mcp_servers.tap.env",
-  );
+  const existingTapEnvTable = extractTomlTable(existingContent, "mcp_servers.tap.env");
   const existingLegacyEnvTable = extractTomlTable(
     existingContent,
     "mcp_servers.tap-comms.env",
@@ -394,13 +392,7 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
             for (const pid of [appServer.auth?.gatewayPid, appServer.pid]) {
               if (pid) {
                 try {
-                  if (process.platform === "win32") {
-                    spawnSync("taskkill", ["/PID", String(pid), "/F", "/T"], {
-                      stdio: "pipe",
-                    });
-                  } else {
-                    process.kill(pid);
-                  }
+                  process.kill(pid);
                 } catch {
                   // Already dead — fine
                 }
@@ -585,22 +577,7 @@ function checkMcpServer(repoRoot: string): Check[] {
   }
 
   // Use new key if available, fall back to old key for backward compat
-  const hasTapComms = (hasTap ?? hasOldKey) as
-    | {
-        command?: string;
-        args?: string[];
-        cwd?: string;
-        env?: Record<string, string>;
-      }
-    | undefined;
-  if (!hasTapComms) {
-    checks.push({
-      name: "MCP config (.mcp.json)",
-      status: FAIL,
-      message: "No tap or tap-comms key found in .mcp.json",
-    });
-    return checks;
-  }
+  const hasTapComms = hasTap ?? (hasOldKey as typeof hasTap);
 
   checks.push({
     name: "MCP config (.mcp.json)",
@@ -730,7 +707,9 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
   const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
   const legacyEnvTable = extractTomlTable(content, "mcp_servers.tap-comms.env");
   const selectedMain = parseTomlAssignments(tapTable ?? "");
-  const selectedEnv = parseTomlAssignments(tapEnvTable ?? legacyEnvTable ?? "");
+  const selectedEnv = parseTomlAssignments(
+    tapEnvTable ?? legacyEnvTable ?? "",
+  );
   const issues: string[] = [];
 
   if (legacyTable || legacyEnvTable) {

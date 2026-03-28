@@ -670,8 +670,8 @@ var init_headless_loop = __esm({
 // src/bridges/codex-bridge-runner.ts
 import * as fs8 from "fs";
 import * as path7 from "path";
-import { spawn } from "child_process";
-import { fileURLToPath, pathToFileURL } from "url";
+import { spawn as spawn2 } from "child_process";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config/resolve.ts
 import * as fs2 from "fs";
@@ -862,6 +862,15 @@ function normalizeTapPath(input) {
   return trimmed;
 }
 
+// src/engine/bridge.ts
+import * as fs4 from "fs";
+import * as net from "net";
+import * as os from "os";
+import * as path4 from "path";
+import { randomBytes } from "crypto";
+import { spawn, spawnSync, execSync as execSync2 } from "child_process";
+import { fileURLToPath } from "url";
+
 // src/runtime/resolve-node.ts
 import * as fs3 from "fs";
 import * as path3 from "path";
@@ -1021,10 +1030,9 @@ function buildRuntimeEnv(repoRoot, baseEnv = process.env) {
   };
 }
 
-// src/engine/bridge-app-server-lifecycle.ts
-import * as fs4 from "fs";
-import * as path4 from "path";
+// src/engine/bridge.ts
 var DEFAULT_APP_SERVER_URL2 = "ws://127.0.0.1:4501";
+var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
 function resolveAppServerUrl(baseUrl, port) {
   const resolvedBase = (baseUrl ?? DEFAULT_APP_SERVER_URL2).replace(/\/$/, "");
   if (port == null) {
@@ -1041,7 +1049,7 @@ function resolveAppServerUrl(baseUrl, port) {
 
 // src/bridges/codex-bridge-runner.ts
 function findRepoRootFromRunner() {
-  let dir = path7.resolve(path7.dirname(fileURLToPath(import.meta.url)));
+  let dir = path7.resolve(path7.dirname(fileURLToPath2(import.meta.url)));
   while (true) {
     if (fs8.existsSync(path7.join(dir, SHARED_CONFIG_FILE))) return dir;
     if (fs8.existsSync(path7.join(dir, LOCAL_CONFIG_FILE))) return dir;
@@ -1075,7 +1083,7 @@ function maybeStartHeadlessLoop(repoRoot, commsDir, stateDir) {
   });
 }
 function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileExists = fs8.existsSync) {
-  const moduleDir = path7.dirname(fileURLToPath(runnerUrl));
+  const moduleDir = path7.dirname(fileURLToPath2(runnerUrl));
   const candidates = [
     // 1. Bundled standalone/npm install
     path7.join(moduleDir, "codex-app-server-bridge.mjs"),
@@ -1188,7 +1196,7 @@ Expected a packaged dist/bridges/codex-app-server-bridge.mjs or monorepo bridge 
   if (process.env.TAP_PROCESS_EXISTING === "true")
     args.push("--process-existing-messages");
   const runtimeEnv = buildRuntimeEnv(repoRoot);
-  const child = spawn(command, args, {
+  const child = spawn2(command, args, {
     cwd: repoRoot,
     env: runtimeEnv,
     stdio: "inherit"

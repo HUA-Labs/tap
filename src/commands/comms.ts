@@ -14,6 +14,7 @@ import {
   logError,
   logHeader,
 } from "../utils.js";
+import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
 
 const COMMS_HELP = `

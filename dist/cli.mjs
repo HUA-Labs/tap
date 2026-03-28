@@ -979,41 +979,10 @@ function probeCommand(candidates) {
     });
     if (result.status === 0) {
       const version2 = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() || null;
-      const absolutePath = resolveCommandPath(candidate);
-      return { command: absolutePath ?? candidate, version: version2 };
+      return { command: candidate, version: version2 };
     }
   }
   return { command: null, version: null };
-}
-function resolveCommandPath(command) {
-  if (path7.isAbsolute(command)) return command;
-  const whichCmd = process.platform === "win32" ? "where.exe" : "which";
-  try {
-    const result = spawnSync2(whichCmd, [command], {
-      encoding: "utf-8",
-      windowsHide: true
-    });
-    if (result.status !== 0) return null;
-    const lines = result.stdout.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (lines.length === 0) return null;
-    if (process.platform === "win32") {
-      const candidateExt = path7.extname(command).toLowerCase();
-      if (candidateExt) {
-        const extMatch = lines.find(
-          (l) => path7.extname(l).toLowerCase() === candidateExt && fs7.existsSync(l)
-        );
-        if (extMatch) return extMatch;
-      }
-      const executableMatch = lines.find(
-        (l) => /\.(cmd|exe|ps1)$/i.test(l) && fs7.existsSync(l)
-      );
-      if (executableMatch) return executableMatch;
-    }
-    const firstValid = lines.find((l) => fs7.existsSync(l));
-    return firstValid ?? null;
-  } catch {
-    return null;
-  }
 }
 function getHomeDir() {
   return os2.homedir();
@@ -2051,736 +2020,24 @@ function getAdapter(runtime) {
   return adapter;
 }
 
-// src/engine/bridge-paths.ts
-import * as path12 from "path";
-function appServerLogFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `app-server-${instanceId}.log`);
-}
-function appServerGatewayLogFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `app-server-gateway-${instanceId}.log`);
-}
-function appServerGatewayTokenFilePath(stateDir, instanceId) {
-  return path12.join(
-    stateDir,
-    "secrets",
-    `app-server-gateway-${instanceId}.token`
-  );
-}
-function stderrLogFilePath(logPath) {
-  return `${logPath}.stderr`;
-}
-function pidFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "pids", `bridge-${instanceId}.json`);
-}
-function logFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `bridge-${instanceId}.log`);
-}
-function runtimeHeartbeatFilePath(runtimeStateDir) {
-  return path12.join(runtimeStateDir, "heartbeat.json");
-}
-function runtimeThreadStateFilePath(runtimeStateDir) {
-  return path12.join(runtimeStateDir, "thread.json");
-}
-
-// src/engine/bridge-file-io.ts
-import * as fs12 from "fs";
-import * as path13 from "path";
-var APP_SERVER_AUTH_FILE_MODE = 384;
-function writeProtectedTextFile(filePath, content) {
-  fs12.mkdirSync(path13.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp.${process.pid}`;
-  fs12.writeFileSync(tmp, content, {
-    encoding: "utf-8",
-    mode: APP_SERVER_AUTH_FILE_MODE
-  });
-  fs12.chmodSync(tmp, APP_SERVER_AUTH_FILE_MODE);
-  fs12.renameSync(tmp, filePath);
-  fs12.chmodSync(filePath, APP_SERVER_AUTH_FILE_MODE);
-}
-function removeFileIfExists(filePath) {
-  if (!filePath || !fs12.existsSync(filePath)) {
-    return;
-  }
-  try {
-    fs12.unlinkSync(filePath);
-  } catch {
-  }
-}
-function toPowerShellSingleQuotedString(value) {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-function toPowerShellStringArrayLiteral(values) {
-  return `@(${values.map(toPowerShellSingleQuotedString).join(", ")})`;
-}
-
-// src/engine/bridge-port-network.ts
-import * as net from "net";
-var DEFAULT_APP_SERVER_URL2 = "ws://127.0.0.1:4501";
-function getWebSocketCtor() {
-  const candidate = globalThis.WebSocket;
-  return typeof candidate === "function" ? candidate : null;
-}
-function delay(ms) {
-  return new Promise((resolve14) => setTimeout(resolve14, ms));
-}
-function isLoopbackHost(hostname) {
-  return hostname === "127.0.0.1" || hostname === "localhost";
-}
-async function allocateLoopbackPort(hostname) {
-  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve14, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", reject);
-    server.listen(0, bindHost, () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => {
-          reject(new Error("Failed to allocate a loopback port"));
-        });
-        return;
-      }
-      const port = address.port;
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve14(port);
-      });
-    });
-  });
-}
-async function isTcpPortAvailable(hostname, port) {
-  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve14) => {
-    const server = net.createServer();
-    server.unref();
-    server.once("error", () => resolve14(false));
-    server.listen(port, bindHost, () => {
-      server.close((error) => resolve14(!error));
-    });
-  });
-}
-async function waitForPortRelease(url, timeoutMs = 1e4, intervalMs = 500) {
-  let hostname;
-  let port;
-  try {
-    const parsed = new URL(url);
-    hostname = parsed.hostname;
-    port = parseInt(parsed.port, 10);
-  } catch {
-    return true;
-  }
-  if (!port || !Number.isFinite(port)) return true;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await isTcpPortAvailable(hostname, port)) {
-      return true;
-    }
-    await delay(intervalMs);
-  }
-  return false;
-}
-async function findNextAvailableAppServerPort(state, baseUrl, basePort = 4501, excludeInstanceId) {
-  let hostname = "127.0.0.1";
-  try {
-    hostname = new URL(baseUrl ?? DEFAULT_APP_SERVER_URL2).hostname;
-  } catch {
-  }
-  const maxAttempts = 1e3;
-  let port = basePort;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1, port += 1) {
-    const claimedInState = Object.entries(state.instances).some(
-      ([id, inst]) => id !== excludeInstanceId && inst.port === port
-    );
-    if (claimedInState) {
-      continue;
-    }
-    if (!isLoopbackHost(hostname)) {
-      return port;
-    }
-    if (await isTcpPortAvailable(hostname, port)) {
-      return port;
-    }
-  }
-  throw new Error(
-    `Failed to find a free app-server port starting at ${basePort}`
-  );
-}
-
-// src/engine/bridge-codex-command.ts
+// src/engine/bridge.ts
 import * as fs13 from "fs";
-import * as path14 from "path";
-import { fileURLToPath as fileURLToPath4 } from "url";
-function resolveCodexCommand(platform) {
-  const candidates = platform === "win32" ? ["codex.cmd", "codex.exe", "codex", "codex.ps1"] : ["codex"];
-  const resolved = probeCommand(candidates).command;
-  if (!resolved) return null;
-  if (platform === "win32" && resolved.endsWith(".cmd")) {
-    const unwrapped = unwrapNpmCmdShim(resolved);
-    if (unwrapped) return unwrapped;
-  }
-  return resolved;
-}
-function unwrapNpmCmdShim(cmdPath) {
-  let content;
-  try {
-    content = fs13.readFileSync(cmdPath, "utf-8");
-  } catch {
-    return null;
-  }
-  const match = content.match(
-    /"%_prog%"\s+"(%dp0%\\[^"]+)"\s+%\*/
-  );
-  if (!match) return null;
-  const dp0 = path14.dirname(cmdPath);
-  const scriptRelative = match[1].replace(/%dp0%\\/g, "");
-  const scriptPath = path14.resolve(dp0, scriptRelative);
-  if (!fs13.existsSync(scriptPath)) return null;
-  const localNode = path14.join(dp0, "node.exe");
-  const nodeCommand = fs13.existsSync(localNode) ? localNode : probeCommand(["node.exe", "node"]).command ?? "node";
-  return `${nodeCommand}\0${scriptPath}`;
-}
-function splitResolvedCommand(resolved) {
-  const parts = resolved.split("\0");
-  if (parts.length === 2) {
-    return { command: parts[0], prefixArgs: [parts[1]] };
-  }
-  return { command: resolved, prefixArgs: [] };
-}
-function resolvePowerShellCommand() {
-  return probeCommand(["pwsh", "powershell", "powershell.exe"]).command ?? "powershell";
-}
-function resolveAuthGatewayScript(repoRoot) {
-  const moduleDir = path14.dirname(fileURLToPath4(import.meta.url));
-  const candidates = [
-    // Bundled: dist/bridges/ sibling (npm install / built package)
-    path14.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
-    // Source: src/bridges/ sibling (monorepo dev with ts runner)
-    path14.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
-    // Monorepo dist fallback
-    path14.join(
-      repoRoot,
-      "packages",
-      "tap-comms",
-      "dist",
-      "bridges",
-      "codex-app-server-auth-gateway.mjs"
-    ),
-    path14.join(
-      repoRoot,
-      "packages",
-      "tap-comms",
-      "src",
-      "bridges",
-      "codex-app-server-auth-gateway.ts"
-    )
-  ];
-  for (const candidate of candidates) {
-    if (fs13.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-// src/engine/bridge-windows-spawn.ts
-import * as fs14 from "fs";
+import * as net from "net";
 import * as os3 from "os";
-import * as path15 from "path";
+import * as path13 from "path";
 import { randomBytes } from "crypto";
-import { spawnSync as spawnSync3 } from "child_process";
-var WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
-var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
-function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
-  let entries;
-  try {
-    entries = fs14.readdirSync(os3.tmpdir());
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (!entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) || !/\.(cmd|ps1)$/i.test(entry)) {
-      continue;
-    }
-    const wrapperPath = path15.join(os3.tmpdir(), entry);
-    try {
-      const stats = fs14.statSync(wrapperPath);
-      if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
-        continue;
-      }
-      fs14.unlinkSync(wrapperPath);
-    } catch {
-    }
-  }
-}
-function buildWindowsDetachedWrapperScript(command, args, logPath, stderrLogPath, env) {
-  const lines = ["$ErrorActionPreference = 'Stop'"];
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== void 0 && value !== process.env[key]) {
-      lines.push(
-        `[Environment]::SetEnvironmentVariable(${toPowerShellSingleQuotedString(key)}, ${toPowerShellSingleQuotedString(value)}, 'Process')`
-      );
-    }
-  }
-  lines.push(
-    `$logPath = ${toPowerShellSingleQuotedString(logPath)}`,
-    `$stderrLogPath = ${toPowerShellSingleQuotedString(stderrLogPath)}`,
-    `$commandPath = ${toPowerShellSingleQuotedString(command)}`,
-    `$commandArgs = ${toPowerShellStringArrayLiteral(args)}`,
-    "$exitCode = 1",
-    "try {",
-    "  & $commandPath @commandArgs >> $logPath 2>> $stderrLogPath",
-    "  $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
-    "} finally {",
-    "  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
-    "}",
-    "exit $exitCode"
-  );
-  return `${lines.join("\r\n")}\r
-`;
-}
-function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
-  const stderrLogPath = stderrLogFilePath(logPath);
-  const powerShellCommand = resolvePowerShellCommand();
-  cleanupStaleWindowsSpawnWrappers();
-  const wrapperPath = path15.join(
-    os3.tmpdir(),
-    `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`
-  );
-  fs14.writeFileSync(
-    wrapperPath,
-    buildWindowsDetachedWrapperScript(
-      command,
-      args,
-      logPath,
-      stderrLogPath,
-      env
-    )
-  );
-  const psCommand = [
-    "$p = Start-Process",
-    `-FilePath ${toPowerShellSingleQuotedString(powerShellCommand)}`,
-    `-ArgumentList ${toPowerShellStringArrayLiteral(["-NoLogo", "-NoProfile", "-File", wrapperPath])}`,
-    `-WorkingDirectory ${toPowerShellSingleQuotedString(repoRoot)}`,
-    "-WindowStyle Hidden",
-    "-PassThru",
-    "; Write-Output $p.Id"
-  ].join(" ");
-  const result = spawnSync3(
-    powerShellCommand,
-    ["-NoLogo", "-NoProfile", "-Command", psCommand],
-    {
-      encoding: "utf-8",
-      windowsHide: true
-    }
-  );
-  if (result.status !== 0) {
-    removeFileIfExists(wrapperPath);
-    return null;
-  }
-  const pid = parseInt(result.stdout.trim(), 10);
-  if (!Number.isFinite(pid)) {
-    removeFileIfExists(wrapperPath);
-    return null;
-  }
-  return pid;
-}
-function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
-  const { command: exe, prefixArgs } = splitResolvedCommand(command);
-  return startWindowsDetachedProcess(
-    exe,
-    [...prefixArgs, "app-server", "--listen", url],
-    repoRoot,
-    logPath
-  );
-}
-function findListeningProcessId(url, platform) {
-  if (platform !== "win32") {
-    return null;
-  }
-  let port;
-  try {
-    const parsed = new URL(url);
-    port = parsed.port ? Number.parseInt(parsed.port, 10) : null;
-  } catch {
-    return null;
-  }
-  if (port == null || !Number.isFinite(port)) {
-    return null;
-  }
-  const result = spawnSync3(
-    resolvePowerShellCommand(),
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-Command",
-      [
-        `$port = ${port}`,
-        "$processId = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess",
-        "if ($processId) { $processId }"
-      ].join("; ")
-    ],
-    {
-      encoding: "utf-8",
-      windowsHide: true
-    }
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
-  return Number.isFinite(parsedPid) ? parsedPid : null;
-}
-
-// src/engine/bridge-unix-spawn.ts
-import * as fs15 from "fs";
-import { spawn, spawnSync as spawnSync4 } from "child_process";
-function startUnixDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
-  const stderrPath = stderrLogFilePath(logPath);
-  let logFd = null;
-  let stderrFd = null;
-  try {
-    logFd = fs15.openSync(logPath, "a");
-    stderrFd = fs15.openSync(stderrPath, "a");
-    const child = spawn(command, args, {
-      cwd: repoRoot,
-      detached: true,
-      stdio: ["ignore", logFd, stderrFd],
-      env,
-      windowsHide: true
-    });
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    if (logFd != null) {
-      fs15.closeSync(logFd);
-    }
-    if (stderrFd != null) {
-      fs15.closeSync(stderrFd);
-    }
-  }
-}
-function startUnixCodexAppServer(command, url, repoRoot, logPath) {
-  const { command: exe, prefixArgs } = splitResolvedCommand(command);
-  return startUnixDetachedProcess(
-    exe,
-    [...prefixArgs, "app-server", "--listen", url],
-    repoRoot,
-    logPath
-  );
-}
-function findUnixListeningProcessId(url, platform) {
-  if (platform === "win32") {
-    return null;
-  }
-  let port;
-  try {
-    const parsed = new URL(url);
-    port = parsed.port ? Number.parseInt(parsed.port, 10) : null;
-  } catch {
-    return null;
-  }
-  if (port == null || !Number.isFinite(port)) {
-    return null;
-  }
-  const result = spawnSync4(
-    "lsof",
-    ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
-    {
-      encoding: "utf-8",
-      windowsHide: true
-    }
-  );
-  if (!result || result.status !== 0) {
-    return null;
-  }
-  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
-  return Number.isFinite(parsedPid) ? parsedPid : null;
-}
-
-// src/engine/bridge-process-control.ts
-import { execSync as execSync2 } from "child_process";
-function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function terminateProcess(pid, platform) {
-  if (!isProcessAlive(pid)) {
-    return false;
-  }
-  try {
-    if (platform === "win32") {
-      execSync2(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
-    } else {
-      process.kill(pid, "SIGTERM");
-      await delay(2e3);
-      if (isProcessAlive(pid)) {
-        process.kill(pid, "SIGKILL");
-      }
-    }
-  } catch {
-  }
-  return !isProcessAlive(pid);
-}
-async function stopManagedAppServer(appServer, platform) {
-  if (!appServer.managed) {
-    return false;
-  }
-  let stopped = false;
-  if (appServer.auth?.gatewayPid != null) {
-    stopped = await terminateProcess(appServer.auth.gatewayPid, platform) || stopped;
-  }
-  if (appServer.pid != null) {
-    stopped = await terminateProcess(appServer.pid, platform) || stopped;
-  }
-  removeFileIfExists(appServer.auth?.tokenPath);
-  return stopped;
-}
-
-// src/engine/bridge-config.ts
-import * as fs16 from "fs";
-import * as path16 from "path";
-function resolveAgentName(instanceId, explicit, context) {
-  if (explicit) return explicit;
-  try {
-    const repoRoot = context?.repoRoot ?? context?.stateDir?.replace(/[\\/].tap-comms$/, "") ?? process.cwd();
-    const state = loadState(repoRoot);
-    const stateAgent = state?.instances[instanceId]?.agentName;
-    if (stateAgent) return stateAgent;
-  } catch {
-  }
-  return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
-}
-function inferRestartMode(bridgeState, flags, savedMode) {
-  const wasManaged = bridgeState?.appServer != null;
-  const hadAuth = bridgeState?.appServer?.auth != null;
-  const manageAppServer = flags?.noServer === true ? false : flags?.noServer === void 0 ? savedMode?.manageAppServer ?? wasManaged : true;
-  const noAuth = flags?.noAuth === true ? true : flags?.noAuth === void 0 ? savedMode?.noAuth ?? !hadAuth : false;
-  return { manageAppServer, noAuth };
-}
-function cleanupHeadlessDispatch(inboxDir, agentName) {
-  const removed = [];
-  if (!fs16.existsSync(inboxDir)) return removed;
-  const normalizedAgent = agentName.replace(/-/g, "_");
-  const marker = `-headless-${normalizedAgent}-review-`;
-  try {
-    for (const file of fs16.readdirSync(inboxDir)) {
-      if (file.includes(marker)) {
-        fs16.unlinkSync(path16.join(inboxDir, file));
-        removed.push(file);
-      }
-    }
-  } catch {
-  }
-  return removed;
-}
-
-// src/engine/bridge-state.ts
-import * as fs17 from "fs";
-function loadRuntimeBridgeHeartbeat(bridgeState) {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) {
-    return null;
-  }
-  const heartbeatPath = runtimeHeartbeatFilePath(runtimeStateDir);
-  if (!fs17.existsSync(heartbeatPath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(
-      fs17.readFileSync(heartbeatPath, "utf-8")
-    );
-  } catch {
-    return null;
-  }
-}
-function loadRuntimeBridgeThreadState(bridgeState) {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) {
-    return null;
-  }
-  const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
-  if (!fs17.existsSync(threadPath)) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(
-      fs17.readFileSync(threadPath, "utf-8")
-    );
-    return parsed.threadId ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function loadBridgeState(stateDir, instanceId) {
-  const pidPath = pidFilePath(stateDir, instanceId);
-  if (!fs17.existsSync(pidPath)) return null;
-  try {
-    const raw = fs17.readFileSync(pidPath, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-function saveBridgeState(stateDir, instanceId, state) {
-  const pidPath = pidFilePath(stateDir, instanceId);
-  const serializable = JSON.parse(JSON.stringify(state));
-  if (serializable.appServer?.auth) {
-    delete serializable.appServer.auth.token;
-  }
-  writeProtectedTextFile(pidPath, JSON.stringify(serializable, null, 2));
-}
-function clearBridgeState(stateDir, instanceId) {
-  const pidPath = pidFilePath(stateDir, instanceId);
-  if (fs17.existsSync(pidPath)) {
-    fs17.unlinkSync(pidPath);
-  }
-}
-function isBridgeRunning(stateDir, instanceId) {
-  const state = loadBridgeState(stateDir, instanceId);
-  if (!state) return false;
-  return isProcessAlive(state.pid);
-}
-
-// src/engine/bridge-observability.ts
-import * as fs18 from "fs";
-function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
-  const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
-  return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
-}
-function resolveHeartbeatTimestamp(state) {
-  return loadRuntimeHeartbeatTimestamp(state?.runtimeStateDir) ?? state?.lastHeartbeat ?? null;
-}
-function getHeartbeatAge(stateDir, instanceId) {
-  const state = loadBridgeState(stateDir, instanceId);
-  const heartbeat = resolveHeartbeatTimestamp(state);
-  if (!heartbeat) return null;
-  const heartbeatTime = new Date(heartbeat).getTime();
-  if (isNaN(heartbeatTime)) return null;
-  return Math.floor((Date.now() - heartbeatTime) / 1e3);
-}
-function getBridgeHeartbeatTimestamp(stateDir, instanceId) {
-  return resolveHeartbeatTimestamp(loadBridgeState(stateDir, instanceId));
-}
-function getBridgeStatus(stateDir, instanceId) {
-  const state = loadBridgeState(stateDir, instanceId);
-  if (!state) return "stopped";
-  if (!isProcessAlive(state.pid)) {
-    clearBridgeState(stateDir, instanceId);
-    return "stale";
-  }
-  return "running";
-}
-function getTurnInfo(stateDir, instanceId, stuckThresholdSeconds = 300) {
-  const state = loadBridgeState(stateDir, instanceId);
-  if (!state) return null;
-  const heartbeat = loadRuntimeBridgeHeartbeat(state);
-  if (!heartbeat) return null;
-  const activeTurnId = heartbeat.activeTurnId ?? null;
-  const lastTurnStatus = heartbeat.lastTurnStatus ?? null;
-  const turnTimestamp = heartbeat.turnStartedAt ?? null;
-  const updatedAt = turnTimestamp ?? heartbeat.updatedAt ?? null;
-  let ageSeconds = null;
-  if (turnTimestamp) {
-    const ts = new Date(turnTimestamp).getTime();
-    if (!isNaN(ts)) {
-      ageSeconds = Math.floor((Date.now() - ts) / 1e3);
-    }
-  }
-  const stuck = activeTurnId !== null && ageSeconds !== null && ageSeconds > stuckThresholdSeconds;
-  return { activeTurnId, lastTurnStatus, updatedAt, ageSeconds, stuck };
-}
-function isTurnStuck(stateDir, instanceId, thresholdSeconds = 300) {
-  const info = getTurnInfo(stateDir, instanceId, thresholdSeconds);
-  return info?.stuck ?? false;
-}
-function rotateLog(logPath) {
-  if (!fs18.existsSync(logPath)) return;
-  try {
-    const stats = fs18.statSync(logPath);
-    if (stats.size === 0) return;
-    const prevPath = `${logPath}.prev`;
-    fs18.renameSync(logPath, prevPath);
-  } catch {
-  }
-}
-
-// src/engine/bridge-app-server-health.ts
-var APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
-var APP_SERVER_HEALTH_RETRY_MS = 250;
-var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
-async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken) {
-  const WebSocket = getWebSocketCtor();
-  if (!WebSocket) {
-    return false;
-  }
-  return new Promise((resolve14) => {
-    let settled = false;
-    let socket = null;
-    const finish = (healthy) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket?.close();
-      } catch {
-      }
-      resolve14(healthy);
-    };
-    const timer = setTimeout(() => finish(false), timeoutMs);
-    try {
-      const protocols = gatewayToken ? [`${AUTH_SUBPROTOCOL_PREFIX}${gatewayToken}`] : void 0;
-      socket = new WebSocket(url, protocols);
-      socket.addEventListener("open", () => finish(true), { once: true });
-      socket.addEventListener("error", () => finish(false), { once: true });
-      socket.addEventListener("close", () => finish(false), { once: true });
-    } catch {
-      finish(false);
-    }
-  });
-}
-async function waitForAppServerHealth(url, timeoutMs, gatewayToken) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await checkAppServerHealth(url, APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken)) {
-      return true;
-    }
-    await delay(APP_SERVER_HEALTH_RETRY_MS);
-  }
-  return false;
-}
-function markAppServerHealthy(appServer) {
-  const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
-  return {
-    ...appServer,
-    healthy: true,
-    lastCheckedAt: checkedAt,
-    lastHealthyAt: checkedAt
-  };
-}
-
-// src/engine/bridge-app-server-auth.ts
-import * as fs20 from "fs";
-import * as path18 from "path";
-import { randomBytes as randomBytes2 } from "crypto";
+import { spawn, spawnSync as spawnSync3, execSync as execSync3 } from "child_process";
+import { fileURLToPath as fileURLToPath4 } from "url";
 
 // src/runtime/resolve-node.ts
-import * as fs19 from "fs";
-import * as path17 from "path";
-import { execSync as execSync3 } from "child_process";
+import * as fs12 from "fs";
+import * as path12 from "path";
+import { execSync as execSync2 } from "child_process";
 function readNodeVersion(repoRoot) {
-  const nvFile = path17.join(repoRoot, ".node-version");
-  if (!fs19.existsSync(nvFile)) return null;
+  const nvFile = path12.join(repoRoot, ".node-version");
+  if (!fs12.existsSync(nvFile)) return null;
   try {
-    const raw = fs19.readFileSync(nvFile, "utf-8").trim();
+    const raw = fs12.readFileSync(nvFile, "utf-8").trim();
     return raw.length > 0 ? raw.replace(/^v/, "") : null;
   } catch {
     return null;
@@ -2790,16 +2047,16 @@ function fnmCandidateDirs() {
   if (process.platform === "win32") {
     return [
       process.env.FNM_DIR,
-      process.env.APPDATA ? path17.join(process.env.APPDATA, "fnm") : null,
-      process.env.LOCALAPPDATA ? path17.join(process.env.LOCALAPPDATA, "fnm") : null,
-      process.env.USERPROFILE ? path17.join(process.env.USERPROFILE, "scoop", "persist", "fnm") : null
+      process.env.APPDATA ? path12.join(process.env.APPDATA, "fnm") : null,
+      process.env.LOCALAPPDATA ? path12.join(process.env.LOCALAPPDATA, "fnm") : null,
+      process.env.USERPROFILE ? path12.join(process.env.USERPROFILE, "scoop", "persist", "fnm") : null
     ].filter(Boolean);
   }
   return [
     process.env.FNM_DIR,
-    process.env.HOME ? path17.join(process.env.HOME, ".local", "share", "fnm") : null,
-    process.env.HOME ? path17.join(process.env.HOME, ".fnm") : null,
-    process.env.XDG_DATA_HOME ? path17.join(process.env.XDG_DATA_HOME, "fnm") : null
+    process.env.HOME ? path12.join(process.env.HOME, ".local", "share", "fnm") : null,
+    process.env.HOME ? path12.join(process.env.HOME, ".fnm") : null,
+    process.env.XDG_DATA_HOME ? path12.join(process.env.XDG_DATA_HOME, "fnm") : null
   ].filter(Boolean);
 }
 function nodeExecutableName() {
@@ -2809,16 +2066,16 @@ function probeFnmNode(desiredVersion) {
   const dirs = fnmCandidateDirs();
   const exe = nodeExecutableName();
   for (const baseDir of dirs) {
-    const candidate = path17.join(
+    const candidate = path12.join(
       baseDir,
       "node-versions",
       `v${desiredVersion}`,
       "installation",
       exe
     );
-    if (!fs19.existsSync(candidate)) continue;
+    if (!fs12.existsSync(candidate)) continue;
     try {
-      const v = execSync3(`"${candidate}" --version`, {
+      const v = execSync2(`"${candidate}" --version`, {
         encoding: "utf-8",
         timeout: 5e3
       }).trim();
@@ -2832,7 +2089,7 @@ function probeFnmNode(desiredVersion) {
 }
 function detectNodeMajorVersion(command) {
   try {
-    const version2 = execSync3(`"${command}" --version`, {
+    const version2 = execSync2(`"${command}" --version`, {
       encoding: "utf-8",
       timeout: 5e3
     }).trim();
@@ -2846,7 +2103,7 @@ function checkStripTypesSupport(command) {
   const major = detectNodeMajorVersion(command);
   if (major !== null && major >= 22) return true;
   try {
-    execSync3(`"${command}" --experimental-strip-types -e ""`, {
+    execSync2(`"${command}" --experimental-strip-types -e ""`, {
       timeout: 5e3,
       stdio: "pipe"
     });
@@ -2857,12 +2114,12 @@ function checkStripTypesSupport(command) {
 }
 function findTsxFallback(repoRoot) {
   const candidates = [
-    path17.join(repoRoot, "node_modules", ".bin", "tsx.exe"),
-    path17.join(repoRoot, "node_modules", ".bin", "tsx.CMD"),
-    path17.join(repoRoot, "node_modules", ".bin", "tsx")
+    path12.join(repoRoot, "node_modules", ".bin", "tsx.exe"),
+    path12.join(repoRoot, "node_modules", ".bin", "tsx.CMD"),
+    path12.join(repoRoot, "node_modules", ".bin", "tsx")
   ];
   for (const c of candidates) {
-    if (fs19.existsSync(c)) return c;
+    if (fs12.existsSync(c)) return c;
   }
   return null;
 }
@@ -2871,7 +2128,7 @@ function getFnmBinDir(repoRoot) {
   if (!desiredVersion) return null;
   const nodePath = probeFnmNode(desiredVersion);
   if (!nodePath) return null;
-  return path17.dirname(nodePath);
+  return path12.dirname(nodePath);
 }
 function resolveNodeRuntime(configCommand, repoRoot) {
   if (configCommand === "bun" || configCommand.endsWith("bun.exe")) {
@@ -2927,16 +2184,195 @@ function buildRuntimeEnv(repoRoot, baseEnv = process.env) {
   const currentPath = baseEnv[pathKey] ?? baseEnv.PATH ?? "";
   return {
     ...baseEnv,
-    [pathKey]: `${fnmBin}${path17.delimiter}${currentPath}`
+    [pathKey]: `${fnmBin}${path12.delimiter}${currentPath}`
   };
 }
 
-// src/engine/bridge-app-server-auth.ts
+// src/engine/bridge.ts
+var DEFAULT_APP_SERVER_URL2 = "ws://127.0.0.1:4501";
+var APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
+var APP_SERVER_START_TIMEOUT_MS = 2e4;
+var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
+var APP_SERVER_HEALTH_RETRY_MS = 250;
+var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
+var APP_SERVER_AUTH_FILE_MODE = 384;
+var WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
+var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
+function appServerLogFilePath(stateDir, instanceId) {
+  return path13.join(stateDir, "logs", `app-server-${instanceId}.log`);
+}
+function appServerGatewayLogFilePath(stateDir, instanceId) {
+  return path13.join(stateDir, "logs", `app-server-gateway-${instanceId}.log`);
+}
+function appServerGatewayTokenFilePath(stateDir, instanceId) {
+  return path13.join(
+    stateDir,
+    "secrets",
+    `app-server-gateway-${instanceId}.token`
+  );
+}
+function stderrLogFilePath(logPath) {
+  return `${logPath}.stderr`;
+}
+function writeProtectedTextFile(filePath, content) {
+  fs13.mkdirSync(path13.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs13.writeFileSync(tmp, content, {
+    encoding: "utf-8",
+    mode: APP_SERVER_AUTH_FILE_MODE
+  });
+  fs13.chmodSync(tmp, APP_SERVER_AUTH_FILE_MODE);
+  fs13.renameSync(tmp, filePath);
+  fs13.chmodSync(filePath, APP_SERVER_AUTH_FILE_MODE);
+}
+function removeFileIfExists(filePath) {
+  if (!filePath || !fs13.existsSync(filePath)) {
+    return;
+  }
+  try {
+    fs13.unlinkSync(filePath);
+  } catch {
+  }
+}
+function toPowerShellSingleQuotedString(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function toPowerShellStringArrayLiteral(values) {
+  return `@(${values.map(toPowerShellSingleQuotedString).join(", ")})`;
+}
+function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
+  let entries;
+  try {
+    entries = fs13.readdirSync(os3.tmpdir());
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) || !/\.(cmd|ps1)$/i.test(entry)) {
+      continue;
+    }
+    const wrapperPath = path13.join(os3.tmpdir(), entry);
+    try {
+      const stats = fs13.statSync(wrapperPath);
+      if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
+        continue;
+      }
+      fs13.unlinkSync(wrapperPath);
+    } catch {
+    }
+  }
+}
+function buildWindowsDetachedWrapperScript(command, args, logPath, stderrLogPath, env) {
+  const lines = ["$ErrorActionPreference = 'Stop'"];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== void 0 && value !== process.env[key]) {
+      lines.push(
+        `[Environment]::SetEnvironmentVariable(${toPowerShellSingleQuotedString(key)}, ${toPowerShellSingleQuotedString(value)}, 'Process')`
+      );
+    }
+  }
+  lines.push(
+    `$logPath = ${toPowerShellSingleQuotedString(logPath)}`,
+    `$stderrLogPath = ${toPowerShellSingleQuotedString(stderrLogPath)}`,
+    `$commandPath = ${toPowerShellSingleQuotedString(command)}`,
+    `$commandArgs = ${toPowerShellStringArrayLiteral(args)}`,
+    "$exitCode = 1",
+    "try {",
+    "  & $commandPath @commandArgs >> $logPath 2>> $stderrLogPath",
+    "  $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
+    "} finally {",
+    "  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
+    "}",
+    "exit $exitCode"
+  );
+  return `${lines.join("\r\n")}\r
+`;
+}
+function getWebSocketCtor() {
+  const candidate = globalThis.WebSocket;
+  return typeof candidate === "function" ? candidate : null;
+}
+function delay(ms) {
+  return new Promise((resolve13) => setTimeout(resolve13, ms));
+}
+function isLoopbackHost(hostname) {
+  return hostname === "127.0.0.1" || hostname === "localhost";
+}
+function resolveCodexCommand(platform) {
+  const candidates = platform === "win32" ? ["codex.cmd", "codex.exe", "codex", "codex.ps1"] : ["codex"];
+  return probeCommand(candidates).command;
+}
+function formatCodexAppServerCommand(command, url) {
+  return `${command} app-server --listen ${url}`;
+}
+function resolvePowerShellCommand() {
+  return probeCommand(["pwsh", "powershell", "powershell.exe"]).command ?? "powershell";
+}
+function resolveAuthGatewayScript(repoRoot) {
+  const moduleDir = path13.dirname(fileURLToPath4(import.meta.url));
+  const candidates = [
+    // Bundled: dist/bridges/ sibling (npm install / built package)
+    path13.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
+    // Source: src/bridges/ sibling (monorepo dev with ts runner)
+    path13.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
+    // Monorepo dist fallback
+    path13.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "dist",
+      "bridges",
+      "codex-app-server-auth-gateway.mjs"
+    ),
+    path13.join(
+      repoRoot,
+      "packages",
+      "tap-comms",
+      "src",
+      "bridges",
+      "codex-app-server-auth-gateway.ts"
+    )
+  ];
+  for (const candidate of candidates) {
+    if (fs13.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+function getBridgeRuntimeStateDir(repoRoot, instanceId) {
+  return path13.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`);
+}
+async function allocateLoopbackPort(hostname) {
+  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
+  return await new Promise((resolve13, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, bindHost, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => {
+          reject(new Error("Failed to allocate a loopback port"));
+        });
+        return;
+      }
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve13(port);
+      });
+    });
+  });
+}
 function buildProtectedAppServerUrl(publicUrl, _token) {
   return publicUrl;
 }
 function readGatewayTokenFromPath(tokenPath) {
-  return fs20.readFileSync(tokenPath, "utf8").trim();
+  return fs13.readFileSync(tokenPath, "utf8").trim();
 }
 function readGatewayToken(auth) {
   if (!auth) {
@@ -2946,14 +2382,14 @@ function readGatewayToken(auth) {
   if (legacyToken?.trim()) {
     return legacyToken.trim();
   }
-  if (!auth.tokenPath || !fs20.existsSync(auth.tokenPath)) {
+  if (!auth.tokenPath || !fs13.existsSync(auth.tokenPath)) {
     return null;
   }
   const fileToken = readGatewayTokenFromPath(auth.tokenPath);
   return fileToken || null;
 }
 function materializeGatewayTokenFile(stateDir, instanceId, publicUrl, auth) {
-  if (auth.tokenPath && fs20.existsSync(auth.tokenPath)) {
+  if (auth.tokenPath && fs13.existsSync(auth.tokenPath)) {
     return auth;
   }
   const token = readGatewayToken(auth);
@@ -2979,7 +2415,7 @@ async function createManagedAppServerAuth(options) {
   if (!gatewayScript) {
     throw new Error("Auth gateway script not found");
   }
-  const token = randomBytes2(24).toString("base64url");
+  const token = randomBytes(24).toString("base64url");
   const tokenPath = appServerGatewayTokenFilePath(
     options.stateDir,
     options.instanceId
@@ -2991,7 +2427,7 @@ async function createManagedAppServerAuth(options) {
     options.stateDir,
     options.instanceId
   );
-  fs20.mkdirSync(path18.dirname(gatewayLogPath), { recursive: true });
+  fs13.mkdirSync(path13.dirname(gatewayLogPath), { recursive: true });
   rotateLog(gatewayLogPath);
   const runtime = resolveNodeRuntime(process.execPath, options.repoRoot);
   const gatewayArgs = [];
@@ -3011,23 +2447,37 @@ async function createManagedAppServerAuth(options) {
     TAP_GATEWAY_TOKEN_FILE: tokenPath
   };
   let gatewayPid;
-  try {
-    gatewayPid = options.platform === "win32" ? startWindowsDetachedProcess(
-      runtime.command,
-      gatewayArgs,
-      options.repoRoot,
-      gatewayLogPath,
-      gatewayEnv
-    ) : startUnixDetachedProcess(
-      runtime.command,
-      gatewayArgs,
-      options.repoRoot,
-      gatewayLogPath,
-      gatewayEnv
-    );
-  } catch (error) {
-    removeFileIfExists(tokenPath);
-    throw error;
+  {
+    let logFd = null;
+    try {
+      if (options.platform === "win32") {
+        gatewayPid = startWindowsDetachedProcess(
+          runtime.command,
+          gatewayArgs,
+          options.repoRoot,
+          gatewayLogPath,
+          gatewayEnv
+        );
+      } else {
+        logFd = fs13.openSync(gatewayLogPath, "a");
+        const child = spawn(runtime.command, gatewayArgs, {
+          cwd: options.repoRoot,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: gatewayEnv,
+          windowsHide: true
+        });
+        child.unref();
+        gatewayPid = child.pid ?? null;
+      }
+    } catch (error) {
+      removeFileIfExists(tokenPath);
+      throw error;
+    } finally {
+      if (logFd != null) {
+        fs13.closeSync(logFd);
+      }
+    }
   }
   if (gatewayPid == null) {
     removeFileIfExists(tokenPath);
@@ -3063,43 +2513,26 @@ function canReuseManagedAppServer(appServer) {
   }
   return true;
 }
-
-// src/engine/bridge-app-server-lifecycle.ts
-import * as fs21 from "fs";
-import * as path19 from "path";
-var DEFAULT_APP_SERVER_URL3 = "ws://127.0.0.1:4501";
-var APP_SERVER_START_TIMEOUT_MS = 2e4;
-var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
-function isAppServerUsedByOtherBridge(stateDir, excludeInstanceId, appServer) {
-  const pidDir = path19.join(stateDir, "pids");
-  if (!fs21.existsSync(pidDir)) return false;
-  for (const name of fs21.readdirSync(pidDir)) {
-    if (!name.startsWith("bridge-") || !name.endsWith(".json")) continue;
-    const otherId = name.slice("bridge-".length, -".json".length);
-    if (otherId === excludeInstanceId) continue;
-    try {
-      const raw = fs21.readFileSync(path19.join(pidDir, name), "utf-8");
-      const state = JSON.parse(raw);
-      if (state.appServer?.url === appServer.url && state.appServer?.pid === appServer.pid && isProcessAlive(state.pid)) {
-        return true;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return false;
+function markAppServerHealthy(appServer) {
+  const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    ...appServer,
+    healthy: true,
+    lastCheckedAt: checkedAt,
+    lastHealthyAt: checkedAt
+  };
 }
 function findReusableManagedAppServer(stateDir, publicUrl) {
-  const pidDir = path19.join(stateDir, "pids");
-  if (!fs21.existsSync(pidDir)) {
+  const pidDir = path13.join(stateDir, "pids");
+  if (!fs13.existsSync(pidDir)) {
     return null;
   }
-  for (const name of fs21.readdirSync(pidDir)) {
+  for (const name of fs13.readdirSync(pidDir)) {
     if (!name.startsWith("bridge-") || !name.endsWith(".json")) {
       continue;
     }
     try {
-      const raw = fs21.readFileSync(path19.join(pidDir, name), "utf-8");
+      const raw = fs13.readFileSync(path13.join(pidDir, name), "utf-8");
       const parsed = JSON.parse(raw);
       if (parsed.appServer?.url !== publicUrl) {
         continue;
@@ -3112,8 +2545,99 @@ function findReusableManagedAppServer(stateDir, publicUrl) {
   }
   return null;
 }
+function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
+  const stderrLogPath = stderrLogFilePath(logPath);
+  const powerShellCommand = resolvePowerShellCommand();
+  cleanupStaleWindowsSpawnWrappers();
+  const wrapperPath = path13.join(
+    os3.tmpdir(),
+    `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`
+  );
+  fs13.writeFileSync(
+    wrapperPath,
+    buildWindowsDetachedWrapperScript(
+      command,
+      args,
+      logPath,
+      stderrLogPath,
+      env
+    )
+  );
+  const psCommand = [
+    "$p = Start-Process",
+    `-FilePath ${toPowerShellSingleQuotedString(powerShellCommand)}`,
+    `-ArgumentList ${toPowerShellStringArrayLiteral(["-NoLogo", "-NoProfile", "-File", wrapperPath])}`,
+    `-WorkingDirectory ${toPowerShellSingleQuotedString(repoRoot)}`,
+    "-WindowStyle Hidden",
+    "-PassThru",
+    "; Write-Output $p.Id"
+  ].join(" ");
+  const result = spawnSync3(
+    powerShellCommand,
+    ["-NoLogo", "-NoProfile", "-Command", psCommand],
+    {
+      encoding: "utf-8",
+      windowsHide: true
+    }
+  );
+  if (result.status !== 0) {
+    removeFileIfExists(wrapperPath);
+    return null;
+  }
+  const pid = parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(pid)) {
+    removeFileIfExists(wrapperPath);
+    return null;
+  }
+  return pid;
+}
+function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
+  return startWindowsDetachedProcess(
+    command,
+    ["app-server", "--listen", url],
+    repoRoot,
+    logPath
+  );
+}
+function findListeningProcessId(url, platform) {
+  if (platform !== "win32") {
+    return null;
+  }
+  let port;
+  try {
+    const parsed = new URL(url);
+    port = parsed.port ? Number.parseInt(parsed.port, 10) : null;
+  } catch {
+    return null;
+  }
+  if (port == null || !Number.isFinite(port)) {
+    return null;
+  }
+  const result = spawnSync3(
+    resolvePowerShellCommand(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-Command",
+      [
+        `$port = ${port}`,
+        "$processId = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess",
+        "if ($processId) { $processId }"
+      ].join("; ")
+    ],
+    {
+      encoding: "utf-8",
+      windowsHide: true
+    }
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
+  return Number.isFinite(parsedPid) ? parsedPid : null;
+}
 function resolveAppServerUrl(baseUrl, port) {
-  const resolvedBase = (baseUrl ?? DEFAULT_APP_SERVER_URL3).replace(/\/$/, "");
+  const resolvedBase = (baseUrl ?? DEFAULT_APP_SERVER_URL2).replace(/\/$/, "");
   if (port == null) {
     return resolvedBase;
   }
@@ -3124,6 +2648,121 @@ function resolveAppServerUrl(baseUrl, port) {
   } catch {
     return resolvedBase;
   }
+}
+async function isTcpPortAvailable(hostname, port) {
+  const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
+  return await new Promise((resolve13) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", () => resolve13(false));
+    server.listen(port, bindHost, () => {
+      server.close((error) => resolve13(!error));
+    });
+  });
+}
+async function findNextAvailableAppServerPort(state, baseUrl, basePort = 4501, excludeInstanceId) {
+  let hostname = "127.0.0.1";
+  try {
+    hostname = new URL(baseUrl ?? DEFAULT_APP_SERVER_URL2).hostname;
+  } catch {
+  }
+  const maxAttempts = 1e3;
+  let port = basePort;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1, port += 1) {
+    const claimedInState = Object.entries(state.instances).some(
+      ([id, inst]) => id !== excludeInstanceId && inst.port === port
+    );
+    if (claimedInState) {
+      continue;
+    }
+    if (!isLoopbackHost(hostname)) {
+      return port;
+    }
+    if (await isTcpPortAvailable(hostname, port)) {
+      return port;
+    }
+  }
+  throw new Error(
+    `Failed to find a free app-server port starting at ${basePort}`
+  );
+}
+async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken) {
+  const WebSocket = getWebSocketCtor();
+  if (!WebSocket) {
+    return false;
+  }
+  return new Promise((resolve13) => {
+    let settled = false;
+    let socket = null;
+    const finish = (healthy) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+      }
+      resolve13(healthy);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    try {
+      const protocols = gatewayToken ? [`${AUTH_SUBPROTOCOL_PREFIX}${gatewayToken}`] : void 0;
+      socket = new WebSocket(url, protocols);
+      socket.addEventListener("open", () => finish(true), { once: true });
+      socket.addEventListener("error", () => finish(false), { once: true });
+      socket.addEventListener("close", () => finish(false), { once: true });
+    } catch {
+      finish(false);
+    }
+  });
+}
+async function waitForAppServerHealth(url, timeoutMs, gatewayToken) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await checkAppServerHealth(
+      url,
+      APP_SERVER_HEALTH_TIMEOUT_MS,
+      gatewayToken
+    )) {
+      return true;
+    }
+    await delay(APP_SERVER_HEALTH_RETRY_MS);
+  }
+  return false;
+}
+async function terminateProcess(pid, platform) {
+  if (!isProcessAlive(pid)) {
+    return false;
+  }
+  try {
+    if (platform === "win32") {
+      execSync3(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
+    } else {
+      process.kill(pid, "SIGTERM");
+      await delay(2e3);
+      if (isProcessAlive(pid)) {
+        process.kill(pid, "SIGKILL");
+      }
+    }
+  } catch {
+  }
+  return !isProcessAlive(pid);
+}
+async function stopManagedAppServer(appServer, platform) {
+  if (!appServer.managed) {
+    return false;
+  }
+  let stopped = false;
+  if (appServer.auth?.gatewayPid != null) {
+    stopped = await terminateProcess(appServer.auth.gatewayPid, platform) || stopped;
+  }
+  if (appServer.pid != null) {
+    stopped = await terminateProcess(appServer.pid, platform) || stopped;
+  }
+  removeFileIfExists(appServer.auth?.tokenPath);
+  return stopped;
 }
 async function ensureCodexAppServer(options) {
   const effectiveUrl = resolveAppServerUrl(options.appServerUrl);
@@ -3171,7 +2810,7 @@ Start the app-server manually:
     );
   }
   const logPath = appServerLogFilePath(options.stateDir, options.instanceId);
-  fs21.mkdirSync(path19.dirname(logPath), { recursive: true });
+  fs13.mkdirSync(path13.dirname(logPath), { recursive: true });
   rotateLog(logPath);
   if (options.noAuth) {
     const manualCommand2 = formatCodexAppServerCommand("codex", effectiveUrl);
@@ -3193,13 +2832,21 @@ Start it manually:
         );
       }
     } else {
+      const logFd = fs13.openSync(logPath, "a");
       try {
-        pid2 = startUnixCodexAppServer(
+        const child = spawn(
           resolvedCommand,
-          effectiveUrl,
-          options.repoRoot,
-          logPath
+          ["app-server", "--listen", effectiveUrl],
+          {
+            cwd: options.repoRoot,
+            detached: true,
+            stdio: ["ignore", logFd, logFd],
+            env: process.env,
+            windowsHide: true
+          }
         );
+        child.unref();
+        pid2 = child.pid ?? null;
       } catch (err) {
         throw new Error(
           `Failed to spawn Codex app-server: ${err instanceof Error ? err.message : String(err)}
@@ -3207,6 +2854,8 @@ Start it manually:
   ${manualCommand2}`,
           { cause: err }
         );
+      } finally {
+        fs13.closeSync(logFd);
       }
     }
     if (pid2 == null) {
@@ -3229,7 +2878,7 @@ Or start it manually:
   ${manualCommand2}`
       );
     }
-    pid2 = (options.platform === "win32" ? findListeningProcessId(effectiveUrl, options.platform) : findUnixListeningProcessId(effectiveUrl, options.platform)) ?? pid2;
+    pid2 = findListeningProcessId(effectiveUrl, options.platform) ?? pid2;
     const healthyAt2 = (/* @__PURE__ */ new Date()).toISOString();
     return {
       url: effectiveUrl,
@@ -3273,13 +2922,21 @@ Start it manually:
       );
     }
   } else {
+    const logFd = fs13.openSync(logPath, "a");
     try {
-      pid = startUnixCodexAppServer(
+      const child = spawn(
         resolvedCommand,
-        auth.upstreamUrl,
-        options.repoRoot,
-        logPath
+        ["app-server", "--listen", auth.upstreamUrl],
+        {
+          cwd: options.repoRoot,
+          detached: true,
+          stdio: ["ignore", logFd, logFd],
+          env: process.env,
+          windowsHide: true
+        }
       );
+      child.unref();
+      pid = child.pid ?? null;
     } catch (err) {
       if (auth.gatewayPid != null) {
         await terminateProcess(auth.gatewayPid, options.platform);
@@ -3291,6 +2948,8 @@ Start it manually:
   ${manualCommand}`,
         { cause: err }
       );
+    } finally {
+      fs13.closeSync(logFd);
     }
   }
   if (pid == null) {
@@ -3347,7 +3006,7 @@ Check ${auth.gatewayLogPath ?? "the gateway log"} and ${logPath}.`
     );
   }
   const healthyAt = (/* @__PURE__ */ new Date()).toISOString();
-  pid = (options.platform === "win32" ? findListeningProcessId(auth.upstreamUrl, options.platform) : findUnixListeningProcessId(auth.upstreamUrl, options.platform)) ?? pid;
+  pid = findListeningProcessId(auth.upstreamUrl, options.platform) ?? pid;
   return {
     url: effectiveUrl,
     pid,
@@ -3360,15 +3019,130 @@ Check ${auth.gatewayLogPath ?? "the gateway log"} and ${logPath}.`
     auth
   };
 }
-function formatCodexAppServerCommand(command, url) {
-  return `${command} app-server --listen ${url}`;
+function pidFilePath(stateDir, instanceId) {
+  return path13.join(stateDir, "pids", `bridge-${instanceId}.json`);
 }
-
-// src/engine/bridge-startup.ts
-import * as fs22 from "fs";
-import * as path20 from "path";
-function getBridgeRuntimeStateDir(repoRoot, instanceId) {
-  return path20.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`);
+function logFilePath(stateDir, instanceId) {
+  return path13.join(stateDir, "logs", `bridge-${instanceId}.log`);
+}
+function runtimeHeartbeatFilePath(runtimeStateDir) {
+  return path13.join(runtimeStateDir, "heartbeat.json");
+}
+function runtimeThreadStateFilePath(runtimeStateDir) {
+  return path13.join(runtimeStateDir, "thread.json");
+}
+function loadRuntimeBridgeHeartbeat(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+  const heartbeatPath = runtimeHeartbeatFilePath(runtimeStateDir);
+  if (!fs13.existsSync(heartbeatPath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(
+      fs13.readFileSync(heartbeatPath, "utf-8")
+    );
+  } catch {
+    return null;
+  }
+}
+function loadRuntimeBridgeThreadState(bridgeState) {
+  const runtimeStateDir = bridgeState?.runtimeStateDir;
+  if (!runtimeStateDir) {
+    return null;
+  }
+  const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
+  if (!fs13.existsSync(threadPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(
+      fs13.readFileSync(threadPath, "utf-8")
+    );
+    return parsed.threadId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
+  const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
+  return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
+}
+function resolveHeartbeatTimestamp(state) {
+  return loadRuntimeHeartbeatTimestamp(state?.runtimeStateDir) ?? state?.lastHeartbeat ?? null;
+}
+function loadBridgeState(stateDir, instanceId) {
+  const pidPath = pidFilePath(stateDir, instanceId);
+  if (!fs13.existsSync(pidPath)) return null;
+  try {
+    const raw = fs13.readFileSync(pidPath, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+function saveBridgeState(stateDir, instanceId, state) {
+  const pidPath = pidFilePath(stateDir, instanceId);
+  const serializable = JSON.parse(JSON.stringify(state));
+  if (serializable.appServer?.auth) {
+    delete serializable.appServer.auth.token;
+  }
+  writeProtectedTextFile(pidPath, JSON.stringify(serializable, null, 2));
+}
+function clearBridgeState(stateDir, instanceId) {
+  const pidPath = pidFilePath(stateDir, instanceId);
+  if (fs13.existsSync(pidPath)) {
+    fs13.unlinkSync(pidPath);
+  }
+}
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isBridgeRunning(stateDir, instanceId) {
+  const state = loadBridgeState(stateDir, instanceId);
+  if (!state) return false;
+  return isProcessAlive(state.pid);
+}
+function resolveAgentName(instanceId, explicit, context) {
+  if (explicit) return explicit;
+  try {
+    const repoRoot = context?.repoRoot ?? context?.stateDir?.replace(/[\\/].tap-comms$/, "") ?? process.cwd();
+    const state = loadState(repoRoot);
+    const stateAgent = state?.instances[instanceId]?.agentName;
+    if (stateAgent) return stateAgent;
+  } catch {
+  }
+  return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
+}
+function inferRestartMode(bridgeState, flags, savedMode) {
+  const wasManaged = bridgeState?.appServer != null;
+  const hadAuth = bridgeState?.appServer?.auth != null;
+  const manageAppServer = flags?.noServer === true ? false : flags?.noServer === void 0 ? savedMode?.manageAppServer ?? wasManaged : true;
+  const noAuth = flags?.noAuth === true ? true : flags?.noAuth === void 0 ? savedMode?.noAuth ?? !hadAuth : false;
+  return { manageAppServer, noAuth };
+}
+function cleanupHeadlessDispatch(inboxDir, agentName) {
+  const removed = [];
+  if (!fs13.existsSync(inboxDir)) return removed;
+  const normalizedAgent = agentName.replace(/-/g, "_");
+  const marker = `-headless-${normalizedAgent}-review-`;
+  try {
+    for (const file of fs13.readdirSync(inboxDir)) {
+      if (file.includes(marker)) {
+        fs13.unlinkSync(path13.join(inboxDir, file));
+        removed.push(file);
+      }
+    }
+  } catch {
+  }
+  return removed;
 }
 async function startBridge(options) {
   const {
@@ -3399,9 +3173,10 @@ async function startBridge(options) {
   const previousAppServer = previousBridgeState?.appServer ?? null;
   clearBridgeState(stateDir, instanceId);
   const logPath = logFilePath(stateDir, instanceId);
-  fs22.mkdirSync(path20.dirname(logPath), { recursive: true });
+  fs13.mkdirSync(path13.dirname(logPath), { recursive: true });
   rotateLog(logPath);
-  const repoRoot = options.repoRoot ?? path20.resolve(stateDir, "..");
+  let logFd = null;
+  const repoRoot = options.repoRoot ?? path13.resolve(stateDir, "..");
   const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
   const resolved = resolveNodeRuntime(
     options.runtimeCommand ?? "node",
@@ -3469,19 +3244,30 @@ async function startBridge(options) {
       ...options.ephemeral ? { TAP_EPHEMERAL: "true" } : {},
       ...options.processExistingMessages ? { TAP_PROCESS_EXISTING: "true" } : {}
     };
-    const bridgePid = options.platform === "win32" ? startWindowsDetachedProcess(
-      command,
-      [bridgeScript],
-      repoRoot,
-      logPath,
-      bridgeEnv
-    ) : startUnixDetachedProcess(
-      command,
-      [bridgeScript],
-      repoRoot,
-      logPath,
-      bridgeEnv
-    );
+    let bridgePid = null;
+    if (options.platform === "win32") {
+      bridgePid = startWindowsDetachedProcess(
+        command,
+        [bridgeScript],
+        repoRoot,
+        logPath,
+        bridgeEnv
+      );
+    } else {
+      logFd = fs13.openSync(logPath, "a");
+      const child = spawn(command, [bridgeScript], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: bridgeEnv,
+        windowsHide: true
+      });
+      child.unref();
+      bridgePid = child.pid ?? null;
+    }
+    if (logFd != null) {
+      fs13.closeSync(logFd);
+      logFd = null;
+    }
     if (!bridgePid) {
       throw new Error(`Failed to spawn bridge process for ${instanceId}`);
     }
@@ -3495,23 +3281,18 @@ async function startBridge(options) {
     saveBridgeState(stateDir, instanceId, state);
     return state;
   } catch (err) {
-    if (appServer?.managed) {
-      const shared = isAppServerUsedByOtherBridge(
-        stateDir,
-        instanceId,
-        appServer
-      );
-      if (!shared) {
-        await stopManagedAppServer(appServer, options.platform);
+    if (logFd != null) {
+      try {
+        fs13.closeSync(logFd);
+      } catch {
       }
+    }
+    if (appServer?.managed) {
+      await stopManagedAppServer(appServer, options.platform);
     }
     throw err;
   }
 }
-
-// src/engine/bridge-orchestrator.ts
-import * as fs23 from "fs";
-import * as path21 from "path";
 async function stopBridge(options) {
   const { instanceId, stateDir, platform } = options;
   const state = loadBridgeState(stateDir, instanceId);
@@ -3534,28 +3315,59 @@ async function restartBridge(options) {
   const drainTimeout = (options.drainTimeoutSeconds ?? 30) * 1e3;
   const repoRoot = options.repoRoot ?? stateDir.replace(/[\\/].tap-comms$/, "");
   const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
-  const heartbeatPath = path21.join(runtimeStateDir, "heartbeat.json");
-  if (fs23.existsSync(heartbeatPath)) {
+  const heartbeatPath = path13.join(runtimeStateDir, "heartbeat.json");
+  if (fs13.existsSync(heartbeatPath)) {
     const startWait = Date.now();
     while (Date.now() - startWait < drainTimeout) {
       try {
-        const hb = JSON.parse(fs23.readFileSync(heartbeatPath, "utf-8"));
+        const hb = JSON.parse(fs13.readFileSync(heartbeatPath, "utf-8"));
         if (!hb.activeTurnId) break;
       } catch {
         break;
       }
-      await new Promise((resolve14) => setTimeout(resolve14, 1e3));
+      await new Promise((r) => setTimeout(r, 1e3));
     }
   }
   if (options.headless?.enabled && options.commsDir) {
     const agentName = options.agentName ?? instanceId;
-    cleanupHeadlessDispatch(path21.join(options.commsDir, "inbox"), agentName);
+    cleanupHeadlessDispatch(path13.join(options.commsDir, "inbox"), agentName);
   }
   await stopBridge({ instanceId, stateDir, platform });
-  return startBridge({
+  const restartOptions = {
     ...options,
     processExistingMessages: true
-  });
+  };
+  return startBridge(restartOptions);
+}
+function rotateLog(logPath) {
+  if (!fs13.existsSync(logPath)) return;
+  try {
+    const stats = fs13.statSync(logPath);
+    if (stats.size === 0) return;
+    const prevPath = `${logPath}.prev`;
+    fs13.renameSync(logPath, prevPath);
+  } catch {
+  }
+}
+function getHeartbeatAge(stateDir, instanceId) {
+  const state = loadBridgeState(stateDir, instanceId);
+  const heartbeat = resolveHeartbeatTimestamp(state);
+  if (!heartbeat) return null;
+  const heartbeatTime = new Date(heartbeat).getTime();
+  if (isNaN(heartbeatTime)) return null;
+  return Math.floor((Date.now() - heartbeatTime) / 1e3);
+}
+function getBridgeHeartbeatTimestamp(stateDir, instanceId) {
+  return resolveHeartbeatTimestamp(loadBridgeState(stateDir, instanceId));
+}
+function getBridgeStatus(stateDir, instanceId) {
+  const state = loadBridgeState(stateDir, instanceId);
+  if (!state) return "stopped";
+  if (!isProcessAlive(state.pid)) {
+    clearBridgeState(stateDir, instanceId);
+    return "stale";
+  }
+  return "running";
 }
 
 // src/commands/add.ts
@@ -4046,7 +3858,7 @@ async function statusCommand(args) {
 }
 
 // src/engine/rollback.ts
-import * as fs24 from "fs";
+import * as fs14 from "fs";
 async function rollbackRuntime(_instanceId, runtimeState) {
   const errors = [];
   const restoredFiles = [];
@@ -4075,7 +3887,7 @@ async function rollbackRuntime(_instanceId, runtimeState) {
   };
 }
 function rollbackArtifact(artifact) {
-  if (!fs24.existsSync(artifact.path)) {
+  if (!fs14.existsSync(artifact.path)) {
     return { restored: false, error: `File not found: ${artifact.path}` };
   }
   switch (artifact.kind) {
@@ -4093,7 +3905,7 @@ function rollbackArtifact(artifact) {
   }
 }
 function rollbackJsonPath(artifact) {
-  const raw = fs24.readFileSync(artifact.path, "utf-8");
+  const raw = fs14.readFileSync(artifact.path, "utf-8");
   let config;
   try {
     config = JSON.parse(raw);
@@ -4119,18 +3931,18 @@ function rollbackJsonPath(artifact) {
     cleanEmptyParents(config, artifact.selector);
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs24.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  fs24.renameSync(tmp, artifact.path);
+  fs14.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs14.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackTomlTable(artifact) {
-  const content = fs24.readFileSync(artifact.path, "utf-8");
+  const content = fs14.readFileSync(artifact.path, "utf-8");
   const backup = artifact.backupPath ? readArtifactBackup(artifact.backupPath) : null;
   if (backup?.kind === "toml-table" && backup.selector === artifact.selector) {
     const nextContent = backup.existed ? replaceTomlTable(content, artifact.selector, backup.content ?? "") : removeTomlTable(content, artifact.selector);
     const tmp2 = `${artifact.path}.tmp.${process.pid}`;
-    fs24.writeFileSync(tmp2, nextContent, "utf-8");
-    fs24.renameSync(tmp2, artifact.path);
+    fs14.writeFileSync(tmp2, nextContent, "utf-8");
+    fs14.renameSync(tmp2, artifact.path);
     return { restored: true };
   }
   if (!extractTomlTable(content, artifact.selector)) {
@@ -4140,13 +3952,13 @@ function rollbackTomlTable(artifact) {
     };
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs24.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
-  fs24.renameSync(tmp, artifact.path);
+  fs14.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
+  fs14.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackFile(artifact) {
-  if (fs24.existsSync(artifact.path)) {
-    fs24.unlinkSync(artifact.path);
+  if (fs14.existsSync(artifact.path)) {
+    fs14.unlinkSync(artifact.path);
     return { restored: true };
   }
   return { restored: false, error: `File not found: ${artifact.path}` };
@@ -4256,8 +4068,8 @@ async function removeCommand(args) {
     };
   }
   const instanceId = resolved.instanceId;
-  const instance = state.instances[instanceId];
-  if (!instance?.installed) {
+  const instance2 = state.instances[instanceId];
+  if (!instance2?.installed) {
     return {
       ok: true,
       command: "remove",
@@ -4269,7 +4081,7 @@ async function removeCommand(args) {
     };
   }
   logHeader(`@hua-labs/tap remove ${instanceId}`);
-  if (instance.bridge) {
+  if (instance2.bridge) {
     const ctx = createAdapterContext(state.commsDir, repoRoot);
     const stopped = await stopBridge({
       instanceId,
@@ -4282,7 +4094,7 @@ async function removeCommand(args) {
       log(`No running bridge for ${instanceId}`);
     }
   }
-  const result = await rollbackRuntime(instanceId, instance);
+  const result = await rollbackRuntime(instanceId, instance2);
   if (result.success) {
     logSuccess(`Rolled back ${result.restoredCount} artifact(s)`);
     for (const f of result.restoredFiles) logSuccess(`Restored: ${f}`);
@@ -4294,7 +4106,7 @@ async function removeCommand(args) {
       ok: true,
       command: "remove",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_REMOVE_OK",
       message: `${instanceId} removed successfully`,
       warnings: [],
@@ -4309,7 +4121,7 @@ async function removeCommand(args) {
     ok: false,
     command: "remove",
     instanceId,
-    runtime: instance.runtime,
+    runtime: instance2.runtime,
     code: "TAP_ROLLBACK_FAILED",
     message: "Rollback had errors. State preserved for retry.",
     warnings: result.errors,
@@ -4318,7 +4130,7 @@ async function removeCommand(args) {
 }
 
 // src/commands/bridge.ts
-import * as path22 from "path";
+import * as path14 from "path";
 function formatAge(seconds) {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
@@ -4335,7 +4147,6 @@ Subcommands:
   stop              Stop all running bridges
   status            Show bridge status for all instances
   status <instance> Show bridge status for a specific instance
-  watch             Monitor bridges and auto-restart stuck/stale ones
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
@@ -4392,7 +4203,7 @@ function formatThreadSummary(threadId, cwd) {
   return cwd ? `${threadId} (${cwd})` : threadId;
 }
 function normalizeComparablePath(value) {
-  return path22.resolve(value).replace(/\\/g, "/").toLowerCase();
+  return path14.resolve(value).replace(/\\/g, "/").toLowerCase();
 }
 function sameOptionalPath(left, right) {
   if (!left || !right) {
@@ -4477,37 +4288,37 @@ async function bridgeStart(identifier, agentName, flags = {}) {
     };
   }
   const instanceId = resolved.instanceId;
-  let instance = state.instances[instanceId];
-  if (!instance?.installed) {
+  let instance2 = state.instances[instanceId];
+  if (!instance2?.installed) {
     return {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance?.runtime,
+      runtime: instance2?.runtime,
       code: "TAP_INSTANCE_NOT_FOUND",
-      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance?.runtime ?? identifier}`,
+      message: `${instanceId} is not installed. Run: npx @hua-labs/tap add ${instance2?.runtime ?? identifier}`,
       warnings: [],
       data: {}
     };
   }
-  const adapter = getAdapter(instance.runtime);
+  const adapter = getAdapter(instance2.runtime);
   const mode = adapter.bridgeMode();
   if (mode !== "app-server") {
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_NO_OP",
       message: `${instanceId} uses ${mode} mode \u2014 no bridge needed.`,
       warnings: [],
       data: { bridgeMode: mode }
     };
   }
-  const resolvedAgentName = agentName ?? instance.agentName ?? void 0;
-  if (agentName && agentName !== instance.agentName) {
-    instance = { ...instance, agentName };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+  const resolvedAgentName = agentName ?? instance2.agentName ?? void 0;
+  if (agentName && agentName !== instance2.agentName) {
+    instance2 = { ...instance2, agentName };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -4518,7 +4329,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_SCRIPT_MISSING",
       message: `Bridge script not found for ${instanceId}. Ensure the runtime is properly configured.`,
       warnings: [],
@@ -4527,8 +4338,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   }
   const { config: resolvedConfig } = resolveConfig({}, repoRoot);
   const runtimeCommand = resolvedConfig.runtimeCommand;
-  const manageAppServer = instance.runtime === "codex" && flags["no-server"] !== true;
-  let effectivePort = instance.port;
+  const manageAppServer = instance2.runtime === "codex" && flags["no-server"] !== true;
+  let effectivePort = instance2.port;
   if (effectivePort == null && manageAppServer) {
     effectivePort = await findNextAvailableAppServerPort(
       state,
@@ -4536,8 +4347,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       4501,
       instanceId
     );
-    instance = { ...instance, port: effectivePort };
-    const updatedState = updateInstanceState(state, instanceId, instance);
+    instance2 = { ...instance2, port: effectivePort };
+    const updatedState = updateInstanceState(state, instanceId, instance2);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
@@ -4553,19 +4364,19 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   if (effectivePort != null) log(`Port:          ${effectivePort}`);
   if (resolvedAgentName) log(`Agent name:    ${resolvedAgentName}`);
   const noAuth = flags["no-auth"] === true;
-  if (!manageAppServer && instance.runtime === "codex") {
+  if (!manageAppServer && instance2.runtime === "codex") {
     log("Auto server:   disabled (--no-server)");
   }
   if (noAuth && manageAppServer) {
     log("Auth gateway:  disabled (--no-auth)");
   }
-  const willBeHeadless = flags["headless"] === true || instance.headless?.enabled;
+  const willBeHeadless = flags["headless"] === true || instance2.headless?.enabled;
   if (willBeHeadless) {
-    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance.headless?.role ?? "reviewer";
+    const role = (typeof flags["role"] === "string" ? flags["role"] : null) ?? instance2.headless?.role ?? "reviewer";
     log(`Headless:      ${role}`);
   }
   try {
-    if (!manageAppServer && instance.runtime === "codex") {
+    if (!manageAppServer && instance2.runtime === "codex") {
       log("Checking app-server health...");
       const healthy = await checkAppServerHealth(appServerUrl);
       if (healthy) {
@@ -4576,7 +4387,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
           ok: false,
           command: "bridge",
           instanceId,
-          runtime: instance.runtime,
+          runtime: instance2.runtime,
           code: "TAP_BRIDGE_START_FAILED",
           message: `App server not reachable at ${appServerUrl}. Start it first: codex app-server --listen ${appServerUrl}`,
           warnings: [],
@@ -4590,7 +4401,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --busy-mode: ${String(busyModeRaw)}. Must be "steer" or "wait".`,
         warnings: [],
@@ -4623,7 +4434,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: err instanceof Error ? err.message : String(err),
         warnings: [],
@@ -4641,7 +4452,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         ok: false,
         command: "bridge",
         instanceId,
-        runtime: instance.runtime,
+        runtime: instance2.runtime,
         code: "TAP_INVALID_ARGUMENT",
         message: `Invalid --role: ${roleArg}. Must be: ${validRoles.join(", ")}`,
         warnings: [],
@@ -4653,43 +4464,32 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       role: roleArg ?? "reviewer",
       maxRounds: 5,
       qualitySeverityFloor: "high"
-    } : instance.headless;
-    const previousWarmup = process.env.TAP_COLD_START_WARMUP;
-    process.env.TAP_COLD_START_WARMUP = "true";
-    let bridge;
-    try {
-      bridge = await startBridge({
-        instanceId,
-        runtime: instance.runtime,
-        stateDir: ctx.stateDir,
-        commsDir: ctx.commsDir,
-        bridgeScript,
-        platform: ctx.platform,
-        agentName: resolvedAgentName,
-        runtimeCommand,
-        appServerUrl,
-        repoRoot,
-        port: effectivePort ?? void 0,
-        manageAppServer,
-        noAuth,
-        headless,
-        busyMode,
-        pollSeconds,
-        reconnectSeconds,
-        messageLookbackMinutes,
-        threadId,
-        ephemeral,
-        processExistingMessages
-      });
-    } finally {
-      if (previousWarmup === void 0) {
-        delete process.env.TAP_COLD_START_WARMUP;
-      } else {
-        process.env.TAP_COLD_START_WARMUP = previousWarmup;
-      }
-    }
+    } : instance2.headless;
+    const bridge = await startBridge({
+      instanceId,
+      runtime: instance2.runtime,
+      stateDir: ctx.stateDir,
+      commsDir: ctx.commsDir,
+      bridgeScript,
+      platform: ctx.platform,
+      agentName: resolvedAgentName,
+      runtimeCommand,
+      appServerUrl,
+      repoRoot,
+      port: effectivePort ?? void 0,
+      manageAppServer,
+      noAuth,
+      headless,
+      busyMode,
+      pollSeconds,
+      reconnectSeconds,
+      messageLookbackMinutes,
+      threadId,
+      ephemeral,
+      processExistingMessages
+    });
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
-    log(`Log: ${path22.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
+    log(`Log: ${path14.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
     if (bridge.appServer) {
       log(`App server:   ${formatAppServerState(bridge.appServer)}`);
       if (bridge.appServer.logPath) {
@@ -4708,14 +4508,14 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         log(`TUI connect:  ${bridge.appServer.url}`);
       }
     }
-    const updated = { ...instance, bridge, manageAppServer, noAuth };
+    const updated = { ...instance2, bridge, manageAppServer, noAuth };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
     return {
       ok: true,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_OK",
       message: `Bridge for ${instanceId} started (PID: ${bridge.pid})`,
       warnings: [],
@@ -4728,7 +4528,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: instance2.runtime,
       code: "TAP_BRIDGE_START_FAILED",
       message: msg,
       warnings: [],
@@ -4830,11 +4630,11 @@ async function bridgeStopOne(identifier) {
   }
   const instanceId = resolved.instanceId;
   const ctx = createAdapterContext(state.commsDir, repoRoot);
-  const instance = state.instances[instanceId];
+  const instance2 = state.instances[instanceId];
   const bridgeState = loadCurrentBridgeState(
     ctx.stateDir,
     instanceId,
-    instance?.bridge
+    instance2?.bridge
   );
   const appServer = bridgeState?.appServer ?? null;
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
@@ -4879,17 +4679,11 @@ async function bridgeStopOne(identifier) {
         logSuccess(
           `Managed app-server stopped (PID: ${appServer.pid ?? "-"}${gatewayNote})`
         );
-        const released = await waitForPortRelease(appServer.url, 5e3);
-        if (!released) {
-          log(
-            `Warning: port for ${appServer.url} still in use after stop \u2014 next start may need a different port`
-          );
-        }
       }
     }
   }
-  if (instance) {
-    const updated = { ...instance, bridge: null };
+  if (instance2) {
+    const updated = { ...instance2, bridge: null };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
   }
@@ -4961,28 +4755,21 @@ async function bridgeStopAll() {
       logSuccess(`Stopped bridge for ${instanceId}`);
       stopped.push(instanceId);
     }
-    const instance = state.instances[instanceId];
-    if (instance?.bridge) {
-      state.instances[instanceId] = { ...instance, bridge: null };
+    const instance2 = state.instances[instanceId];
+    if (instance2?.bridge) {
+      state.instances[instanceId] = { ...instance2, bridge: null };
       stateChanged = true;
     }
   }
   const stoppedAppServers = [];
-  const releasePorts = [];
   for (const appServer of managedAppServers.values()) {
     if (await stopManagedAppServer(appServer, ctx.platform)) {
       stoppedAppServers.push(appServer.pid);
-      releasePorts.push(appServer.url);
       const gatewayNote = appServer.auth?.gatewayPid != null ? `, gateway PID ${appServer.auth.gatewayPid}` : "";
       logSuccess(
         `Stopped app-server PID ${appServer.pid} (${appServer.url}${gatewayNote})`
       );
     }
-  }
-  if (releasePorts.length > 0) {
-    await Promise.all(
-      releasePorts.map((url) => waitForPortRelease(url, 5e3))
-    );
   }
   if (stateChanged) {
     state.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -4997,124 +4784,6 @@ async function bridgeStopAll() {
     message,
     warnings: [],
     data: { stopped, stoppedAppServers }
-  };
-}
-async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
-  const repoRoot = findRepoRoot();
-  const state = loadState(repoRoot);
-  if (!state) {
-    return {
-      ok: false,
-      command: "bridge",
-      code: "TAP_NOT_INITIALIZED",
-      message: "Not initialized. Run: npx @hua-labs/tap init",
-      warnings: [],
-      data: {}
-    };
-  }
-  const { config: resolvedCfg } = resolveConfig({}, repoRoot);
-  const stateDir = resolvedCfg.stateDir;
-  const instanceIds = Object.keys(state.instances);
-  logHeader("@hua-labs/tap bridge watch");
-  log(
-    `Checking ${instanceIds.length} instance(s), stuck threshold: ${stuckThresholdSeconds}s`
-  );
-  const restarted = [];
-  const cleaned = [];
-  const healthy = [];
-  const warnings = [];
-  for (const instanceId of instanceIds) {
-    const inst = state.instances[instanceId];
-    if (!inst?.installed || inst.bridgeMode !== "app-server") continue;
-    const status = getBridgeStatus(stateDir, instanceId);
-    if (status === "stale") {
-      log(`${instanceId}: stale (process dead) \u2014 cleaning up`);
-      cleaned.push(instanceId);
-      continue;
-    }
-    if (status === "stopped") {
-      log(`${instanceId}: stopped`);
-      continue;
-    }
-    if (isTurnStuck(stateDir, instanceId, stuckThresholdSeconds)) {
-      const turnInfo = getTurnInfo(stateDir, instanceId, stuckThresholdSeconds);
-      const ageStr = turnInfo?.ageSeconds != null ? formatAge(turnInfo.ageSeconds) : "?";
-      log(
-        `${instanceId}: \u26A0 STUCK turn ${turnInfo?.activeTurnId?.slice(0, 8)}... (${ageStr}) \u2014 restarting`
-      );
-      const adapter = getAdapter(inst.runtime);
-      const ctx = {
-        ...createAdapterContext(state.commsDir, repoRoot),
-        instanceId
-      };
-      const bridgeScript = adapter.resolveBridgeScript?.(ctx);
-      if (!bridgeScript) {
-        warnings.push(
-          `${instanceId}: cannot restart \u2014 bridge script not found`
-        );
-        continue;
-      }
-      const bridgeState = loadBridgeState(stateDir, instanceId);
-      const { manageAppServer, noAuth } = inferRestartMode(bridgeState, {});
-      const previousWarmup = process.env.TAP_COLD_START_WARMUP;
-      process.env.TAP_COLD_START_WARMUP = "true";
-      try {
-        const newBridgeState = await restartBridge({
-          instanceId,
-          runtime: inst.runtime,
-          stateDir: ctx.stateDir,
-          commsDir: ctx.commsDir,
-          bridgeScript,
-          platform: ctx.platform,
-          agentName: inst.agentName ?? void 0,
-          runtimeCommand: resolvedCfg.runtimeCommand,
-          appServerUrl: resolvedCfg.appServerUrl,
-          repoRoot,
-          port: inst.port ?? void 0,
-          headless: inst.headless,
-          drainTimeoutSeconds: 30,
-          manageAppServer,
-          noAuth
-        });
-        const updatedInst = { ...inst, bridge: newBridgeState };
-        const updatedState = updateInstanceState(
-          state,
-          instanceId,
-          updatedInst
-        );
-        saveState(repoRoot, updatedState);
-        restarted.push(instanceId);
-        logSuccess(`${instanceId}: restarted`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        warnings.push(`${instanceId}: restart failed \u2014 ${msg}`);
-        logError(`${instanceId}: restart failed \u2014 ${msg}`);
-      } finally {
-        if (previousWarmup === void 0) {
-          delete process.env.TAP_COLD_START_WARMUP;
-        } else {
-          process.env.TAP_COLD_START_WARMUP = previousWarmup;
-        }
-      }
-    } else {
-      healthy.push(instanceId);
-      log(`${instanceId}: healthy`);
-    }
-  }
-  const message = [
-    restarted.length > 0 ? `Restarted: ${restarted.join(", ")}` : null,
-    cleaned.length > 0 ? `Cleaned stale: ${cleaned.join(", ")}` : null,
-    healthy.length > 0 ? `Healthy: ${healthy.join(", ")}` : null
-  ].filter(Boolean).join(". ") || "No app-server bridges found";
-  log("");
-  log(message);
-  return {
-    ok: true,
-    command: "bridge",
-    code: restarted.length > 0 ? "TAP_BRIDGE_WATCH_RESTARTED" : "TAP_BRIDGE_WATCH_OK",
-    message,
-    warnings,
-    data: { restarted, cleaned, healthy }
   };
 }
 function bridgeStatusAll() {
@@ -5196,19 +4865,6 @@ function bridgeStatusAll() {
       log(
         `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
       );
-    }
-    const turnInfo = getTurnInfo(stateDir, instanceId);
-    if (turnInfo?.activeTurnId) {
-      const ageStr2 = turnInfo.ageSeconds != null ? formatAge(turnInfo.ageSeconds) : "?";
-      if (turnInfo.stuck) {
-        log(
-          `  \u26A0 STUCK:    turn ${turnInfo.activeTurnId.slice(0, 8)}... active ${ageStr2} (threshold: 5m)`
-        );
-      } else {
-        log(
-          `  Turn:       ${turnInfo.activeTurnId.slice(0, 8)}... active ${ageStr2}`
-        );
-      }
     }
     bridges[instanceId] = {
       status,
@@ -5328,7 +4984,7 @@ function bridgeStatusOne(identifier) {
       );
     }
     log(
-      `Log:         ${path22.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
+      `Log:         ${path14.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
     );
     if (bridgeState.appServer) {
       log(`App server:  ${bridgeState.appServer.url}`);
@@ -5446,7 +5102,7 @@ async function bridgeRestart(identifier, flags) {
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: inst.runtime,
+      runtime: instance.runtime,
       code: "TAP_INVALID_ARGUMENT",
       message: err instanceof Error ? err.message : String(err),
       warnings: [],
@@ -5468,34 +5124,23 @@ async function bridgeRestart(identifier, flags) {
         noAuth: inst.noAuth
       }
     );
-    const previousColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
-    process.env.TAP_COLD_START_WARMUP = "true";
-    let bridge;
-    try {
-      bridge = await restartBridge({
-        instanceId,
-        runtime: inst.runtime,
-        stateDir: ctx.stateDir,
-        commsDir: ctx.commsDir,
-        bridgeScript,
-        platform: ctx.platform,
-        agentName: inst.agentName ?? void 0,
-        runtimeCommand: resolvedConfig.runtimeCommand,
-        appServerUrl: resolvedConfig.appServerUrl,
-        repoRoot,
-        port: inst.port ?? void 0,
-        headless: inst.headless,
-        drainTimeoutSeconds: drainTimeout,
-        manageAppServer,
-        noAuth
-      });
-    } finally {
-      if (previousColdStartWarmup === void 0) {
-        delete process.env.TAP_COLD_START_WARMUP;
-      } else {
-        process.env.TAP_COLD_START_WARMUP = previousColdStartWarmup;
-      }
-    }
+    const bridge = await restartBridge({
+      instanceId,
+      runtime: inst.runtime,
+      stateDir: ctx.stateDir,
+      commsDir: ctx.commsDir,
+      bridgeScript,
+      platform: ctx.platform,
+      agentName: inst.agentName ?? void 0,
+      runtimeCommand: resolvedConfig.runtimeCommand,
+      appServerUrl: resolvedConfig.appServerUrl,
+      repoRoot,
+      port: inst.port ?? void 0,
+      headless: inst.headless,
+      drainTimeoutSeconds: drainTimeout,
+      manageAppServer,
+      noAuth
+    });
     logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
     const updated = { ...inst, bridge, manageAppServer, noAuth };
     const newState = updateInstanceState(state, instanceId, updated);
@@ -5582,13 +5227,6 @@ async function bridgeCommand(args) {
       }
       return bridgeStatusAll();
     }
-    case "watch": {
-      const intervalStr = typeof flags["interval"] === "string" ? flags["interval"] : void 0;
-      const interval = intervalStr ? parseInt(intervalStr, 10) : 30;
-      const stuckThresholdStr = typeof flags["stuck-threshold"] === "string" ? flags["stuck-threshold"] : void 0;
-      const stuckThreshold = stuckThresholdStr ? parseInt(stuckThresholdStr, 10) : 300;
-      return bridgeWatch(interval, stuckThreshold);
-    }
     case "restart": {
       if (!identifierArg) {
         return {
@@ -5615,14 +5253,14 @@ async function bridgeCommand(args) {
 }
 
 // src/engine/dashboard.ts
-import * as fs25 from "fs";
-import * as path23 from "path";
+import * as fs15 from "fs";
+import * as path15 from "path";
 import { execSync as execSync4 } from "child_process";
 function collectAgents(commsDir) {
-  const heartbeatsPath = path23.join(commsDir, "heartbeats.json");
-  if (!fs25.existsSync(heartbeatsPath)) return [];
+  const heartbeatsPath = path15.join(commsDir, "heartbeats.json");
+  if (!fs15.existsSync(heartbeatsPath)) return [];
   try {
-    const raw = fs25.readFileSync(heartbeatsPath, "utf-8");
+    const raw = fs15.readFileSync(heartbeatsPath, "utf-8");
     const data = JSON.parse(raw);
     return Object.entries(data).map(([name, info]) => ({
       name: info.agent ?? name,
@@ -5658,22 +5296,22 @@ function collectBridges(repoRoot) {
       });
     }
   }
-  const tmpDir = path23.join(repoRoot, ".tmp");
-  if (fs25.existsSync(tmpDir)) {
+  const tmpDir = path15.join(repoRoot, ".tmp");
+  if (fs15.existsSync(tmpDir)) {
     try {
-      const dirs = fs25.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
+      const dirs = fs15.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
       for (const dir of dirs) {
-        const daemonPath = path23.join(tmpDir, dir, "bridge-daemon.json");
-        if (!fs25.existsSync(daemonPath)) continue;
+        const daemonPath = path15.join(tmpDir, dir, "bridge-daemon.json");
+        if (!fs15.existsSync(daemonPath)) continue;
         try {
-          const raw = fs25.readFileSync(daemonPath, "utf-8");
+          const raw = fs15.readFileSync(daemonPath, "utf-8");
           const daemon = JSON.parse(raw);
           const alreadyCovered = bridges.some(
             (b) => b.pid === daemon.pid && b.pid !== null
           );
           if (alreadyCovered) continue;
-          const agentFile = path23.join(tmpDir, dir, "agent-name.txt");
-          const agentName = fs25.existsSync(agentFile) ? fs25.readFileSync(agentFile, "utf-8").trim() : dir;
+          const agentFile = path15.join(tmpDir, dir, "agent-name.txt");
+          const agentName = fs15.existsSync(agentFile) ? fs15.readFileSync(agentFile, "utf-8").trim() : dir;
           const running = daemon.pid ? isProcessAlive(daemon.pid) : false;
           const portMatch = daemon.appServerUrl?.match(/:(\d+)/);
           const port = portMatch ? parseInt(portMatch[1], 10) : null;
@@ -5879,7 +5517,7 @@ async function downCommand(args) {
 }
 
 // src/commands/serve.ts
-import * as path24 from "path";
+import * as path16 from "path";
 import { spawn as spawn2 } from "child_process";
 var SERVE_HELP = `
 Usage:
@@ -5913,7 +5551,7 @@ async function serveCommand(args) {
   let commsDir;
   const commsDirIdx = args.indexOf("--comms-dir");
   if (commsDirIdx !== -1 && args[commsDirIdx + 1]) {
-    commsDir = path24.resolve(args[commsDirIdx + 1]);
+    commsDir = path16.resolve(args[commsDirIdx + 1]);
   }
   if (!commsDir && process.env.TAP_COMMS_DIR) {
     commsDir = process.env.TAP_COMMS_DIR;
@@ -5956,9 +5594,9 @@ async function serveCommand(args) {
       TAP_COMMS_DIR: commsDir
     }
   });
-  return new Promise((resolve14) => {
+  return new Promise((resolve13) => {
     child.on("error", (err) => {
-      resolve14({
+      resolve13({
         ok: false,
         command: "serve",
         code: "TAP_INTERNAL_ERROR",
@@ -5968,7 +5606,7 @@ async function serveCommand(args) {
       });
     });
     child.on("exit", (code) => {
-      resolve14({
+      resolve13({
         ok: code === 0,
         command: "serve",
         code: code === 0 ? "TAP_SERVE_OK" : "TAP_INTERNAL_ERROR",
@@ -5981,8 +5619,8 @@ async function serveCommand(args) {
 }
 
 // src/commands/init-worktree.ts
-import * as fs26 from "fs";
-import * as path25 from "path";
+import * as fs16 from "fs";
+import * as path17 from "path";
 import { execSync as execSync5 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
@@ -6019,7 +5657,7 @@ function run(cmd, opts) {
   }
 }
 function toAbsolute(p) {
-  const resolved = path25.resolve(p);
+  const resolved = path17.resolve(p);
   return resolved.replace(/\\/g, "/");
 }
 function probeBun(candidate) {
@@ -6050,18 +5688,18 @@ function findBun() {
     }
   }
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const bunHome = path25.join(
+  const bunHome = path17.join(
     home,
     ".bun",
     "bin",
     process.platform === "win32" ? "bun.exe" : "bun"
   );
-  if (fs26.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
+  if (fs16.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
   return null;
 }
 function step1CreateWorktree(opts) {
   log("Step 1/9: Creating worktree...");
-  if (fs26.existsSync(opts.worktreePath)) {
+  if (fs16.existsSync(opts.worktreePath)) {
     logWarn(`Directory already exists: ${opts.worktreePath}`);
     try {
       run("git rev-parse --git-dir", { cwd: opts.worktreePath });
@@ -6123,22 +5761,22 @@ function step2MergeMain(opts, warnings) {
 }
 function step3CopyPermissions(opts, warnings) {
   log("Step 3/9: Copying permissions...");
-  const srcSettings = path25.join(
+  const srcSettings = path17.join(
     opts.repoRoot,
     ".claude",
     "settings.local.json"
   );
-  const destDir = path25.join(opts.worktreePath, ".claude");
-  const destSettings = path25.join(destDir, "settings.local.json");
-  if (!fs26.existsSync(srcSettings)) {
+  const destDir = path17.join(opts.worktreePath, ".claude");
+  const destSettings = path17.join(destDir, "settings.local.json");
+  if (!fs16.existsSync(srcSettings)) {
     warn(
       warnings,
       "No .claude/settings.local.json found in main repo. Skipping."
     );
     return;
   }
-  fs26.mkdirSync(destDir, { recursive: true });
-  fs26.copyFileSync(srcSettings, destSettings);
+  fs16.mkdirSync(destDir, { recursive: true });
+  fs16.copyFileSync(srcSettings, destSettings);
   logSuccess("Copied settings.local.json");
   try {
     run("git update-index --skip-worktree .claude/settings.local.json", {
@@ -6163,7 +5801,7 @@ function step4GenerateMcpJson(opts, warnings) {
   const wtAbs = toAbsolute(opts.worktreePath);
   const bunAbs = toAbsolute(bunPath);
   const commsAbs = toAbsolute(opts.commsDir);
-  const channelEntry = path25.join(
+  const channelEntry = path17.join(
     wtAbs,
     "packages/tap-plugin/channels/tap-comms.ts"
   );
@@ -6180,8 +5818,8 @@ function step4GenerateMcpJson(opts, warnings) {
       }
     }
   };
-  const mcpPath = path25.join(opts.worktreePath, ".mcp.json");
-  fs26.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
+  const mcpPath = path17.join(opts.worktreePath, ".mcp.json");
+  fs16.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
   logSuccess(`.mcp.json generated (absolute paths + cwd)`);
   log(`  bun: ${bunAbs}`);
   log(`  comms: ${commsAbs}`);
@@ -6219,16 +5857,16 @@ function step6BuildEslintPlugin(opts, warnings) {
 }
 function step7VerifyComms(opts, warnings) {
   log("Step 7/9: Verifying comms directory...");
-  if (!fs26.existsSync(opts.commsDir)) {
+  if (!fs16.existsSync(opts.commsDir)) {
     warn(warnings, `Comms directory not found: ${opts.commsDir}`);
     warn(warnings, "Create it or run: npx @hua-labs/tap init");
     return;
   }
   const requiredDirs = ["inbox", "findings", "reviews", "letters"];
   for (const dir of requiredDirs) {
-    const dirPath = path25.join(opts.commsDir, dir);
-    if (!fs26.existsSync(dirPath)) {
-      fs26.mkdirSync(dirPath, { recursive: true });
+    const dirPath = path17.join(opts.commsDir, dir);
+    if (!fs16.existsSync(dirPath)) {
+      fs16.mkdirSync(dirPath, { recursive: true });
       logSuccess(`Created ${dir}/`);
     }
   }
@@ -6287,17 +5925,17 @@ async function initWorktreeCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path25.basename(path25.resolve(worktreePath));
+  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path17.basename(path17.resolve(worktreePath));
   const base = typeof flags["base"] === "string" ? flags["base"] : "origin/main";
   const mission = typeof flags["mission"] === "string" ? flags["mission"] : void 0;
   const commsDir = typeof flags["comms-dir"] === "string" ? flags["comms-dir"] : config.commsDir;
   const skipInstall = flags["skip-install"] === true;
   const opts = {
-    worktreePath: path25.resolve(worktreePath),
+    worktreePath: path17.resolve(worktreePath),
     branch,
     base,
     mission,
-    commsDir: path25.resolve(commsDir),
+    commsDir: path17.resolve(commsDir),
     skipInstall,
     repoRoot
   };
@@ -6518,18 +6156,18 @@ async function dashboardCommand(args) {
 
 // src/commands/doctor.ts
 import {
-  existsSync as existsSync23,
-  mkdirSync as mkdirSync13,
-  readdirSync as readdirSync6,
-  readFileSync as readFileSync18,
-  renameSync as renameSync11,
-  statSync as statSync3,
-  unlinkSync as unlinkSync6,
-  writeFileSync as writeFileSync13
+  existsSync as existsSync16,
+  mkdirSync as mkdirSync10,
+  readdirSync as readdirSync4,
+  readFileSync as readFileSync14,
+  renameSync as renameSync10,
+  statSync as statSync2,
+  unlinkSync as unlinkSync3,
+  writeFileSync as writeFileSync12
 } from "fs";
 import { homedir as homedir3 } from "os";
-import { spawnSync as spawnSync5 } from "child_process";
-import { dirname as dirname15, join as join23, resolve as resolve13 } from "path";
+import { spawnSync as spawnSync4 } from "child_process";
+import { dirname as dirname11, join as join17, resolve as resolve12 } from "path";
 var PASS = "pass";
 var WARN = "warn";
 var FAIL = "fail";
@@ -6539,7 +6177,7 @@ var CODEX_ENV_DRIFT_KEYS = [
   "TAP_REPO_ROOT"
 ];
 function normalizeComparablePath2(value) {
-  return resolve13(value).replace(/\\/g, "/").toLowerCase();
+  return resolve12(value).replace(/\\/g, "/").toLowerCase();
 }
 function samePath(left, right) {
   return normalizeComparablePath2(left) === normalizeComparablePath2(right);
@@ -6557,10 +6195,10 @@ function appendWarningMessage(message, extra) {
   return message.includes(extra) ? message : `${message}; ${extra}`;
 }
 function findCodexConfigPath3() {
-  return join23(homedir3(), ".codex", "config.toml");
+  return join17(homedir3(), ".codex", "config.toml");
 }
 function canonicalizeTrustPath3(targetPath) {
-  let resolved = resolve13(targetPath).replace(/\//g, "\\");
+  let resolved = resolve12(targetPath).replace(/\//g, "\\");
   const driveRoot = /^[A-Za-z]:\\$/;
   if (!driveRoot.test(resolved)) {
     resolved = resolved.replace(/\\+$/g, "");
@@ -6571,19 +6209,19 @@ function trustSelector2(targetPath) {
   return `projects.'${canonicalizeTrustPath3(targetPath)}'`;
 }
 function writeTomlAtomically(filePath, content) {
-  const dir = dirname15(filePath);
-  mkdirSync13(dir, { recursive: true });
+  const dir = dirname11(filePath);
+  mkdirSync10(dir, { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
-  writeFileSync13(tmp, content, "utf-8");
-  renameSync11(tmp, filePath);
+  writeFileSync12(tmp, content, "utf-8");
+  renameSync10(tmp, filePath);
 }
 function hasInstalledCodexInstance(state) {
-  return state ? Object.values(state.instances).some(
-    (instance) => instance.runtime === "codex" && instance.installed
+  return !!state ? Object.values(state.instances).some(
+    (instance2) => instance2.runtime === "codex" && instance2.installed
   ) : false;
 }
 function getCodexTrustTargets(repoRoot) {
-  return [...new Set([repoRoot, process.cwd()].map((value) => resolve13(value)))];
+  return [...new Set([repoRoot, process.cwd()].map((value) => resolve12(value)))];
 }
 function buildCodexDoctorSpec(repoRoot, commsDir) {
   const state = loadState(repoRoot);
@@ -6608,11 +6246,8 @@ function repairCodexConfig(repoRoot, commsDir) {
       spec.managed.issues[0] ?? "Unable to resolve the managed tap MCP server for Codex."
     );
   }
-  const existingContent = existsSync23(spec.configPath) ? readFileSync18(spec.configPath, "utf-8") : "";
-  const existingTapEnvTable = extractTomlTable(
-    existingContent,
-    "mcp_servers.tap.env"
-  );
+  const existingContent = existsSync16(spec.configPath) ? readFileSync14(spec.configPath, "utf-8") : "";
+  const existingTapEnvTable = extractTomlTable(existingContent, "mcp_servers.tap.env");
   const existingLegacyEnvTable = extractTomlTable(
     existingContent,
     "mcp_servers.tap-comms.env"
@@ -6670,22 +6305,22 @@ function repairCodexConfig(repoRoot, commsDir) {
   return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
 }
 function countFiles(dir, ext = ".md") {
-  if (!existsSync23(dir)) return 0;
+  if (!existsSync16(dir)) return 0;
   try {
-    return readdirSync6(dir).filter((f) => f.endsWith(ext)).length;
+    return readdirSync4(dir).filter((f) => f.endsWith(ext)).length;
   } catch {
     return 0;
   }
 }
 function recentFileCount(dir, withinMs) {
-  if (!existsSync23(dir)) return 0;
+  if (!existsSync16(dir)) return 0;
   const cutoff = Date.now() - withinMs;
   let count = 0;
   try {
-    for (const f of readdirSync6(dir)) {
+    for (const f of readdirSync4(dir)) {
       if (!f.endsWith(".md")) continue;
       try {
-        if (statSync3(join23(dir, f)).mtimeMs > cutoff) count++;
+        if (statSync2(join17(dir, f)).mtimeMs > cutoff) count++;
       } catch {
       }
     }
@@ -6697,10 +6332,10 @@ function checkComms(commsDir) {
   const checks = [];
   checks.push({
     name: "comms directory",
-    status: existsSync23(commsDir) ? PASS : FAIL,
-    message: existsSync23(commsDir) ? commsDir : `Not found: ${commsDir}`,
-    fix: existsSync23(commsDir) ? void 0 : () => {
-      mkdirSync13(commsDir, { recursive: true });
+    status: existsSync16(commsDir) ? PASS : FAIL,
+    message: existsSync16(commsDir) ? commsDir : `Not found: ${commsDir}`,
+    fix: existsSync16(commsDir) ? void 0 : () => {
+      mkdirSync10(commsDir, { recursive: true });
       return `Created ${commsDir}`;
     }
   });
@@ -6709,22 +6344,22 @@ function checkComms(commsDir) {
     ["reviews", false],
     ["findings", false]
   ]) {
-    const dir = join23(commsDir, subdir);
-    const exists = existsSync23(dir);
+    const dir = join17(commsDir, subdir);
+    const exists = existsSync16(dir);
     checks.push({
       name: `${subdir} directory`,
       status: exists ? PASS : required ? FAIL : WARN,
       message: exists ? subdir === "findings" ? `${countFiles(dir)} findings` : subdir === "inbox" ? `${countFiles(dir)} messages` : "exists" : `Missing${required ? "" : " (optional)"}`,
       fix: exists ? void 0 : () => {
-        mkdirSync13(dir, { recursive: true });
+        mkdirSync10(dir, { recursive: true });
         return `Created ${dir}`;
       }
     });
   }
-  const heartbeats = join23(commsDir, "heartbeats.json");
-  if (existsSync23(heartbeats)) {
+  const heartbeats = join17(commsDir, "heartbeats.json");
+  if (existsSync16(heartbeats)) {
     try {
-      const store = JSON.parse(readFileSync18(heartbeats, "utf-8"));
+      const store = JSON.parse(readFileSync14(heartbeats, "utf-8"));
       const agents = Object.keys(store);
       const now = Date.now();
       const active = agents.filter((a) => {
@@ -6798,21 +6433,15 @@ function checkInstances(repoRoot, stateDir) {
             for (const pid of [appServer.auth?.gatewayPid, appServer.pid]) {
               if (pid) {
                 try {
-                  if (process.platform === "win32") {
-                    spawnSync5("taskkill", ["/PID", String(pid), "/F", "/T"], {
-                      stdio: "pipe"
-                    });
-                  } else {
-                    process.kill(pid);
-                  }
+                  process.kill(pid);
                 } catch {
                 }
               }
             }
           }
-          const pidPath = join23(stateDir, "pids", `bridge-${id}.json`);
+          const pidPath = join17(stateDir, "pids", `bridge-${id}.json`);
           try {
-            unlinkSync6(pidPath);
+            unlinkSync3(pidPath);
           } catch {
           }
           const currentState = loadState(repoRoot);
@@ -6866,8 +6495,8 @@ function checkInstances(repoRoot, stateDir) {
 }
 function checkMessageLifecycle(commsDir) {
   const checks = [];
-  const inbox = join23(commsDir, "inbox");
-  if (!existsSync23(inbox)) {
+  const inbox = join17(commsDir, "inbox");
+  if (!existsSync16(inbox)) {
     checks.push({
       name: "message flow",
       status: FAIL,
@@ -6883,10 +6512,10 @@ function checkMessageLifecycle(commsDir) {
     status: recent10m > 0 ? PASS : total > 0 ? WARN : FAIL,
     message: `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`
   });
-  const receiptsPath = join23(commsDir, "receipts", "receipts.json");
-  if (existsSync23(receiptsPath)) {
+  const receiptsPath = join17(commsDir, "receipts", "receipts.json");
+  if (existsSync16(receiptsPath)) {
     try {
-      const receipts = JSON.parse(readFileSync18(receiptsPath, "utf-8"));
+      const receipts = JSON.parse(readFileSync14(receiptsPath, "utf-8"));
       const receiptCount = Object.keys(receipts).length;
       checks.push({
         name: "read receipts",
@@ -6905,8 +6534,8 @@ function checkMessageLifecycle(commsDir) {
 }
 function checkMcpServer(repoRoot) {
   const checks = [];
-  const mcpJson = join23(repoRoot, ".mcp.json");
-  if (!existsSync23(mcpJson)) {
+  const mcpJson = join17(repoRoot, ".mcp.json");
+  if (!existsSync16(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
@@ -6916,7 +6545,7 @@ function checkMcpServer(repoRoot) {
   }
   let config;
   try {
-    config = JSON.parse(readFileSync18(mcpJson, "utf-8"));
+    config = JSON.parse(readFileSync14(mcpJson, "utf-8"));
   } catch {
     checks.push({
       name: "MCP config (.mcp.json)",
@@ -6944,14 +6573,6 @@ function checkMcpServer(repoRoot) {
     return checks;
   }
   const hasTapComms = hasTap ?? hasOldKey;
-  if (!hasTapComms) {
-    checks.push({
-      name: "MCP config (.mcp.json)",
-      status: FAIL,
-      message: "No tap or tap-comms key found in .mcp.json"
-    });
-    return checks;
-  }
   checks.push({
     name: "MCP config (.mcp.json)",
     status: PASS,
@@ -6959,10 +6580,10 @@ function checkMcpServer(repoRoot) {
   });
   if (hasTapComms.command) {
     const cmd = hasTapComms.command;
-    let cmdAvailable = existsSync23(cmd);
+    let cmdAvailable = existsSync16(cmd);
     if (!cmdAvailable) {
       try {
-        const result = spawnSync5(cmd, ["--version"], {
+        const result = spawnSync4(cmd, ["--version"], {
           stdio: "pipe",
           timeout: 5e3,
           shell: process.platform === "win32"
@@ -6981,8 +6602,8 @@ function checkMcpServer(repoRoot) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
-      status: existsSync23(mcpScript) ? PASS : FAIL,
-      message: existsSync23(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
+      status: existsSync16(mcpScript) ? PASS : FAIL,
+      message: existsSync16(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
     });
     if (mcpScript.endsWith(".mjs") && hasTapComms.command && !hasTapComms.command.includes("bun")) {
       checks.push({
@@ -7015,8 +6636,8 @@ function checkMcpServer(repoRoot) {
   } else {
     checks.push({
       name: "MCP TAP_COMMS_DIR",
-      status: existsSync23(envCommsDir) ? PASS : FAIL,
-      message: existsSync23(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
+      status: existsSync16(envCommsDir) ? PASS : FAIL,
+      message: existsSync16(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
     });
   }
   checks.push({
@@ -7033,7 +6654,7 @@ function checkCodexConfig(repoRoot, commsDir) {
   }
   const checks = [];
   const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
-  if (!existsSync23(spec.configPath)) {
+  if (!existsSync16(spec.configPath)) {
     checks.push({
       name: "MCP config (~/.codex/config.toml)",
       status: WARN,
@@ -7042,13 +6663,15 @@ function checkCodexConfig(repoRoot, commsDir) {
     });
     return checks;
   }
-  const content = readFileSync18(spec.configPath, "utf-8");
+  const content = readFileSync14(spec.configPath, "utf-8");
   const tapTable = extractTomlTable(content, "mcp_servers.tap");
   const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
   const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
   const legacyEnvTable = extractTomlTable(content, "mcp_servers.tap-comms.env");
   const selectedMain = parseTomlAssignments(tapTable ?? "");
-  const selectedEnv = parseTomlAssignments(tapEnvTable ?? legacyEnvTable ?? "");
+  const selectedEnv = parseTomlAssignments(
+    tapEnvTable ?? legacyEnvTable ?? ""
+  );
   const issues = [];
   if (legacyTable || legacyEnvTable) {
     issues.push('legacy "tap-comms" key present');
@@ -7108,8 +6731,8 @@ function checkCodexConfig(repoRoot, commsDir) {
 }
 function checkBridgeTurnHealth(repoRoot) {
   const checks = [];
-  const tmpDir = join23(repoRoot, ".tmp");
-  if (!existsSync23(tmpDir)) return checks;
+  const tmpDir = join17(repoRoot, ".tmp");
+  if (!existsSync16(tmpDir)) return checks;
   const state = loadState(repoRoot);
   const activeMatchers = /* @__PURE__ */ new Set();
   if (state) {
@@ -7122,7 +6745,7 @@ function checkBridgeTurnHealth(repoRoot) {
   }
   let dirs;
   try {
-    dirs = readdirSync6(tmpDir).filter((d) => {
+    dirs = readdirSync4(tmpDir).filter((d) => {
       if (!d.startsWith("codex-app-server-bridge")) return false;
       const suffix = d.replace("codex-app-server-bridge-", "");
       if (activeMatchers.size === 0) return true;
@@ -7135,11 +6758,11 @@ function checkBridgeTurnHealth(repoRoot) {
     return checks;
   }
   for (const dir of dirs) {
-    const heartbeatPath = join23(tmpDir, dir, "heartbeat.json");
-    if (!existsSync23(heartbeatPath)) continue;
+    const heartbeatPath = join17(tmpDir, dir, "heartbeat.json");
+    if (!existsSync16(heartbeatPath)) continue;
     let heartbeat;
     try {
-      heartbeat = JSON.parse(readFileSync18(heartbeatPath, "utf-8"));
+      heartbeat = JSON.parse(readFileSync14(heartbeatPath, "utf-8"));
     } catch {
       checks.push({
         name: `turn: ${dir}`,
@@ -7362,9 +6985,9 @@ async function doctorCommand(args) {
 }
 
 // src/commands/comms.ts
-import { execSync as execSync6, spawnSync as spawnSync6 } from "child_process";
-import * as fs27 from "fs";
-import * as path26 from "path";
+import { execSync as execSync6, spawnSync as spawnSync5 } from "child_process";
+import * as fs17 from "fs";
+import * as path18 from "path";
 var COMMS_HELP = `
 Usage:
   tap comms <subcommand>
@@ -7378,7 +7001,7 @@ Examples:
   npx @hua-labs/tap comms push
 `.trim();
 function isGitRepo(dir) {
-  return fs27.existsSync(path26.join(dir, ".git"));
+  return fs17.existsSync(path18.join(dir, ".git"));
 }
 function commsPull(commsDir) {
   logHeader("tap comms pull");
@@ -7454,7 +7077,7 @@ function commsPush(commsDir) {
       };
     }
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    const commitResult = spawnSync6(
+    const commitResult = spawnSync5(
       "git",
       ["commit", "-m", `chore(comms): sync ${timestamp}`],
       { cwd: commsDir, stdio: "pipe", encoding: "utf-8" }
@@ -7523,568 +7146,6 @@ async function commsCommand(args) {
         data: {}
       };
   }
-}
-
-// src/commands/watch.ts
-var WATCH_HELP = `
-Usage:
-  tap watch [options]
-
-Description:
-  Monitor all bridges and auto-restart stuck/stale ones.
-  Single-pass by default. Use --loop for continuous monitoring.
-
-Options:
-  --stuck-threshold <seconds>  Turn stuck threshold (default: 300)
-  --interval <seconds>         Loop interval (default: 60)
-  --loop                       Run continuously instead of single-pass
-  --max-rounds <n>             Max loop iterations (default: unlimited)
-
-Examples:
-  npx @hua-labs/tap watch                          # single check
-  npx @hua-labs/tap watch --loop                   # continuous
-  npx @hua-labs/tap watch --loop --interval 30     # check every 30s
-  npx @hua-labs/tap watch --stuck-threshold 120    # 2 min threshold
-`.trim();
-function delay2(ms) {
-  return new Promise((resolve14) => setTimeout(resolve14, ms));
-}
-async function watchCommand(args) {
-  const { flags } = parseArgs(args);
-  if (flags["help"] === true || flags["h"] === true) {
-    log(WATCH_HELP);
-    return {
-      ok: true,
-      command: "watch",
-      code: "TAP_NO_OP",
-      message: WATCH_HELP,
-      warnings: [],
-      data: {}
-    };
-  }
-  const stuckThresholdStr = typeof flags["stuck-threshold"] === "string" ? flags["stuck-threshold"] : void 0;
-  const intervalStr = typeof flags["interval"] === "string" ? flags["interval"] : void 0;
-  const loop = flags["loop"] === true;
-  const maxRoundsStr = typeof flags["max-rounds"] === "string" ? flags["max-rounds"] : void 0;
-  let stuckThreshold;
-  let interval;
-  let maxRounds;
-  try {
-    stuckThreshold = parseIntFlag(stuckThresholdStr, "--stuck-threshold", 30, 3600) ?? 300;
-    interval = parseIntFlag(intervalStr, "--interval", 5, 3600) ?? 60;
-    maxRounds = parseIntFlag(maxRoundsStr, "--max-rounds", 1, 1e4) ?? null;
-  } catch (err) {
-    return {
-      ok: false,
-      command: "watch",
-      code: "TAP_INVALID_ARGUMENT",
-      message: err instanceof Error ? err.message : String(err),
-      warnings: [],
-      data: {}
-    };
-  }
-  const bridgeArgs = ["watch", "--stuck-threshold", String(stuckThreshold)];
-  if (!loop) {
-    return bridgeCommand(bridgeArgs);
-  }
-  logHeader("@hua-labs/tap watch (loop mode)");
-  log(`Interval: ${interval}s, Stuck threshold: ${stuckThreshold}s`);
-  if (maxRounds != null) {
-    log(`Max rounds: ${maxRounds}`);
-  }
-  log("");
-  let round = 0;
-  let failedRounds = 0;
-  const allRestarted = [];
-  const allWarnings = [];
-  while (maxRounds == null || round < maxRounds) {
-    round++;
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString().slice(11, 19);
-    log(`[${timestamp}] Round ${round}`);
-    const result = await bridgeCommand(bridgeArgs);
-    if (!result.ok) {
-      failedRounds++;
-      allWarnings.push(`Round ${round}: ${result.message}`);
-    }
-    if (result.data?.restarted) {
-      const restarted = result.data.restarted;
-      allRestarted.push(...restarted);
-    }
-    if (result.warnings?.length) {
-      allWarnings.push(...result.warnings);
-    }
-    if (maxRounds != null && round >= maxRounds) break;
-    await delay2(interval * 1e3);
-  }
-  const allOk = failedRounds === 0;
-  const message = [
-    `Completed ${round} round(s)`,
-    failedRounds > 0 ? `${failedRounds} failed` : null,
-    allRestarted.length > 0 ? `Total restarts: ${allRestarted.length} (${allRestarted.join(", ")})` : "No restarts needed"
-  ].filter(Boolean).join(". ");
-  return {
-    ok: allOk,
-    command: "watch",
-    code: !allOk ? "TAP_WATCH_FAILED" : allRestarted.length > 0 ? "TAP_WATCH_RESTARTED" : "TAP_WATCH_OK",
-    message,
-    warnings: allWarnings,
-    data: { rounds: round, restarted: allRestarted }
-  };
-}
-
-// src/commands/gui.ts
-import * as http from "http";
-
-// src/engine/missions.ts
-import * as fs28 from "fs";
-import * as path27 from "path";
-function parseStatus(raw) {
-  const trimmed = raw.trim();
-  if (trimmed.includes("active")) return "active";
-  if (trimmed.includes("completed")) return "completed";
-  return "planned";
-}
-function parseRow(line) {
-  if (!line.startsWith("|") || !line.endsWith("|")) return null;
-  const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-  if (cells.length < 4) return null;
-  const [idCell, missionCell, branchCell, statusCell, ownerCell] = cells;
-  if (/^[-: ]+$/.test(idCell ?? "")) return null;
-  const id = (idCell ?? "").replace(/[^\w]/g, "");
-  if (!id || !/^M\d+$/i.test(id)) return null;
-  const titleMatch = missionCell?.match(/\[([^\]]+)\]/);
-  const title = titleMatch ? titleMatch[1] : (missionCell ?? "").trim();
-  if (!title) return null;
-  const branchMatch = branchCell?.match(/`([^`]+)`/);
-  const branch = branchMatch ? branchMatch[1] : null;
-  const status = parseStatus(statusCell ?? "");
-  const rawOwner = (ownerCell ?? "").trim();
-  const owner = rawOwner === "" || rawOwner === "\u2014" || rawOwner === "\uBBF8\uBC30\uC815" ? null : rawOwner;
-  return { id: id.toUpperCase(), title, branch, status, owner };
-}
-function parseMissionsFile(repoRoot) {
-  const missionsPath = path27.join(repoRoot, "docs", "missions", "MISSIONS.md");
-  let content;
-  try {
-    content = fs28.readFileSync(missionsPath, "utf-8");
-  } catch {
-    return [];
-  }
-  const missions = [];
-  for (const line of content.split("\n")) {
-    const mission = parseRow(line);
-    if (!mission) continue;
-    missions.push(mission);
-  }
-  return missions;
-}
-
-// src/engine/pull-requests.ts
-import { spawnSync as spawnSync7 } from "child_process";
-function runGhPrList(repoRoot, extraArgs) {
-  try {
-    const result = spawnSync7(
-      "gh",
-      [
-        "pr",
-        "list",
-        "--json",
-        "number,title,state,author,headRefName,url,mergedAt",
-        ...extraArgs
-      ],
-      { cwd: repoRoot, encoding: "utf-8", timeout: 1e4 }
-    );
-    if (result.error || result.status !== 0) return null;
-    const raw = result.stdout.trim();
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-function mapEntry(entry) {
-  const state = entry.state?.toLowerCase();
-  return {
-    number: entry.number,
-    title: entry.title ?? "",
-    state: state === "merged" ? "merged" : state === "closed" ? "closed" : "open",
-    author: entry.author?.login ?? "",
-    branch: entry.headRefName ?? "",
-    url: entry.url ?? "",
-    mergedAt: entry.mergedAt ?? null
-  };
-}
-function fetchOpenPrs(repoRoot) {
-  const entries = runGhPrList(repoRoot, ["--limit", "50"]);
-  if (!entries) return [];
-  return entries.map(mapEntry);
-}
-function fetchMergedPrs(repoRoot, limit = 20) {
-  const entries = runGhPrList(repoRoot, [
-    "--state",
-    "merged",
-    "--limit",
-    String(limit)
-  ]);
-  if (!entries) return [];
-  return entries.map(mapEntry).sort((a, b) => {
-    if (!a.mergedAt || !b.mergedAt) return 0;
-    return new Date(b.mergedAt).getTime() - new Date(a.mergedAt).getTime();
-  });
-}
-function fetchPrs(repoRoot) {
-  return {
-    open: fetchOpenPrs(repoRoot),
-    merged: fetchMergedPrs(repoRoot)
-  };
-}
-
-// src/commands/gui.ts
-var GUI_HELP = `
-Usage:
-  tap gui [options]
-
-Description:
-  Start a local web dashboard showing bridge status, agents, and turn info.
-
-Options:
-  --port <n>    Dashboard port (default: 3847)
-  --help, -h    Show help
-
-Examples:
-  npx @hua-labs/tap gui
-  npx @hua-labs/tap gui --port 8080
-`.trim();
-function esc(str) {
-  if (!str) return "-";
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function buildHtml(snapshot, turnData) {
-  const agentRows = snapshot.agents.map(
-    (a) => `<tr><td>${esc(a.name)}</td><td class="${a.status === "active" ? "ok" : "warn"}">${esc(a.status)}</td><td>${a.lastActivity ? esc(new Date(a.lastActivity).toLocaleTimeString()) : "-"}</td></tr>`
-  ).join("\n");
-  const bridgeRows = snapshot.bridges.map((b) => {
-    const turn = turnData[b.instanceId];
-    const turnCell = turn?.activeTurnId ? `<span class="${turn.stuck ? "stuck" : "ok"}">${esc(turn.activeTurnId.slice(0, 8))}... ${turn.stuck ? "\u26A0 STUCK" : ""} ${turn.ageSeconds != null ? `(${turn.ageSeconds}s)` : ""}</span>` : "-";
-    const statusClass = b.status === "running" ? "ok" : b.status === "stale" ? "stuck" : "off";
-    return `<tr><td>${esc(b.instanceId)}</td><td>${esc(b.runtime)}</td><td class="${statusClass}">${esc(b.status)}</td><td>${b.pid ?? "-"}</td><td>${b.port ?? "-"}</td><td>${b.heartbeatAge != null ? `${b.heartbeatAge}s ago` : "-"}</td><td>${turnCell}</td></tr>`;
-  }).join("\n");
-  const warningRows = snapshot.warnings.map(
-    (w) => `<tr><td class="warn">${esc(w.level)}</td><td>${esc(w.message)}</td></tr>`
-  ).join("\n");
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tap dashboard</title>
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }
-  h1 { color: #58a6ff; font-size: 1.4em; }
-  h2 { color: #8b949e; font-size: 1.1em; margin-top: 24px; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-  th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #21262d; }
-  th { color: #8b949e; font-size: 0.85em; text-transform: uppercase; }
-  .ok { color: #3fb950; }
-  .warn { color: #d29922; }
-  .stuck { color: #f85149; font-weight: bold; }
-  .off { color: #8b949e; }
-  .meta { color: #8b949e; font-size: 0.85em; }
-  .refresh { color: #8b949e; font-size: 0.8em; margin-top: 16px; }
-</style>
-</head>
-<body>
-<h1>tap dashboard</h1>
-<p class="meta">${esc(snapshot.generatedAt)} &middot; ${esc(snapshot.repoRoot)}</p>
-
-<h2>Agents</h2>
-<table>
-<tr><th>Name</th><th>Status</th><th>Last Activity</th></tr>
-${agentRows || '<tr><td colspan="3" class="off">No agents</td></tr>'}
-</table>
-
-<h2>Bridges</h2>
-<table>
-<tr><th>Instance</th><th>Runtime</th><th>Status</th><th>PID</th><th>Port</th><th>Heartbeat</th><th>Turn</th></tr>
-${bridgeRows || '<tr><td colspan="7" class="off">No bridges</td></tr>'}
-</table>
-
-${warningRows ? `<h2>Warnings</h2><table><tr><th>Level</th><th>Message</th></tr>${warningRows}</table>` : ""}
-
-<p class="refresh" id="status">Connecting to live updates...</p>
-<script>
-const es = new EventSource('/api/events');
-const statusEl = document.getElementById('status');
-let lastReloadAt = Date.now();
-es.onmessage = (e) => {
-  statusEl.textContent = 'Live \u2014 updated ' + new Date().toLocaleTimeString();
-  statusEl.style.color = '#3fb950';
-  const elapsed = Date.now() - lastReloadAt;
-  if (elapsed >= 9000) { lastReloadAt = Date.now(); location.reload(); }
-};
-es.onerror = () => {
-  statusEl.textContent = 'Disconnected \u2014 will retry...';
-  statusEl.style.color = '#f85149';
-};
-</script>
-<p class="refresh"><a href="/missions" style="color:#58a6ff;">Mission Kanban</a> &middot; <a href="/prs" style="color:#58a6ff;">PR Board</a></p>
-</body>
-</html>`;
-}
-function buildMissionsHtml(repoRoot) {
-  const missions = parseMissionsFile(repoRoot);
-  const byStatus = {
-    active: missions.filter((m) => m.status === "active"),
-    planned: missions.filter((m) => m.status === "planned"),
-    completed: missions.filter((m) => m.status === "completed")
-  };
-  function card(m) {
-    return `<div class="card">
-  <div class="card-id">${esc(m.id)}</div>
-  <div class="card-title">${esc(m.title)}</div>
-  ${m.owner ? `<div class="card-meta">Owner: ${esc(m.owner)}</div>` : ""}
-  ${m.branch ? `<div class="card-meta card-branch">${esc(m.branch)}</div>` : ""}
-</div>`;
-  }
-  function column(label, headerClass, items) {
-    return `<div class="column">
-  <div class="col-header ${headerClass}">${label} <span class="badge">${items.length}</span></div>
-  <div class="col-body">
-    ${items.length ? items.map(card).join("\n    ") : '<div class="empty">No missions</div>'}
-  </div>
-</div>`;
-  }
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tap \u2014 mission kanban</title>
-<meta http-equiv="refresh" content="30">
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }
-  h1 { color: #58a6ff; font-size: 1.4em; }
-  a { color: #58a6ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .meta { color: #8b949e; font-size: 0.85em; }
-  .refresh { color: #8b949e; font-size: 0.8em; margin-top: 16px; }
-  .board { display: flex; gap: 16px; margin-top: 16px; align-items: flex-start; flex-wrap: wrap; }
-  .column { flex: 1; min-width: 240px; background: #161b22; border: 1px solid #21262d; border-radius: 6px; overflow: hidden; }
-  .col-header { padding: 10px 14px; font-size: 0.85em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; display: flex; justify-content: space-between; align-items: center; }
-  .col-header.active { color: #3fb950; border-bottom: 2px solid #3fb950; }
-  .col-header.planned { color: #d29922; border-bottom: 2px solid #d29922; }
-  .col-header.completed { color: #8b949e; border-bottom: 2px solid #8b949e; }
-  .badge { background: #21262d; color: #c9d1d9; border-radius: 10px; padding: 1px 7px; font-size: 0.8em; }
-  .col-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-  .card { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 10px 12px; }
-  .card-id { font-size: 0.75em; color: #58a6ff; font-weight: 600; margin-bottom: 4px; }
-  .card-title { font-size: 0.9em; color: #e6edf3; line-height: 1.4; }
-  .card-meta { font-size: 0.75em; color: #8b949e; margin-top: 4px; }
-  .card-branch { font-family: ui-monospace, monospace; color: #6e7681; }
-  .empty { color: #6e7681; font-size: 0.85em; padding: 8px 4px; }
-</style>
-</head>
-<body>
-<h1>mission kanban</h1>
-<p class="meta"><a href="/">&larr; Dashboard</a> &middot; ${esc(repoRoot)}</p>
-<div class="board">
-  ${column("Active", "active", byStatus.active)}
-  ${column("Planned", "planned", byStatus.planned)}
-  ${column("Completed", "completed", byStatus.completed)}
-</div>
-<p class="refresh">Auto-refresh every 30s</p>
-</body>
-</html>`;
-}
-function buildPrsHtml(repoRoot) {
-  const { open, merged } = fetchPrs(repoRoot);
-  function prRow(pr) {
-    return `<tr>
-  <td><a href="${esc(pr.url)}" target="_blank" rel="noopener" style="color:#58a6ff;">#${pr.number}</a></td>
-  <td>${esc(pr.title)}</td>
-  <td>${esc(pr.author)}</td>
-  <td class="branch">${esc(pr.branch)}</td>
-</tr>`;
-  }
-  const openRows = open.map(prRow).join("\n");
-  const mergedRows = merged.map(
-    (pr) => `<tr>
-  <td><a href="${esc(pr.url)}" target="_blank" rel="noopener" style="color:#58a6ff;">#${pr.number}</a></td>
-  <td>${esc(pr.title)}</td>
-  <td>${esc(pr.author)}</td>
-</tr>`
-  ).join("\n");
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tap \u2014 pr board</title>
-<meta http-equiv="refresh" content="60">
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }
-  h1 { color: #58a6ff; font-size: 1.4em; }
-  h2 { color: #8b949e; font-size: 1.1em; margin-top: 24px; }
-  a { color: #58a6ff; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-  th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #21262d; }
-  th { color: #8b949e; font-size: 0.85em; text-transform: uppercase; }
-  .branch { font-family: ui-monospace, monospace; font-size: 0.85em; color: #6e7681; }
-  .meta { color: #8b949e; font-size: 0.85em; }
-  .refresh { color: #8b949e; font-size: 0.8em; margin-top: 16px; }
-  .off { color: #8b949e; }
-</style>
-</head>
-<body>
-<h1>pr board</h1>
-<p class="meta"><a href="/">&larr; Dashboard</a> &middot; ${esc(repoRoot)}</p>
-
-<h2>Open PRs <span style="color:#3fb950;">(${open.length})</span></h2>
-<table>
-<tr><th>#</th><th>Title</th><th>Author</th><th>Branch</th></tr>
-${openRows || '<tr><td colspan="4" class="off">No open PRs</td></tr>'}
-</table>
-
-<h2>Recently Merged <span style="color:#8b949e;">(${merged.length})</span></h2>
-<table>
-<tr><th>#</th><th>Title</th><th>Author</th></tr>
-${mergedRows || '<tr><td colspan="3" class="off">No merged PRs</td></tr>'}
-</table>
-
-<p class="refresh">Auto-refresh every 60s</p>
-</body>
-</html>`;
-}
-async function guiCommand(args) {
-  const { flags } = parseArgs(args);
-  if (flags["help"] === true || flags["h"] === true) {
-    log(GUI_HELP);
-    return {
-      ok: true,
-      command: "gui",
-      code: "TAP_NO_OP",
-      message: GUI_HELP,
-      warnings: [],
-      data: {}
-    };
-  }
-  const portStr = typeof flags["port"] === "string" ? flags["port"] : void 0;
-  let port;
-  try {
-    port = parseIntFlag(portStr, "--port", 1024, 65535) ?? 3847;
-  } catch (err) {
-    return {
-      ok: false,
-      command: "gui",
-      code: "TAP_INVALID_ARGUMENT",
-      message: err instanceof Error ? err.message : String(err),
-      warnings: [],
-      data: {}
-    };
-  }
-  const repoRoot = findRepoRoot();
-  const server = http.createServer((req, res) => {
-    const snapshot = collectDashboardSnapshot(repoRoot);
-    const state = loadState(repoRoot);
-    const { config } = resolveConfig({}, repoRoot);
-    const turnData = {};
-    if (state) {
-      for (const [id, inst] of Object.entries(state.instances)) {
-        if (!inst?.installed || inst.bridgeMode !== "app-server") continue;
-        turnData[id] = getTurnInfo(config.stateDir, id);
-      }
-    }
-    const jsonHeaders = {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
-    };
-    if (req.url === "/api/snapshot") {
-      res.writeHead(200, jsonHeaders);
-      res.end(JSON.stringify({ ...snapshot, turns: turnData }, null, 2));
-      return;
-    }
-    if (req.url === "/api/events") {
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "Access-Control-Allow-Origin": "*"
-      });
-      const sendEvent = () => {
-        const s = collectDashboardSnapshot(repoRoot);
-        const st = loadState(repoRoot);
-        const cfg = resolveConfig({}, repoRoot).config;
-        const td = {};
-        if (st) {
-          for (const [id, inst] of Object.entries(st.instances)) {
-            if (!inst?.installed || inst.bridgeMode !== "app-server") continue;
-            td[id] = getTurnInfo(cfg.stateDir, id);
-          }
-        }
-        res.write(`data: ${JSON.stringify({ ...s, turns: td })}
-
-`);
-      };
-      sendEvent();
-      const interval = setInterval(sendEvent, 5e3);
-      req.on("close", () => clearInterval(interval));
-      return;
-    }
-    if (req.url === "/api/missions") {
-      const missions = parseMissionsFile(repoRoot);
-      res.writeHead(200, jsonHeaders);
-      res.end(JSON.stringify(missions, null, 2));
-      return;
-    }
-    if (req.url === "/missions") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(buildMissionsHtml(repoRoot));
-      return;
-    }
-    if (req.url === "/api/prs") {
-      const prs = fetchPrs(repoRoot);
-      res.writeHead(200, jsonHeaders);
-      res.end(JSON.stringify(prs, null, 2));
-      return;
-    }
-    if (req.url === "/prs") {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(buildPrsHtml(repoRoot));
-      return;
-    }
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(buildHtml(snapshot, turnData));
-  });
-  return new Promise((resolve14) => {
-    server.on("error", (err) => {
-      if (err.code === "EADDRINUSE") {
-        resolve14({
-          ok: false,
-          command: "gui",
-          code: "TAP_PORT_IN_USE",
-          message: `Port ${port} is already in use. Try: tap gui --port <other>`,
-          warnings: [],
-          data: {}
-        });
-      } else {
-        resolve14({
-          ok: false,
-          command: "gui",
-          code: "TAP_GUI_ERROR",
-          message: err.message,
-          warnings: [],
-          data: {}
-        });
-      }
-    });
-    server.listen(port, "127.0.0.1", () => {
-      logHeader("tap gui dashboard");
-      logSuccess(`Dashboard: http://127.0.0.1:${port}`);
-      log(`API:       http://127.0.0.1:${port}/api/snapshot`);
-      log("Press Ctrl+C to stop");
-    });
-  });
 }
 
 // src/output.ts
@@ -8179,8 +7240,6 @@ Commands:
   down                  Stop all running bridge daemons
   comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
-  watch                 Monitor bridges and auto-restart stuck ones
-  gui                   Start local web dashboard (http)
   doctor                Diagnose tap infrastructure health
   serve                 Start tap MCP server (stdio)
   version               Show version
@@ -8211,8 +7270,6 @@ function normalizeCommandName(command) {
     case "dashboard":
     case "doctor":
     case "serve":
-    case "watch":
-    case "gui":
       return command;
     default:
       return "unknown";
@@ -8276,12 +7333,6 @@ async function main() {
         break;
       case "doctor":
         result = await doctorCommand(commandArgs);
-        break;
-      case "watch":
-        result = await watchCommand(commandArgs);
-        break;
-      case "gui":
-        result = await guiCommand(commandArgs);
         break;
       case "serve": {
         const serveResult = await serveCommand(commandArgs);

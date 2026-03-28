@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-// prettier-ignore
-// @ts-expect-error — no type declarations for .mjs script
-import { getAutopilotStatus, runAutopilotLoop, runAutopilotPass } from "../../../../scripts/tap-autopilot.mjs";
+// @ts-expect-error script entrypoint is runtime-typed only
+import {
+  getAutopilotStatus,
+  runAutopilotLoop,
+  runAutopilotPass,
+} from "../../../../scripts/tap-autopilot.mjs";
 
 describe("tap autopilot", () => {
   const createdDirs: string[] = [];
@@ -116,7 +119,7 @@ describe("tap autopilot", () => {
       reviewers: [{ name: "담" }],
     });
     const sleepMock = vi.fn((_ms, _value, options) => {
-      return new Promise((_resolve, reject) => {
+      return new Promise((resolve, reject) => {
         const abort = () =>
           reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
         if (options?.signal?.aborted) {

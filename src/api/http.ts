@@ -32,30 +32,11 @@ export interface HttpServerOptions extends StateApiOptions {
   token?: string;
 }
 
-// M176: CORS restricted to loopback origins only.
-// Dynamic origin reflection for any localhost port (GUI runs on 3847, dev on 3000, etc.)
-function getCorsHeaders(req: IncomingMessage): Record<string, string> {
-  const origin = req.headers.origin ?? "";
-  const isLoopback =
-    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
-  return {
-    "Access-Control-Allow-Origin": isLoopback ? origin : "http://127.0.0.1",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    Vary: "Origin",
-  };
-}
-
-/**
- * M176: Verify that the request origin is from localhost.
- * Blocks cross-origin POST requests from malicious sites.
- */
-function isLoopbackOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  // No Origin header = same-origin or non-browser (CLI, curl) — allow
-  if (!origin) return true;
-  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
-}
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "http://localhost:3000",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
 
 function tokensMatch(
   presentedToken: string | null,
@@ -97,35 +78,25 @@ function verifySseToken(
   return tokensMatch(queryToken, expectedToken);
 }
 
-function jsonResponse(
-  req: IncomingMessage,
-  res: ServerResponse,
-  data: unknown,
-  status = 200,
-): void {
+function jsonResponse(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
-    ...getCorsHeaders(req),
+    ...CORS_HEADERS,
   });
   res.end(JSON.stringify(data));
 }
 
 function handleSnapshot(
-  req: IncomingMessage,
   res: ServerResponse,
   apiOptions: StateApiOptions,
 ): void {
   const snapshot = getDashboardSnapshot(apiOptions);
-  jsonResponse(req, res, snapshot);
+  jsonResponse(res, snapshot);
 }
 
-function handleConfig(
-  req: IncomingMessage,
-  res: ServerResponse,
-  apiOptions: StateApiOptions,
-): void {
+function handleConfig(res: ServerResponse, apiOptions: StateApiOptions): void {
   const config = getConfig(apiOptions);
-  jsonResponse(req, res, config);
+  jsonResponse(res, config);
 }
 
 async function handleEvents(
@@ -137,7 +108,7 @@ async function handleEvents(
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    ...getCorsHeaders(req),
+    ...CORS_HEADERS,
   });
 
   const controller = new AbortController();
@@ -154,13 +125,9 @@ async function handleEvents(
   res.end();
 }
 
-function handleHealth(
-  req: IncomingMessage,
-  res: ServerResponse,
-  apiOptions: StateApiOptions,
-): void {
+function handleHealth(res: ServerResponse, apiOptions: StateApiOptions): void {
   const report = getHealthReport(apiOptions);
-  jsonResponse(req, res, report);
+  jsonResponse(res, report);
 }
 
 /**
@@ -187,25 +154,14 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
       const pathname = url.pathname;
 
       if (req.method === "OPTIONS") {
-        res.writeHead(204, getCorsHeaders(req));
+        res.writeHead(204, CORS_HEADERS);
         res.end();
-        return;
-      }
-
-      // M176: Block POST from non-loopback origins (CSRF protection)
-      if (req.method === "POST" && !isLoopbackOrigin(req)) {
-        jsonResponse(
-          req,
-          res,
-          { error: "Forbidden: non-loopback origin" },
-          403,
-        );
         return;
       }
 
       // Health endpoint is public (no auth required)
       if (req.method === "GET" && pathname === "/health") {
-        handleHealth(req, res, apiOptions);
+        handleHealth(res, apiOptions);
         return;
       }
 
@@ -213,7 +169,7 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
       if (req.method === "GET" && pathname === "/api/events") {
         const serverUrl = `http://${host}:${port}`;
         if (!verifySseToken(req, token, serverUrl)) {
-          jsonResponse(req, res, { error: "Unauthorized" }, 401);
+          jsonResponse(res, { error: "Unauthorized" }, 401);
           return;
         }
         await handleEvents(req, res, apiOptions);
@@ -222,7 +178,7 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
 
       // All other endpoints require Bearer token only (no query param fallback)
       if (!verifyBearerToken(req, token)) {
-        jsonResponse(req, res, { error: "Unauthorized" }, 401);
+        jsonResponse(res, { error: "Unauthorized" }, 401);
         return;
       }
 
@@ -231,10 +187,10 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
         if (req.method === "GET") {
           switch (pathname) {
             case "/api/snapshot":
-              handleSnapshot(req, res, apiOptions);
+              handleSnapshot(res, apiOptions);
               return;
             case "/api/config":
-              handleConfig(req, res, apiOptions);
+              handleConfig(res, apiOptions);
               return;
             // /health handled above (public, no auth)
           }
@@ -247,7 +203,6 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
           const contentType = req.headers["content-type"] ?? "";
           if (!contentType.includes("application/json")) {
             jsonResponse(
-              req,
               res,
               { error: "Content-Type must be application/json" },
               415,
@@ -257,18 +212,18 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
 
           switch (pathname) {
             case "/api/start":
-              jsonResponse(req, res, await startAgents());
+              jsonResponse(res, await startAgents());
               return;
             case "/api/stop":
-              jsonResponse(req, res, await stopAgents());
+              jsonResponse(res, await stopAgents());
               return;
           }
         }
 
-        jsonResponse(req, res, { error: "Not found" }, 404);
+        jsonResponse(res, { error: "Not found" }, 404);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        jsonResponse(req, res, { error: message }, 500);
+        jsonResponse(res, { error: message }, 500);
       }
     },
   );

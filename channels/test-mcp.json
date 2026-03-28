@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tap-comms": {
+      "command": "bun",
+      "args": ["./packages/tap-plugin/channels/tap-comms.ts"],
+      "env": {
+        "TAP_COMMS_DIR": "../hua-comms",
+        "TAP_AGENT_NAME": "test1"
+      }
+    }
+  }
+}

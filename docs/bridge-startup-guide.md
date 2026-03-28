@@ -206,7 +206,7 @@ Instance not registered. Run `tap add <runtime>` first.
 
 ### Codex shows "Tools: (none)"
 
-**Cause**: Previously caused by Codex CLI display bug with hyphenated MCP names. Fixed in v0.3 — MCP key renamed from `tap-comms` to `tap`. If you still see this, run `tap add codex` to migrate.
+**Cause**: Previously caused by Codex CLI display bug with hyphenated MCP names. Fixed in v0.2.5 — MCP key renamed from `tap-comms` to `tap`. If you still see this, run `tap add codex` to migrate.
 
 **Verify**: Run `codex mcp list` — should show `tap: enabled`.
 

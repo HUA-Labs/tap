@@ -9,9 +9,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   statSync,
-  unlinkSync,
   writeFileSync
 } from "fs";
 import { isAbsolute, join, resolve } from "path";
@@ -43,9 +41,7 @@ function threadCwdMatches(expectedCwd, actualCwd) {
   return normalizeThreadCwd(expectedCwd) === normalizeThreadCwd(actualCwd);
 }
 function chooseLoadedThreadForCwd(cwd, threads) {
-  const matching = threads.filter(
-    (thread) => threadCwdMatches(cwd, thread.cwd)
-  );
+  const matching = threads.filter((thread) => threadCwdMatches(cwd, thread.cwd));
   if (matching.length === 0) {
     return null;
   }
@@ -344,10 +340,6 @@ function persistAgentName(stateDir, agentName) {
   writeFileSync(join(stateDir, "agent-name.txt"), `${agentName}
 `, "utf8");
 }
-function sanitizeErrorForPersistence(error) {
-  if (!error) return null;
-  return error.replace(/([?&])tap_token=[^\s&)"'}]+/gi, "$1tap_token=***").replace(/"tap_token"\s*:\s*"[^"]*"/g, '"tap_token":"***"').replace(/tap-auth-[A-Za-z0-9_-]+/g, "tap-auth-***").replace(/Bearer\s+[A-Za-z0-9_.-]+/gi, "Bearer ***");
-}
 function readGatewayTokenFile(tokenFile) {
   const token = readFileSync(tokenFile, "utf8").trim();
   if (!token) {
@@ -375,69 +367,6 @@ function readThreadState(stateDir) {
     return null;
   }
   return null;
-}
-function readHeartbeatState(stateDir) {
-  const heartbeatPath = join(stateDir, "heartbeat.json");
-  if (!existsSync(heartbeatPath)) {
-    return null;
-  }
-  try {
-    return JSON.parse(readFileSync(heartbeatPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-function parseUpdatedAt(value) {
-  if (!value) {
-    return 0;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-function appServerUrlMatches(expectedAppServerUrl, actualAppServerUrl) {
-  return actualAppServerUrl?.trim() === expectedAppServerUrl;
-}
-function hasValidHeartbeatThreadCwd(threadCwd) {
-  const normalized = threadCwd?.trim();
-  if (!normalized) {
-    return false;
-  }
-  return isAbsolute(normalized) || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.startsWith("\\\\");
-}
-function loadResumableThreadState(stateDir, fallbackAppServerUrl) {
-  const savedThread = readThreadState(stateDir);
-  const heartbeat = readHeartbeatState(stateDir);
-  const heartbeatThreadId = heartbeat?.threadId?.trim();
-  if (!heartbeatThreadId) {
-    return savedThread;
-  }
-  if (!appServerUrlMatches(fallbackAppServerUrl, heartbeat?.appServerUrl)) {
-    return savedThread;
-  }
-  if (!hasValidHeartbeatThreadCwd(heartbeat?.threadCwd)) {
-    return savedThread;
-  }
-  const heartbeatBackedThread = {
-    threadId: heartbeatThreadId,
-    updatedAt: heartbeat?.updatedAt ?? savedThread?.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-    appServerUrl: heartbeat?.appServerUrl || savedThread?.appServerUrl || fallbackAppServerUrl,
-    ephemeral: savedThread?.ephemeral ?? false,
-    cwd: heartbeat?.threadCwd ?? (savedThread?.threadId === heartbeatThreadId ? savedThread.cwd ?? null : null)
-  };
-  let preferred = savedThread;
-  if (!savedThread?.threadId) {
-    preferred = heartbeatBackedThread;
-  } else if (savedThread.threadId === heartbeatThreadId) {
-    preferred = {
-      ...savedThread,
-      updatedAt: heartbeatBackedThread.updatedAt ?? savedThread.updatedAt,
-      appServerUrl: heartbeatBackedThread.appServerUrl,
-      cwd: heartbeatBackedThread.cwd ?? savedThread.cwd ?? null
-    };
-  } else if (parseUpdatedAt(heartbeat?.updatedAt) > parseUpdatedAt(savedThread.updatedAt)) {
-    preferred = heartbeatBackedThread;
-  }
-  return preferred;
 }
 function persistThreadState(stateDir, threadId, appServerUrl, ephemeral, cwd) {
   const payload = {
@@ -812,7 +741,6 @@ var AppServerClient = class {
   threadId = null;
   currentThreadCwd = null;
   activeTurnId = null;
-  turnStartedAt = null;
   lastTurnStatus = null;
   lastNotificationMethod = null;
   lastNotificationAt = null;
@@ -853,7 +781,6 @@ var AppServerClient = class {
         "open",
         () => {
           this.connected = true;
-          this.logger(`connected to app-server at ${this.url}`);
           resolveOnce();
         },
         { once: true }
@@ -869,8 +796,6 @@ var AppServerClient = class {
         this.connected = false;
         this.initialized = false;
         this.activeTurnId = null;
-        this.turnStartedAt = null;
-        this.logger("disconnected from app-server");
         this.rejectPending(new Error("App Server connection closed"));
       });
       this.socket?.addEventListener("message", (event) => {
@@ -941,7 +866,6 @@ var AppServerClient = class {
             this.threadId = null;
             this.currentThreadCwd = null;
             this.activeTurnId = null;
-            this.turnStartedAt = null;
             this.lastTurnStatus = null;
           } else {
             this.logger(
@@ -1034,7 +958,6 @@ var AppServerClient = class {
     const turnId = response?.turn?.id ?? null;
     if (turnId) {
       this.activeTurnId = turnId;
-      this.turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
     }
     return turnId;
   }
@@ -1098,11 +1021,6 @@ var AppServerClient = class {
         activeTurnId = turn.id;
       }
     }
-    if (activeTurnId && activeTurnId !== this.activeTurnId) {
-      this.turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
-    } else if (!activeTurnId) {
-      this.turnStartedAt = null;
-    }
     this.activeTurnId = activeTurnId;
     this.lastTurnStatus = lastTurnStatus;
   }
@@ -1153,22 +1071,14 @@ var AppServerClient = class {
       case "turn/started":
         if (params?.turn?.id) {
           this.activeTurnId = params.turn.id;
-          this.turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
           this.logger(`turn started ${params.turn.id}`);
         }
         break;
-      case "turn/completed": {
+      case "turn/completed":
         this.lastTurnStatus = params?.turn?.status ?? null;
-        const prevTurnStartedAt = this.turnStartedAt;
         this.activeTurnId = null;
-        this.turnStartedAt = null;
-        const elapsedMs = prevTurnStartedAt ? Date.now() - new Date(prevTurnStartedAt).getTime() : null;
-        const elapsedSuffix = elapsedMs !== null ? ` \u2014 ${Math.round(elapsedMs / 1e3)}s elapsed` : "";
-        this.logger(
-          `turn completed (${this.lastTurnStatus ?? "unknown"})${elapsedSuffix}`
-        );
+        this.logger(`turn completed (${this.lastTurnStatus ?? "unknown"})`);
         break;
-      }
       case "error":
         this.lastError = JSON.stringify(params ?? {}, null, 2);
         this.logger(`app-server error notification: ${this.lastError}`);
@@ -1205,7 +1115,6 @@ var AppServerClient = class {
     this.pending.clear();
   }
 };
-var heartbeatCount = 0;
 function writeHeartbeat(options, client, health) {
   if (client?.threadId) {
     const savedThread = readThreadState(options.stateDir);
@@ -1228,11 +1137,10 @@ function writeHeartbeat(options, client, health) {
     threadId: client?.threadId ?? null,
     threadCwd: client?.currentThreadCwd ?? null,
     activeTurnId: client?.activeTurnId ?? null,
-    turnStartedAt: client?.turnStartedAt ?? null,
     lastTurnStatus: client?.lastTurnStatus ?? null,
     lastNotificationMethod: client?.lastNotificationMethod ?? null,
     lastNotificationAt: client?.lastNotificationAt ?? null,
-    lastError: sanitizeErrorForPersistence(client?.lastError ?? null),
+    lastError: client?.lastError ?? null,
     lastSuccessfulAppServerAt: client?.lastSuccessfulAppServerAt ?? null,
     lastSuccessfulAppServerMethod: client?.lastSuccessfulAppServerMethod ?? null,
     consecutiveFailureCount: health.consecutiveFailureCount,
@@ -1244,84 +1152,9 @@ function writeHeartbeat(options, client, health) {
 `,
     "utf8"
   );
-  heartbeatCount += 1;
-  if (heartbeatCount % 5 === 0) {
-    logStatus(
-      `heartbeat: connected=${payload.connected}, thread=${payload.threadId ?? "null"}, turns=${payload.activeTurnId ? "active" : "0"}`
-    );
-  }
-  const status = client?.connected ? "active" : "idle";
-  updateCommsHeartbeat(options, status);
-}
-var COMMS_HEARTBEAT_LOCK_TIMEOUT_MS = 2e3;
-var COMMS_LOCK_STALE_AGE_MS = 1e4;
-function acquireCommsLock(lockPath) {
-  const deadline = Date.now() + COMMS_HEARTBEAT_LOCK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
-      return true;
-    } catch {
-      try {
-        const lockAge = Date.now() - statSync(lockPath).mtimeMs;
-        if (lockAge > COMMS_LOCK_STALE_AGE_MS) {
-          unlinkSync(lockPath);
-          try {
-            writeFileSync(lockPath, String(process.pid), { flag: "wx" });
-            return true;
-          } catch {
-          }
-        }
-      } catch {
-      }
-      const start = Date.now();
-      while (Date.now() - start < 50) {
-      }
-    }
-  }
-  return false;
-}
-function releaseCommsLock(lockPath) {
-  try {
-    unlinkSync(lockPath);
-  } catch {
-  }
-}
-function updateCommsHeartbeat(options, status) {
-  const heartbeatsPath = join(options.commsDir, "heartbeats.json");
-  const lockPath = join(options.commsDir, ".heartbeats.lock");
-  if (!acquireCommsLock(lockPath)) {
-    return;
-  }
-  try {
-    let store = {};
-    try {
-      store = JSON.parse(readFileSync(heartbeatsPath, "utf-8"));
-    } catch {
-    }
-    const key = options.agentId;
-    const existing = store[key];
-    store[key] = {
-      id: options.agentId,
-      agent: options.agentName,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      lastActivity: (/* @__PURE__ */ new Date()).toISOString(),
-      joinedAt: existing?.joinedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-      status
-    };
-    const tmpPath = heartbeatsPath + ".tmp." + process.pid;
-    writeFileSync(tmpPath, JSON.stringify(store, null, 2), "utf-8");
-    renameSync(tmpPath, heartbeatsPath);
-  } catch {
-  } finally {
-    releaseCommsLock(lockPath);
-  }
 }
 async function dispatchCandidate(client, options, candidate, heartbeats) {
   const input = buildUserInput(candidate, options.agentName, heartbeats);
-  logStatus(
-    `dispatching from ${candidate.sender || "unknown"}: ${candidate.subject || "(none)"}`
-  );
   if (client.isBusy()) {
     if (options.busyMode !== "steer") {
       return false;
@@ -1351,7 +1184,6 @@ async function dispatchCandidate(client, options, candidate, heartbeats) {
       }
       if (shouldRetrySteerAsStart(error)) {
         client.activeTurnId = null;
-        client.turnStartedAt = null;
         logStatus(
           `steer fallback -> start for ${candidate.fileName} (${String(error)})`
         );
@@ -1455,10 +1287,7 @@ async function main() {
     options.messageLookbackMinutes,
     options.processExistingMessages
   );
-  const initialSavedThread = loadResumableThreadState(
-    options.stateDir,
-    options.appServerUrl
-  );
+  const initialSavedThread = readThreadState(options.stateDir);
   logStatus("codex app-server bridge ready");
   console.log(`  repo:       ${options.repoRoot}`);
   console.log(`  comms:      ${options.commsDir}`);
@@ -1496,10 +1325,7 @@ async function main() {
             options.gatewayToken
           );
           await client.connect();
-          const savedThread = loadResumableThreadState(
-            options.stateDir,
-            options.appServerUrl
-          );
+          const savedThread = readThreadState(options.stateDir);
           const threadId = await client.ensureThread(
             options.threadId,
             savedThread,
@@ -1547,7 +1373,6 @@ async function main() {
       }
       client?.disconnect().catch(() => void 0);
       client = null;
-      logStatus(`reconnecting in ${options.reconnectSeconds}s...`);
       await delay(options.reconnectSeconds * 1e3);
     }
   }
@@ -1587,7 +1412,6 @@ export {
   buildUserInput,
   chooseLoadedThreadForCwd,
   isOwnMessageSender,
-  loadResumableThreadState,
   main,
   maybeBootstrapHeadlessTurn,
   recipientMatchesAgent,

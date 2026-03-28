@@ -43,8 +43,8 @@ function makeState(
   for (const [id, opts] of Object.entries(instances)) {
     state.instances[id] = makeInstance({
       instanceId: id,
-      ...opts,
       runtime: opts.runtime as "codex" | "claude" | "gemini",
+      ...opts,
     });
   }
 
@@ -72,7 +72,7 @@ describe("agent-name persistence logic", () => {
     const instance = state.instances["codex"];
 
     // Simulate: no --agent-name flag, fall back to stored
-    const resolvedAgentName = instance.agentName ?? undefined;
+    const resolvedAgentName = undefined ?? instance.agentName ?? undefined;
 
     expect(resolvedAgentName).toBe("빛");
   });
@@ -94,7 +94,7 @@ describe("agent-name persistence logic", () => {
     const state = makeState({ codex: { runtime: "codex" } });
     const instance = state.instances["codex"];
 
-    const resolvedAgentName = instance.agentName ?? undefined;
+    const resolvedAgentName = undefined ?? instance.agentName ?? undefined;
 
     expect(resolvedAgentName).toBeUndefined();
   });

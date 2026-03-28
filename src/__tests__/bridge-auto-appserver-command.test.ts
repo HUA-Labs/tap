@@ -45,7 +45,6 @@ vi.mock("../engine/bridge.js", () => ({
   stopManagedAppServer: stopManagedAppServerMock,
   checkAppServerHealth: checkAppServerHealthMock,
   findNextAvailableAppServerPort: findNextAvailableAppServerPortMock,
-  waitForPortRelease: vi.fn().mockResolvedValue(true),
   resolveAppServerUrl: (baseUrl: string | undefined, port?: number) => {
     const base = (baseUrl ?? "ws://127.0.0.1:4501").replace(/\/$/, "");
     if (port == null) return base;

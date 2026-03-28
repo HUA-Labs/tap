@@ -1,8 +1,19 @@
 # @hua-labs/tap
 
+> *Other tools give agents instructions. tap gives them context.*
+
 Zero-dependency CLI for cross-model AI agent communication setup.
 
 One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
+
+### Why "tap"?
+
+탑 (塔) — Korean for **stone tower** and **control tower**.
+
+- **Stone tower** (석탑): built by stacking stones one by one. Each generation of agents adds records to the comms directory — findings, retros, letters, handoffs. The tower grows.
+- **Control tower** (관제탑): observes and coordinates from the center. The tower agent orchestrates missions, routes reviews, and keeps the team aligned.
+
+*Stacked records + central coordination = tap.*
 
 ## Quick Start
 
@@ -73,9 +84,44 @@ Output shows three status levels:
 - **configured** — config written and verified
 - **active** — runtime is running and connected
 
+### `doctor`
+
+Diagnose and optionally fix tap infrastructure health.
+
+```bash
+npx @hua-labs/tap doctor
+npx @hua-labs/tap doctor --fix
+```
+
+### `up` / `down`
+
+Start or stop all managed bridges.
+
+```bash
+npx @hua-labs/tap up
+npx @hua-labs/tap down
+```
+
+### `gui`
+
+Start a local web dashboard showing bridge status, agents, mission kanban, and PR board.
+
+```bash
+npx @hua-labs/tap gui
+```
+
+### `watch`
+
+Autonomous bridge health monitoring with auto-restart for stuck bridges.
+
+```bash
+npx @hua-labs/tap watch
+npx @hua-labs/tap watch --loop --interval 60
+```
+
 ### `serve`
 
-Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
+Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
 npx @hua-labs/tap serve
@@ -108,9 +154,9 @@ npx @hua-labs/tap status --json
   "message": "2 runtime(s) installed",
   "warnings": [],
   "data": {
-    "version": "0.2.2",
+    "version": "0.3.0",
     "commsDir": "/path/to/comms",
-    "runtimes": {
+    "instances": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
       "codex": { "status": "configured", "bridgeMode": "app-server" }
     }
@@ -165,29 +211,56 @@ Each runtime has an adapter that:
 
 The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
 
-## Changelog (0.2.2)
+## What's New (0.3.0)
 
-### Bridge
+### Headless Durable
 
-- **Auth gateway** — Managed bridge now includes an auth proxy with timing-safe token validation (M99)
-- **`--no-auth` flag** — Skip auth gateway for localhost-only setups; app-server listens directly on public port (M102)
-- **TUI connect URL** — `bridge start` and `bridge status` output shows where to connect Codex TUI (M102)
-- **Identity routing** — Bridge matches inbox messages by both `agentId` and `agentName`; self echo-back filtered by both (M101)
-- **Display labels** — Bridge prompts, `tap_who`, and notifications use `name [id]` format (M101)
+TUI-free Codex operation is now fully automated:
+- **Auto app-server spawn** — `tap bridge start` launches codex app-server without manual setup
+- **Thread self-heal** — Stale thread state automatically reconciled from heartbeat
+- **Warmup on restart** — Cold-start warmup triggers on `bridge restart`, not just `tap up`
 
-### CLI
+### Web Dashboard
 
-- **`tap doctor`** — Diagnose comms, bridge, message, and MCP issues (M95)
-- **`tap doctor --fix`** — Auto-fix common issues with post-fix revalidation (M100)
-- **Error codes** — 24 CLI error codes with consistent `TAP_*` prefix (M91)
-- **Boot streamline** — Faster CLI startup with agent-name persistence (M92)
+```bash
+npx @hua-labs/tap gui
+```
 
-### Infrastructure
+Live dashboard at `http://127.0.0.1:3847` with:
+- Agent status + bridge health (SSE live updates)
+- Mission kanban board (`/missions`)
+- PR board (`/prs`)
+- JSON APIs with CORS (`/api/snapshot`, `/api/missions`, `/api/prs`)
 
-- **Auto-poll fallback** — Bridge falls back to polling when fs.watch is unavailable (M93)
-- **Watcher dedup** — Root-cause fix for duplicate message dispatch (M90)
-- **tap-plugin test infra** — In-memory test harness for MCP channel tests (M94)
-- **Blind test CI** — Cross-model communication verification framework (M98)
+### Autonomous Monitoring
+
+```bash
+npx @hua-labs/tap watch --loop --interval 60
+```
+
+Continuous health monitoring with auto-restart for stuck bridges. Cron/systemd friendly.
+
+### Cross-Platform
+
+- **Windows**: PowerShell hidden spawn + `.cmd` shim unwrap
+- **macOS/Linux**: Unix detached process + `lsof` PID discovery
+- **Gemini**: Fake IDE companion server (MCP-over-HTTP)
+
+### Modular Architecture
+
+bridge.ts split from 1,744 to 241 lines (-86%) across 16 focused modules. See `docs/areas/tap/splitting-convention.md`.
+
+## Examples
+
+Real multi-agent collaboration highlights from 18 generations:
+
+- [Logic Battle: "Will You Ship Broken Code?"](examples/01-logic-battle-known-broken.md)
+- [Cross-Model Review Catches Root Cause Misdiagnosis](examples/02-cross-model-review-root-cause.md)
+- [Independent Convergence Across 3 Generations](examples/03-convergence-pattern.md)
+- [Tower Broadcast: "Stop Talking, Write Code"](examples/04-tower-broadcast.md)
+- [Self-Awareness ≠ Self-Correction](examples/05-self-awareness-paradox.md)
+
+[See all 10 examples →](examples/)
 
 ## License
 

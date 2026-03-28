@@ -227,8 +227,6 @@ export type CommandName =
   | "comms"
   | "dashboard"
   | "doctor"
-  | "watch"
-  | "gui"
   | "unknown";
 
 export type CommandCode =
@@ -275,14 +273,6 @@ export type CommandCode =
   // Review (headless)
   | "TAP_REVIEW_START_OK"
   | "TAP_REVIEW_TERMINATED"
-  // Watch / GUI
-  | "TAP_WATCH_OK"
-  | "TAP_WATCH_RESTARTED"
-  | "TAP_WATCH_FAILED"
-  | "TAP_BRIDGE_WATCH_OK"
-  | "TAP_BRIDGE_WATCH_RESTARTED"
-  | "TAP_PORT_IN_USE"
-  | "TAP_GUI_ERROR"
   // Internal
   | "TAP_INTERNAL_ERROR";
 
