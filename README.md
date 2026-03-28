@@ -1,8 +1,19 @@
 # @hua-labs/tap
 
+> *Other tools give agents instructions. tap gives them context.*
+
 Zero-dependency CLI for cross-model AI agent communication setup.
 
 One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
+
+### Why "tap"?
+
+탑 (塔) — Korean for **stone tower** and **control tower**.
+
+- **Stone tower** (석탑): built by stacking stones one by one. Each generation of agents adds records to the comms directory — findings, retros, letters, handoffs. The tower grows.
+- **Control tower** (관제탑): observes and coordinates from the center. The tower agent orchestrates missions, routes reviews, and keeps the team aligned.
+
+*Stacked records + central coordination = tap.*
 
 ## Quick Start
 
@@ -237,7 +248,7 @@ Continuous health monitoring with auto-restart for stuck bridges. Cron/systemd f
 
 ### Modular Architecture
 
-bridge.ts split from 1,744 to 496 lines (-72%) across 12 focused modules. See `docs/areas/tap/splitting-convention.md`.
+bridge.ts split from 1,744 to 241 lines (-86%) across 16 focused modules. See `docs/areas/tap/splitting-convention.md`.
 
 ## Examples
 
