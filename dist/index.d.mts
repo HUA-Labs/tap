@@ -170,8 +170,8 @@ interface TapStateV1 {
     packageVersion: string;
     runtimes: Partial<Record<RuntimeName, RuntimeState>>;
 }
-type CommandName = "init" | "init-worktree" | "add" | "remove" | "status" | "serve" | "bridge" | "up" | "down" | "comms" | "dashboard" | "doctor" | "unknown";
-type CommandCode = "TAP_INIT_OK" | "TAP_ADD_OK" | "TAP_REMOVE_OK" | "TAP_STATUS_OK" | "TAP_SERVE_OK" | "TAP_NO_OP" | "TAP_ALREADY_INITIALIZED" | "TAP_INIT_CLONE_FAILED" | "TAP_NOT_INITIALIZED" | "TAP_RUNTIME_UNKNOWN" | "TAP_RUNTIME_NOT_FOUND" | "TAP_CONFIG_INVALID" | "TAP_LOCAL_SERVER_MISSING" | "TAP_INVALID_ARGUMENT" | "TAP_INSTANCE_NOT_FOUND" | "TAP_INSTANCE_AMBIGUOUS" | "TAP_PORT_CONFLICT" | "TAP_PATCH_FAILED" | "TAP_VERIFY_FAILED" | "TAP_ROLLBACK_FAILED" | "TAP_BRIDGE_START_OK" | "TAP_BRIDGE_START_FAILED" | "TAP_BRIDGE_STOP_OK" | "TAP_BRIDGE_STATUS_OK" | "TAP_BRIDGE_NOT_RUNNING" | "TAP_BRIDGE_SCRIPT_MISSING" | "TAP_UP_OK" | "TAP_DOWN_OK" | "TAP_COMMS_PULL_OK" | "TAP_COMMS_PULL_FAILED" | "TAP_COMMS_PUSH_OK" | "TAP_COMMS_PUSH_FAILED" | "TAP_COMMS_NOT_REPO" | "TAP_SERVE_NO_SERVER" | "TAP_SERVE_BUN_REQUIRED" | "TAP_REVIEW_START_OK" | "TAP_REVIEW_TERMINATED" | "TAP_INTERNAL_ERROR";
+type CommandName = "init" | "init-worktree" | "add" | "remove" | "status" | "serve" | "bridge" | "up" | "down" | "comms" | "dashboard" | "doctor" | "watch" | "gui" | "unknown";
+type CommandCode = "TAP_INIT_OK" | "TAP_ADD_OK" | "TAP_REMOVE_OK" | "TAP_STATUS_OK" | "TAP_SERVE_OK" | "TAP_NO_OP" | "TAP_ALREADY_INITIALIZED" | "TAP_INIT_CLONE_FAILED" | "TAP_NOT_INITIALIZED" | "TAP_RUNTIME_UNKNOWN" | "TAP_RUNTIME_NOT_FOUND" | "TAP_CONFIG_INVALID" | "TAP_LOCAL_SERVER_MISSING" | "TAP_INVALID_ARGUMENT" | "TAP_INSTANCE_NOT_FOUND" | "TAP_INSTANCE_AMBIGUOUS" | "TAP_PORT_CONFLICT" | "TAP_PATCH_FAILED" | "TAP_VERIFY_FAILED" | "TAP_ROLLBACK_FAILED" | "TAP_BRIDGE_START_OK" | "TAP_BRIDGE_START_FAILED" | "TAP_BRIDGE_STOP_OK" | "TAP_BRIDGE_STATUS_OK" | "TAP_BRIDGE_NOT_RUNNING" | "TAP_BRIDGE_SCRIPT_MISSING" | "TAP_UP_OK" | "TAP_DOWN_OK" | "TAP_COMMS_PULL_OK" | "TAP_COMMS_PULL_FAILED" | "TAP_COMMS_PUSH_OK" | "TAP_COMMS_PUSH_FAILED" | "TAP_COMMS_NOT_REPO" | "TAP_SERVE_NO_SERVER" | "TAP_SERVE_BUN_REQUIRED" | "TAP_REVIEW_START_OK" | "TAP_REVIEW_TERMINATED" | "TAP_WATCH_OK" | "TAP_WATCH_RESTARTED" | "TAP_WATCH_FAILED" | "TAP_BRIDGE_WATCH_OK" | "TAP_BRIDGE_WATCH_RESTARTED" | "TAP_PORT_IN_USE" | "TAP_GUI_ERROR" | "TAP_INTERNAL_ERROR";
 interface CommandResult<T = Record<string, unknown>> {
     ok: boolean;
     command: CommandName;
@@ -189,6 +189,57 @@ declare function saveState(repoRoot: string, state: TapState): void;
 declare function createInitialState(commsDir: string, repoRoot: string, packageVersion: string): TapState;
 
 declare const version: string;
+
+interface GeminiIdeCursor {
+    line: number;
+    character: number;
+}
+interface GeminiIdeFile {
+    path: string;
+    timestamp: number;
+    isActive?: boolean;
+    cursor?: GeminiIdeCursor;
+    selectedText?: string;
+}
+interface GeminiIdeContext {
+    workspaceState?: {
+        openFiles?: GeminiIdeFile[];
+        isTrusted?: boolean;
+    };
+}
+interface GeminiIdeInfo {
+    name: string;
+    displayName: string;
+}
+interface GeminiIdeCompanionServerOptions {
+    port?: number;
+    host?: string;
+    endpointPath?: string;
+    authToken?: string;
+    enableDiscoveryFile?: boolean;
+    discoveryPid?: number;
+    workspacePaths?: string[];
+    ideInfo?: GeminiIdeInfo;
+    logger?: {
+        info?: (...args: unknown[]) => void;
+        warn?: (...args: unknown[]) => void;
+        error?: (...args: unknown[]) => void;
+    };
+}
+interface GeminiIdeCompanionServer {
+    readonly port: number;
+    readonly host: string;
+    readonly url: string;
+    readonly endpointPath: string;
+    readonly authToken: string;
+    readonly discoveryFilePath: string | null;
+    sessionIds(): string[];
+    sendDiffAccepted(filePath: string, content?: string, sessionId?: string): Promise<string[]>;
+    sendDiffRejected(filePath: string, sessionId?: string): Promise<string[]>;
+    sendContextUpdate(context: GeminiIdeContext, sessionId?: string): Promise<string[]>;
+    close(): Promise<void>;
+}
+declare function startGeminiIdeCompanionServer(options?: GeminiIdeCompanionServerOptions): Promise<GeminiIdeCompanionServer>;
 
 /**
  * Shared config (tap-config.json) — git tracked, repo-level defaults.
@@ -248,6 +299,26 @@ declare function resolveConfig(overrides?: ConfigOverrides, startDir?: string): 
 declare function saveSharedConfig(repoRoot: string, config: TapSharedConfig): void;
 declare function saveLocalConfig(repoRoot: string, config: TapLocalConfig): void;
 
+/**
+ * Bridge observability — heartbeat monitoring, turn stuck detection, log rotation.
+ *
+ * Consolidated from bridge-state.ts (heartbeat/turn functions) and
+ * bridge-log-rotate.ts into a single observability module.
+ *
+ * @module engine/bridge-observability
+ */
+
+/**
+ * Update the heartbeat timestamp for a running bridge.
+ * Only the owning process (matching PID) can update the heartbeat.
+ */
+declare function updateBridgeHeartbeat(stateDir: string, instanceId: InstanceId): void;
+/**
+ * Get heartbeat age in seconds. Returns null if no state or no heartbeat.
+ */
+declare function getHeartbeatAge(stateDir: string, instanceId: InstanceId): number | null;
+declare function rotateLog(logPath: string): void;
+
 interface BridgeStartOptions {
     instanceId: InstanceId;
     runtime: RuntimeName;
@@ -274,34 +345,17 @@ interface BridgeStartOptions {
     /** Skip auth gateway — app-server listens directly on the public port (localhost only). */
     noAuth?: boolean;
 }
+
 interface RestartBridgeOptions extends BridgeStartOptions {
     /** Max seconds to wait for active turn to complete before killing. Default: 30 */
     drainTimeoutSeconds?: number;
 }
 /**
- * Graceful bridge restart: wait for active turn → cleanup → stop → start.
+ * Graceful bridge restart: wait for active turn -> cleanup -> stop -> start.
  * Prevents message loss during restart by draining active work first
  * and replaying unprocessed messages on the new instance.
- *
- * For headless instances: drain phase cleans up headless dispatch files
- * to prevent the new bridge from re-injecting completed review requests.
- * (별 finding: eager marking + replay collision)
  */
 declare function restartBridge(options: RestartBridgeOptions): Promise<BridgeState>;
-declare function rotateLog(logPath: string): void;
-/**
- * Update the heartbeat timestamp for a running bridge.
- * Bridge processes should call this periodically.
- *
- * Only the owning process (matching PID) can update the heartbeat.
- * This prevents state dir collision when multiple writers exist.
- * See: 묵 finding — bridge-heartbeat-state-dir-collision
- */
-declare function updateBridgeHeartbeat(stateDir: string, instanceId: InstanceId): void;
-/**
- * Get heartbeat age in seconds. Returns null if no state or no heartbeat.
- */
-declare function getHeartbeatAge(stateDir: string, instanceId: InstanceId): number | null;
 
 /**
  * Dashboard data collection engine.
@@ -496,4 +550,4 @@ declare function resolveNodeRuntime(configCommand: string, repoRoot: string): Re
  */
 declare function buildRuntimeEnv(repoRoot: string, baseEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 
-export { type AdapterContext, type AgentControlOptions, type AgentControlResult, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type HealthReport, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHealthReport, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, restartBridge, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startAgents, startHttpServer, stateExists, stopAgents, streamEvents, updateBridgeHeartbeat, version };
+export { type AdapterContext, type AgentControlOptions, type AgentControlResult, type AgentInfo, type AppServerAuthState, type AppServerState, type ApplyResult, type ArtifactKind, type BridgeInfo, type BridgeMode, type BridgeState, type CommandCode, type CommandName, type CommandResult, type ConfigOverrides, type ConfigResolution, type ConfigSource, type DashboardSnapshot, type DashboardWarning, type EventStreamOptions, type GeminiIdeCompanionServer, type GeminiIdeCompanionServerOptions, type GeminiIdeContext, type GeminiIdeCursor, type GeminiIdeFile, type GeminiIdeInfo, type HealthReport, type HttpServerOptions, type InstanceId, type InstanceState, LOCAL_CONFIG_FILE, type OwnedArtifact, type PRInfo, type PatchOp, type PatchOpType, type PatchPlan, type Platform, type ProbeResult, type ResolvedRuntime, type RuntimeAdapter, type RuntimeName, type RuntimeSource, type RuntimeState, SHARED_CONFIG_FILE, type StateApiOptions, type TapLocalConfig, type TapResolvedConfig, type TapSharedConfig, type TapState, type TapStateV1, type VerifyCheck, type VerifyResult, buildRuntimeEnv, collectDashboardSnapshot, createInitialState, getConfig, getDashboardSnapshot, getFnmBinDir, getHealthReport, getHeartbeatAge, loadLocalConfig, loadSharedConfig, loadState, probeFnmNode, readNodeVersion, resolveConfig, resolveNodeRuntime, restartBridge, rotateLog, saveLocalConfig, saveSharedConfig, saveState, startAgents, startGeminiIdeCompanionServer, startHttpServer, stateExists, stopAgents, streamEvents, updateBridgeHeartbeat, version };

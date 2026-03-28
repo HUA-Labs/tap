@@ -34,6 +34,15 @@ export {
   stateExists,
 } from "./state.js";
 export { version } from "./version.js";
+export type {
+  GeminiIdeCompanionServer,
+  GeminiIdeCompanionServerOptions,
+  GeminiIdeContext,
+  GeminiIdeCursor,
+  GeminiIdeFile,
+  GeminiIdeInfo,
+} from "./bridges/gemini-ide-companion.js";
+export { startGeminiIdeCompanionServer } from "./bridges/gemini-ide-companion.js";
 
 // Config
 export type {
@@ -59,9 +68,8 @@ export {
   /** @deprecated Internal use only. Will be removed in 0.2.0. */
   updateBridgeHeartbeat,
   getHeartbeatAge,
-  rotateLog,
-  restartBridge,
-} from "./engine/bridge.js";
+} from "./engine/bridge-observability.js";
+export { rotateLog, restartBridge } from "./engine/bridge.js";
 
 // Dashboard / State API
 export type {

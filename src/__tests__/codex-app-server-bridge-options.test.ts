@@ -7,11 +7,12 @@ import {
   buildUserInput,
   chooseLoadedThreadForCwd,
   isOwnMessageSender,
+  loadResumableThreadState,
   recipientMatchesAgent,
   resolveAddressLabel,
   resolveCurrentAgentName,
   threadCwdMatches,
-} from "../../../../scripts/codex-app-server-bridge.ts";
+} from "../../../../scripts/codex-app-server-bridge.js";
 
 describe("codex app-server bridge option building", () => {
   const createdDirs: string[] = [];
@@ -203,9 +204,9 @@ describe("codex app-server bridge option building", () => {
   });
 
   it("matches thread cwd across slash and case differences", () => {
-    expect(
-      threadCwdMatches("C:/hua-wt-review", "c:\\HUA-WT-REVIEW"),
-    ).toBe(true);
+    expect(threadCwdMatches("C:/hua-wt-review", "c:\\HUA-WT-REVIEW")).toBe(
+      true,
+    );
     expect(threadCwdMatches("C:/hua-wt-review", "C:/hua-wt-1")).toBe(false);
   });
 
@@ -235,5 +236,228 @@ describe("codex app-server bridge option building", () => {
     ]);
 
     expect(chosen?.id).toBe("thread-match-active");
+  });
+
+  it("prefers a newer valid runtime heartbeat without mutating thread.json", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-old",
+        updatedAt: "2026-03-27T23:24:51.387Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "heartbeat.json"),
+      JSON.stringify({
+        threadId: "thread-new",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        threadCwd: repoRoot,
+        connected: true,
+        initialized: true,
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-new",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: repoRoot,
+      }),
+    );
+    expect(
+      JSON.parse(fs.readFileSync(path.join(stateDir, "thread.json"), "utf8")),
+    ).toEqual(
+      expect.objectContaining({
+        threadId: "thread-old",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+      }),
+    );
+  });
+
+  it("ignores a newer runtime heartbeat from a different app server", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-current",
+        updatedAt: "2026-03-27T23:24:51.387Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: repoRoot,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "heartbeat.json"),
+      JSON.stringify({
+        threadId: "thread-other-server",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4510",
+        threadCwd: repoRoot,
+        connected: true,
+        initialized: true,
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-current",
+        appServerUrl: "ws://127.0.0.1:4501",
+        cwd: repoRoot,
+      }),
+    );
+  });
+
+  it("ignores a newer runtime heartbeat without a thread cwd", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-current",
+        updatedAt: "2026-03-27T23:24:51.387Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: repoRoot,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "heartbeat.json"),
+      JSON.stringify({
+        threadId: "thread-missing-cwd",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        threadCwd: null,
+        connected: true,
+        initialized: true,
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-current",
+        appServerUrl: "ws://127.0.0.1:4501",
+        cwd: repoRoot,
+      }),
+    );
+  });
+
+  it("keeps the saved thread when the heartbeat is older", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-current",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: repoRoot,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "heartbeat.json"),
+      JSON.stringify({
+        threadId: "thread-stale",
+        updatedAt: "2026-03-27T23:24:51.387Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        threadCwd: "D:/somewhere-else",
+        connected: true,
+        initialized: true,
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-current",
+        cwd: repoRoot,
+      }),
+    );
+  });
+
+  it("keeps the saved thread when timestamps are equal", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-current",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: repoRoot,
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "heartbeat.json"),
+      JSON.stringify({
+        threadId: "thread-same-timestamp",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        threadCwd: repoRoot,
+        connected: true,
+        initialized: true,
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-current",
+        cwd: repoRoot,
+      }),
+    );
+  });
+
+  it("returns null when neither saved state nor a valid heartbeat-backed thread exists", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toBeNull();
   });
 });

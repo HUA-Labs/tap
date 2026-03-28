@@ -15,7 +15,6 @@ import {
   resolveAgentName,
   inferRestartMode,
   cleanupHeadlessDispatch,
-  saveBridgeState,
   getBridgeRuntimeStateDir,
 } from "../engine/bridge.js";
 import { saveState } from "../state.js";
