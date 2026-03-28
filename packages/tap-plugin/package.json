@@ -1,9 +1,0 @@
-{
-  "name": "@hua-labs/tap-plugin",
-  "version": "0.1.0",
-  "private": true,
-  "description": "MCP server plugin for tap-comms multi-session orchestration",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1"
-  }
-}

@@ -23,7 +23,6 @@ import {
   type ReviewRound,
 } from "../engine/termination.js";
 import {
-  detectReviewRequest,
   scanInboxForReviews,
   parseInboxFilename,
   markAsProcessed,
@@ -33,7 +32,7 @@ import {
   type ReviewRequest,
 } from "../engine/review.js";
 import { createHeadlessLoop } from "../engine/headless-loop.js";
-import { buildUserInput } from "../../../../scripts/codex-app-server-bridge.ts";
+import { buildUserInput } from "../../../../scripts/codex-app-server-bridge.js";
 
 let tmpDir: string;
 let commsDir: string;
@@ -198,7 +197,9 @@ describe("tool instruction contract", () => {
     };
 
     // With heartbeat that maps 돌 to display label "돌 [claude]"
-    const heartbeats = { 돌: { agent: "돌 [claude]", updatedAt: new Date().toISOString() } };
+    const heartbeats = {
+      돌: { agent: "돌 [claude]", updatedAt: new Date().toISOString() },
+    };
     const output = buildUserInput(candidate, "묵", heartbeats);
 
     // tap_reply instruction must use raw sender "돌", not display "돌 [claude]"
@@ -299,7 +300,7 @@ describe("processed marker contract", () => {
   });
 
   it("scanInboxForReviews skips processed requests", () => {
-    const filePath = writeInboxFile(
+    writeInboxFile(
       "20260326-돌-묵-review-request-pr806.md",
       "PR #806 리뷰요청",
     );
@@ -349,9 +350,7 @@ describe("receipt routing contract", () => {
 
 describe("inbox filename parsing contract", () => {
   it("parses standard tap filename", () => {
-    const parsed = parseInboxFilename(
-      "20260326-별-돌-review-request-pr808.md",
-    );
+    const parsed = parseInboxFilename("20260326-별-돌-review-request-pr808.md");
     expect(parsed).not.toBeNull();
     expect(parsed!.sender).toBe("별");
     expect(parsed!.recipient).toBe("돌");
@@ -430,9 +429,7 @@ describe("headless loop runtime contract", () => {
       loop.stop();
 
       // After stop, running should be false
-      const stoppedData = JSON.parse(
-        fs.readFileSync(stateFilePath, "utf-8"),
-      );
+      const stoppedData = JSON.parse(fs.readFileSync(stateFilePath, "utf-8"));
       expect(stoppedData.running).toBe(false);
     } finally {
       if (origHeadless === undefined) {

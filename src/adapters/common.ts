@@ -29,11 +29,66 @@ export function probeCommand(candidates: string[]): CommandProbe {
     if (result.status === 0) {
       const version =
         `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() || null;
-      return { command: candidate, version };
+      const absolutePath = resolveCommandPath(candidate);
+      return { command: absolutePath ?? candidate, version };
     }
   }
 
   return { command: null, version: null };
+}
+
+/**
+ * Resolve a command name to its absolute filesystem path.
+ * Uses `where.exe` on Windows, `which` on Unix.
+ * Returns null if resolution fails (falls back to original candidate).
+ */
+function resolveCommandPath(command: string): string | null {
+  // Skip if already absolute
+  if (path.isAbsolute(command)) return command;
+
+  const whichCmd = process.platform === "win32" ? "where.exe" : "which";
+  try {
+    const result = spawnSync(whichCmd, [command], {
+      encoding: "utf-8",
+      windowsHide: true,
+    });
+    if (result.status !== 0) return null;
+    const lines = result.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) return null;
+
+    if (process.platform === "win32") {
+      // On Windows, where.exe may return extensionless shims before .cmd/.exe.
+      // Extensionless shims work with `shell: true` but fail with direct spawn.
+      // Always prefer .cmd/.exe results that are directly executable.
+      const candidateExt = path.extname(command).toLowerCase();
+
+      // 1. If candidate has extension, match it exactly
+      if (candidateExt) {
+        const extMatch = lines.find(
+          (l) =>
+            path.extname(l).toLowerCase() === candidateExt && fs.existsSync(l),
+        );
+        if (extMatch) return extMatch;
+      }
+
+      // 2. For bare names (no extension), prefer .cmd or .exe over extensionless
+      const executableMatch = lines.find(
+        (l) => /\.(cmd|exe|ps1)$/i.test(l) && fs.existsSync(l),
+      );
+      if (executableMatch) return executableMatch;
+    }
+
+    // Fallback: first existing result
+    const firstValid = lines.find((l) => fs.existsSync(l));
+    return firstValid ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function getHomeDir(): string {

@@ -10,6 +10,8 @@ import { initWorktreeCommand } from "./commands/init-worktree.js";
 import { dashboardCommand } from "./commands/dashboard.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { commsCommand } from "./commands/comms.js";
+import { watchCommand } from "./commands/watch.js";
+import { guiCommand } from "./commands/gui.js";
 import { version } from "./version.js";
 import { extractJsonFlag, emitResult, exitCode } from "./output.js";
 import { resetLoggedWarnings, setJsonMode } from "./utils.js";
@@ -33,6 +35,8 @@ Commands:
   down                  Stop all running bridge daemons
   comms <pull|push>     Sync comms directory with remote repo
   dashboard             Show unified ops dashboard
+  watch                 Monitor bridges and auto-restart stuck ones
+  gui                   Start local web dashboard (http)
   doctor                Diagnose tap infrastructure health
   serve                 Start tap MCP server (stdio)
   version               Show version
@@ -64,6 +68,8 @@ function normalizeCommandName(command: string | undefined): CommandName {
     case "dashboard":
     case "doctor":
     case "serve":
+    case "watch":
+    case "gui":
       return command;
     default:
       return "unknown";
@@ -132,6 +138,12 @@ async function main(): Promise<void> {
         break;
       case "doctor":
         result = await doctorCommand(commandArgs);
+        break;
+      case "watch":
+        result = await watchCommand(commandArgs);
+        break;
+      case "gui":
+        result = await guiCommand(commandArgs);
         break;
       case "serve": {
         // serve takes over stdio for MCP protocol — don't emit result on stdout

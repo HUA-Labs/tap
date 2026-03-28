@@ -8,6 +8,7 @@ export default defineConfig({
     "src/bridges/codex-app-server-auth-gateway.ts",
     "src/bridges/codex-app-server-bridge.ts",
     "src/bridges/codex-bridge-runner.ts",
+    "src/bridges/gemini-ide-companion-runner.ts",
   ],
   format: ["esm"],
   dts: true,

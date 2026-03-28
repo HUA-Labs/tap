@@ -292,13 +292,13 @@ describe("ensureCodexAppServer", () => {
 
     // Only the gateway hidden spawn should have been attempted — no app-server
     // spawn and no Get-NetTCPConnection port probe after the failure.
-    const hiddenSpawnCalls = spawnSyncMock.mock.calls.filter(
-      (call: [string, string[], Record<string, unknown>]) =>
-        call[1]?.some((a: string) => a.includes?.("Start-Process")),
-    );
-    const portProbeCalls = spawnSyncMock.mock.calls.filter(
-      (call: [string, string[], Record<string, unknown>]) =>
-        call[1]?.some((a: string) => a.includes?.("Get-NetTCPConnection")),
+    const hiddenSpawnCalls = (
+      spawnSyncMock.mock.calls as [string, string[], Record<string, unknown>][]
+    ).filter((call) => call[1]?.some((a) => a.includes?.("Start-Process")));
+    const portProbeCalls = (
+      spawnSyncMock.mock.calls as [string, string[], Record<string, unknown>][]
+    ).filter((call) =>
+      call[1]?.some((a) => a.includes?.("Get-NetTCPConnection")),
     );
     expect(hiddenSpawnCalls).toHaveLength(1); // gateway only, no app-server
     expect(portProbeCalls).toHaveLength(0); // aborted before port probe
@@ -337,22 +337,18 @@ describe("ensureCodexAppServer", () => {
     expect(spawnMock).not.toHaveBeenCalled();
 
     // Classify spawnSync calls by payload: hidden spawn vs port probe
-    const hiddenSpawnCalls = spawnSyncMock.mock.calls.filter(
-      (call: [string, string[], Record<string, unknown>]) => {
-        const cmdArg = call[1]?.find((a: string) =>
-          a.includes?.("Start-Process"),
-        );
-        return cmdArg != null;
-      },
-    );
-    const portProbeCalls = spawnSyncMock.mock.calls.filter(
-      (call: [string, string[], Record<string, unknown>]) => {
-        const cmdArg = call[1]?.find((a: string) =>
-          a.includes?.("Get-NetTCPConnection"),
-        );
-        return cmdArg != null;
-      },
-    );
+    const hiddenSpawnCalls = (
+      spawnSyncMock.mock.calls as [string, string[], Record<string, unknown>][]
+    ).filter((call) => {
+      const cmdArg = call[1]?.find((a) => a.includes?.("Start-Process"));
+      return cmdArg != null;
+    });
+    const portProbeCalls = (
+      spawnSyncMock.mock.calls as [string, string[], Record<string, unknown>][]
+    ).filter((call) => {
+      const cmdArg = call[1]?.find((a) => a.includes?.("Get-NetTCPConnection"));
+      return cmdArg != null;
+    });
 
     // Expect 2 hidden spawn calls: gateway + app-server
     expect(hiddenSpawnCalls).toHaveLength(2);
@@ -380,9 +376,9 @@ describe("ensureCodexAppServer", () => {
     );
     const wrapperPaths = newTapSpawnWrappers();
     expect(wrapperPaths).toHaveLength(2);
-    expect(wrapperPaths.every((wrapperPath) => wrapperPath.endsWith(".ps1"))).toBe(
-      true,
-    );
+    expect(
+      wrapperPaths.every((wrapperPath) => wrapperPath.endsWith(".ps1")),
+    ).toBe(true);
     const wrapperContents = wrapperPaths.map((wrapperPath) =>
       fs.readFileSync(wrapperPath, "utf8"),
     );

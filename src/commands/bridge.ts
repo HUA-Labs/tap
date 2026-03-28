@@ -16,6 +16,9 @@ import {
   resolveAppServerUrl,
   checkAppServerHealth,
   findNextAvailableAppServerPort,
+  waitForPortRelease,
+  getTurnInfo,
+  isTurnStuck,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
 import { getAdapter } from "../adapters/index.js";
@@ -57,6 +60,7 @@ Subcommands:
   stop              Stop all running bridges
   status            Show bridge status for all instances
   status <instance> Show bridge status for a specific instance
+  watch             Monitor bridges and auto-restart stuck/stale ones
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
@@ -479,29 +483,41 @@ async function bridgeStart(
         }
       : instance.headless;
 
-    const bridge = await startBridge({
-      instanceId,
-      runtime: instance.runtime,
-      stateDir: ctx.stateDir,
-      commsDir: ctx.commsDir,
-      bridgeScript,
-      platform: ctx.platform,
-      agentName: resolvedAgentName,
-      runtimeCommand,
-      appServerUrl,
-      repoRoot,
-      port: effectivePort ?? undefined,
-      manageAppServer,
-      noAuth,
-      headless,
-      busyMode,
-      pollSeconds,
-      reconnectSeconds,
-      messageLookbackMinutes,
-      threadId,
-      ephemeral,
-      processExistingMessages,
-    });
+    // Scope TAP_COLD_START_WARMUP so the bridge can bootstrap its first turn
+    const previousWarmup = process.env.TAP_COLD_START_WARMUP;
+    process.env.TAP_COLD_START_WARMUP = "true";
+    let bridge: BridgeState;
+    try {
+      bridge = await startBridge({
+        instanceId,
+        runtime: instance.runtime,
+        stateDir: ctx.stateDir,
+        commsDir: ctx.commsDir,
+        bridgeScript,
+        platform: ctx.platform,
+        agentName: resolvedAgentName,
+        runtimeCommand,
+        appServerUrl,
+        repoRoot,
+        port: effectivePort ?? undefined,
+        manageAppServer,
+        noAuth,
+        headless,
+        busyMode,
+        pollSeconds,
+        reconnectSeconds,
+        messageLookbackMinutes,
+        threadId,
+        ephemeral,
+        processExistingMessages,
+      });
+    } finally {
+      if (previousWarmup === undefined) {
+        delete process.env.TAP_COLD_START_WARMUP;
+      } else {
+        process.env.TAP_COLD_START_WARMUP = previousWarmup;
+      }
+    }
 
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
     log(`Log: ${path.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
@@ -737,6 +753,14 @@ async function bridgeStopOne(identifier: string): Promise<CommandResult> {
         logSuccess(
           `Managed app-server stopped (PID: ${appServer.pid ?? "-"}${gatewayNote})`,
         );
+        // Wait for port to be released so the next bridge start won't
+        // hit TIME_WAIT conflicts (port zombie prevention)
+        const released = await waitForPortRelease(appServer.url, 5_000);
+        if (!released) {
+          log(
+            `Warning: port for ${appServer.url} still in use after stop — next start may need a different port`,
+          );
+        }
       }
     }
   }
@@ -835,9 +859,11 @@ async function bridgeStopAll(): Promise<CommandResult> {
   }
 
   const stoppedAppServers: number[] = [];
+  const releasePorts: string[] = [];
   for (const appServer of managedAppServers.values()) {
     if (await stopManagedAppServer(appServer, ctx.platform)) {
       stoppedAppServers.push(appServer.pid!);
+      releasePorts.push(appServer.url);
       const gatewayNote =
         appServer.auth?.gatewayPid != null
           ? `, gateway PID ${appServer.auth.gatewayPid}`
@@ -846,6 +872,13 @@ async function bridgeStopAll(): Promise<CommandResult> {
         `Stopped app-server PID ${appServer.pid} (${appServer.url}${gatewayNote})`,
       );
     }
+  }
+
+  // Wait for all stopped app-server ports to release (parallel)
+  if (releasePorts.length > 0) {
+    await Promise.all(
+      releasePorts.map((url) => waitForPortRelease(url, 5_000)),
+    );
   }
 
   if (stateChanged) {
@@ -867,6 +900,161 @@ async function bridgeStopAll(): Promise<CommandResult> {
     message,
     warnings: [],
     data: { stopped, stoppedAppServers },
+  };
+}
+
+// ─── Subcommand: watch ───────────────────────────────────────
+
+/**
+ * Monitor all bridges and auto-restart stuck or stale ones.
+ * Runs a single check cycle and returns results.
+ * For continuous monitoring, call periodically (e.g., from a cron or loop).
+ */
+async function bridgeWatch(
+  _intervalSeconds: number,
+  stuckThresholdSeconds: number,
+): Promise<CommandResult> {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const { config: resolvedCfg } = resolveConfig({}, repoRoot);
+  const stateDir = resolvedCfg.stateDir;
+  const instanceIds = Object.keys(state.instances) as InstanceId[];
+
+  logHeader("@hua-labs/tap bridge watch");
+  log(
+    `Checking ${instanceIds.length} instance(s), stuck threshold: ${stuckThresholdSeconds}s`,
+  );
+
+  const restarted: string[] = [];
+  const cleaned: string[] = [];
+  const healthy: string[] = [];
+  const warnings: string[] = [];
+
+  for (const instanceId of instanceIds) {
+    const inst = state.instances[instanceId];
+    if (!inst?.installed || inst.bridgeMode !== "app-server") continue;
+
+    const status = getBridgeStatus(stateDir, instanceId);
+
+    if (status === "stale") {
+      log(`${instanceId}: stale (process dead) — cleaning up`);
+      cleaned.push(instanceId);
+      continue;
+    }
+
+    if (status === "stopped") {
+      log(`${instanceId}: stopped`);
+      continue;
+    }
+
+    // Running — check for stuck turns
+    if (isTurnStuck(stateDir, instanceId, stuckThresholdSeconds)) {
+      const turnInfo = getTurnInfo(stateDir, instanceId, stuckThresholdSeconds);
+      const ageStr =
+        turnInfo?.ageSeconds != null ? formatAge(turnInfo.ageSeconds) : "?";
+      log(
+        `${instanceId}: ⚠ STUCK turn ${turnInfo?.activeTurnId?.slice(0, 8)}... (${ageStr}) — restarting`,
+      );
+
+      const adapter = getAdapter(inst.runtime);
+      const ctx = {
+        ...createAdapterContext(state.commsDir, repoRoot),
+        instanceId,
+      };
+      const bridgeScript = adapter.resolveBridgeScript?.(ctx);
+
+      if (!bridgeScript) {
+        warnings.push(
+          `${instanceId}: cannot restart — bridge script not found`,
+        );
+        continue;
+      }
+
+      const bridgeState = loadBridgeState(stateDir, instanceId);
+      const { manageAppServer, noAuth } = inferRestartMode(bridgeState, {});
+
+      // Scope TAP_COLD_START_WARMUP around restart (mirrors bridgeRestart, PR #847)
+      const previousWarmup = process.env.TAP_COLD_START_WARMUP;
+      process.env.TAP_COLD_START_WARMUP = "true";
+      try {
+        const newBridgeState = await restartBridge({
+          instanceId,
+          runtime: inst.runtime,
+          stateDir: ctx.stateDir,
+          commsDir: ctx.commsDir,
+          bridgeScript,
+          platform: ctx.platform,
+          agentName: inst.agentName ?? undefined,
+          runtimeCommand: resolvedCfg.runtimeCommand,
+          appServerUrl: resolvedCfg.appServerUrl,
+          repoRoot,
+          port: inst.port ?? undefined,
+          headless: inst.headless,
+          drainTimeoutSeconds: 30,
+          manageAppServer,
+          noAuth,
+        });
+        // Backwrite new bridge state to state.json (mirrors bridgeRestart)
+        const updatedInst = { ...inst, bridge: newBridgeState };
+        const updatedState = updateInstanceState(
+          state,
+          instanceId,
+          updatedInst,
+        );
+        saveState(repoRoot, updatedState);
+        restarted.push(instanceId);
+        logSuccess(`${instanceId}: restarted`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`${instanceId}: restart failed — ${msg}`);
+        logError(`${instanceId}: restart failed — ${msg}`);
+      } finally {
+        if (previousWarmup === undefined) {
+          delete process.env.TAP_COLD_START_WARMUP;
+        } else {
+          process.env.TAP_COLD_START_WARMUP = previousWarmup;
+        }
+      }
+    } else {
+      healthy.push(instanceId);
+      log(`${instanceId}: healthy`);
+    }
+  }
+
+  const message =
+    [
+      restarted.length > 0 ? `Restarted: ${restarted.join(", ")}` : null,
+      cleaned.length > 0 ? `Cleaned stale: ${cleaned.join(", ")}` : null,
+      healthy.length > 0 ? `Healthy: ${healthy.join(", ")}` : null,
+    ]
+      .filter(Boolean)
+      .join(". ") || "No app-server bridges found";
+
+  log("");
+  log(message);
+
+  return {
+    ok: true,
+    command: "bridge",
+    code:
+      restarted.length > 0
+        ? "TAP_BRIDGE_WATCH_RESTARTED"
+        : "TAP_BRIDGE_WATCH_OK",
+    message,
+    warnings,
+    data: { restarted, cleaned, healthy },
   };
 }
 
@@ -983,6 +1171,22 @@ function bridgeStatusAll(): CommandResult {
       log(
         `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`,
       );
+    }
+
+    // Turn stuck detection (M160)
+    const turnInfo = getTurnInfo(stateDir, instanceId);
+    if (turnInfo?.activeTurnId) {
+      const ageStr =
+        turnInfo.ageSeconds != null ? formatAge(turnInfo.ageSeconds) : "?";
+      if (turnInfo.stuck) {
+        log(
+          `  ⚠ STUCK:    turn ${turnInfo.activeTurnId.slice(0, 8)}... active ${ageStr} (threshold: 5m)`,
+        );
+      } else {
+        log(
+          `  Turn:       ${turnInfo.activeTurnId.slice(0, 8)}... active ${ageStr}`,
+        );
+      }
     }
 
     bridges[instanceId] = {
@@ -1256,7 +1460,7 @@ async function bridgeRestart(
       ok: false,
       command: "bridge",
       instanceId,
-      runtime: instance.runtime,
+      runtime: inst.runtime,
       code: "TAP_INVALID_ARGUMENT",
       message: err instanceof Error ? err.message : String(err),
       warnings: [],
@@ -1283,23 +1487,34 @@ async function bridgeRestart(
       },
     );
 
-    const bridge = await restartBridge({
-      instanceId,
-      runtime: inst.runtime,
-      stateDir: ctx.stateDir,
-      commsDir: ctx.commsDir,
-      bridgeScript,
-      platform: ctx.platform,
-      agentName: inst.agentName ?? undefined,
-      runtimeCommand: resolvedConfig.runtimeCommand,
-      appServerUrl: resolvedConfig.appServerUrl,
-      repoRoot,
-      port: inst.port ?? undefined,
-      headless: inst.headless,
-      drainTimeoutSeconds: drainTimeout,
-      manageAppServer,
-      noAuth,
-    });
+    const previousColdStartWarmup = process.env.TAP_COLD_START_WARMUP;
+    process.env.TAP_COLD_START_WARMUP = "true";
+    let bridge: BridgeState;
+    try {
+      bridge = await restartBridge({
+        instanceId,
+        runtime: inst.runtime,
+        stateDir: ctx.stateDir,
+        commsDir: ctx.commsDir,
+        bridgeScript,
+        platform: ctx.platform,
+        agentName: inst.agentName ?? undefined,
+        runtimeCommand: resolvedConfig.runtimeCommand,
+        appServerUrl: resolvedConfig.appServerUrl,
+        repoRoot,
+        port: inst.port ?? undefined,
+        headless: inst.headless,
+        drainTimeoutSeconds: drainTimeout,
+        manageAppServer,
+        noAuth,
+      });
+    } finally {
+      if (previousColdStartWarmup === undefined) {
+        delete process.env.TAP_COLD_START_WARMUP;
+      } else {
+        process.env.TAP_COLD_START_WARMUP = previousColdStartWarmup;
+      }
+    }
 
     logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
 
@@ -1395,6 +1610,20 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
         return bridgeStatusOne(identifierArg);
       }
       return bridgeStatusAll();
+    }
+
+    case "watch": {
+      const intervalStr =
+        typeof flags["interval"] === "string" ? flags["interval"] : undefined;
+      const interval = intervalStr ? parseInt(intervalStr, 10) : 30;
+      const stuckThresholdStr =
+        typeof flags["stuck-threshold"] === "string"
+          ? flags["stuck-threshold"]
+          : undefined;
+      const stuckThreshold = stuckThresholdStr
+        ? parseInt(stuckThresholdStr, 10)
+        : 300;
+      return bridgeWatch(interval, stuckThreshold);
     }
 
     case "restart": {
