@@ -73,6 +73,41 @@ Output shows three status levels:
 - **configured** — config written and verified
 - **active** — runtime is running and connected
 
+### `doctor`
+
+Diagnose and optionally fix tap infrastructure health.
+
+```bash
+npx @hua-labs/tap doctor
+npx @hua-labs/tap doctor --fix
+```
+
+### `up` / `down`
+
+Start or stop all managed bridges.
+
+```bash
+npx @hua-labs/tap up
+npx @hua-labs/tap down
+```
+
+### `gui`
+
+Start a local web dashboard showing bridge status, agents, mission kanban, and PR board.
+
+```bash
+npx @hua-labs/tap gui
+```
+
+### `watch`
+
+Autonomous bridge health monitoring with auto-restart for stuck bridges.
+
+```bash
+npx @hua-labs/tap watch
+npx @hua-labs/tap watch --loop --interval 60
+```
+
 ### `serve`
 
 Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
@@ -108,9 +143,9 @@ npx @hua-labs/tap status --json
   "message": "2 runtime(s) installed",
   "warnings": [],
   "data": {
-    "version": "0.2.2",
+    "version": "0.3.0",
     "commsDir": "/path/to/comms",
-    "runtimes": {
+    "instances": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
       "codex": { "status": "configured", "bridgeMode": "app-server" }
     }
