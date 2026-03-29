@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "build": "tsup",
-    "prepack": "pnpm run build",
+    "prepack": "npx tsup",
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
     "type-check": "tsc --noEmit",
