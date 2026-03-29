@@ -212,6 +212,7 @@ export async function ensureCodexAppServer(
           effectiveUrl,
           options.repoRoot,
           logPath,
+          options.platform,
         );
       } catch (err) {
         throw new Error(
@@ -293,6 +294,7 @@ export async function ensureCodexAppServer(
         auth.upstreamUrl,
         options.repoRoot,
         logPath,
+        options.platform,
       );
     } catch (err) {
       if (auth.gatewayPid != null) {

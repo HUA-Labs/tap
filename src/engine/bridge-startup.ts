@@ -208,6 +208,7 @@ export async function startBridge(
             repoRoot,
             logPath,
             bridgeEnv,
+            options.platform,
           );
 
     if (!bridgePid) {

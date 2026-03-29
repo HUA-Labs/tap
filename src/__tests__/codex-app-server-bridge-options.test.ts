@@ -74,7 +74,7 @@ describe("codex app-server bridge option building", () => {
     ).toBe("fresh");
   });
 
-  it("keeps TAP_AGENT_ID unchanged for bridge routing", () => {
+  it("canonicalizes TAP_AGENT_ID to underscore form for bridge routing", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-agent-id-"));
     createdDirs.push(repoRoot);
     const commsDir = path.join(repoRoot, "hua-comms");
@@ -95,7 +95,7 @@ describe("codex app-server bridge option building", () => {
       "--run-once",
     ]);
 
-    expect(options.agentId).toBe("codex-reviewer");
+    expect(options.agentId).toBe("codex_reviewer");
   });
 
   it("builds a tokenized connect URL from the gateway token file without changing the public URL", () => {
@@ -138,6 +138,9 @@ describe("codex app-server bridge option building", () => {
     expect(
       recipientMatchesAgent("codex-reviewer", "codex-reviewer", "묵"),
     ).toBe(true);
+    expect(
+      recipientMatchesAgent("codex-reviewer", "codex_reviewer", "묵"),
+    ).toBe(true);
     expect(recipientMatchesAgent("묵", "codex-reviewer", "묵")).toBe(true);
     expect(recipientMatchesAgent("전체", "codex-reviewer", "묵")).toBe(true);
     expect(recipientMatchesAgent("결", "codex-reviewer", "묵")).toBe(false);
@@ -145,6 +148,9 @@ describe("codex app-server bridge option building", () => {
 
   it("treats messages from either id or display name as self-authored", () => {
     expect(isOwnMessageSender("codex-reviewer", "codex-reviewer", "묵")).toBe(
+      true,
+    );
+    expect(isOwnMessageSender("codex-reviewer", "codex_reviewer", "묵")).toBe(
       true,
     );
     expect(isOwnMessageSender("묵", "codex-reviewer", "묵")).toBe(true);

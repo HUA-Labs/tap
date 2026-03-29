@@ -212,8 +212,9 @@ describe("ensureCodexAppServer", () => {
 
     expect(spawnMock).toHaveBeenNthCalledWith(
       1,
-      process.execPath,
+      "nohup",
       expect.arrayContaining([
+        process.execPath,
         "--experimental-strip-types",
         expect.stringContaining("codex-app-server-auth-gateway.ts"),
       ]),
@@ -230,8 +231,9 @@ describe("ensureCodexAppServer", () => {
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       2,
-      "codex",
+      "nohup",
       [
+        "codex",
         "app-server",
         "--listen",
         expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+$/),

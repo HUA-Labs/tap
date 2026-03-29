@@ -307,7 +307,7 @@ function normalizeAgentToken(value) {
   if (!normalized || PLACEHOLDER_AGENT_VALUES.has(normalized)) {
     return null;
   }
-  return normalized;
+  return normalized.replace(/-/g, "_");
 }
 function resolveAgentId(preferredAgentName) {
   return normalizeAgentToken(process.env.TAP_AGENT_ID) ?? normalizeAgentToken(preferredAgentName) ?? "unknown";
@@ -479,14 +479,18 @@ function recipientMatchesAgent(recipient, agentId, agentName) {
   if (!normalizedRecipient) {
     return false;
   }
-  return normalizedRecipient === "\uC804\uCCB4" || normalizedRecipient === "all" || normalizedRecipient === agentId || normalizedRecipient === agentName;
+  const canonicalRecipient = normalizedRecipient.replace(/-/g, "_");
+  const canonicalAgentId = agentId.trim().replace(/-/g, "_");
+  return normalizedRecipient === "\uC804\uCCB4" || normalizedRecipient === "all" || canonicalRecipient === canonicalAgentId || normalizedRecipient === agentName;
 }
 function isOwnMessageSender(sender, agentId, agentName) {
   const normalizedSender = sender.trim();
   if (!normalizedSender) {
     return false;
   }
-  return normalizedSender === agentId || normalizedSender === agentName;
+  const canonicalSender = normalizedSender.replace(/-/g, "_");
+  const canonicalAgentId = agentId.trim().replace(/-/g, "_");
+  return canonicalSender === canonicalAgentId || normalizedSender === agentName;
 }
 function getInboxRoute(fileName) {
   const stem = fileName.replace(/\.md$/i, "");

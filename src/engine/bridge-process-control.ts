@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import type { AppServerState, Platform } from "../types.js";
 import { delay } from "./bridge-port-network.js";
 import { removeFileIfExists } from "./bridge-file-io.js";
@@ -6,6 +6,29 @@ import { removeFileIfExists } from "./bridge-file-io.js";
 export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getUnixProcessGroupId(pid: number): number | null {
+  const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+    encoding: "utf-8",
+    windowsHide: true,
+  });
+
+  if (!result || result.status !== 0) {
+    return null;
+  }
+
+  const parsed = Number.parseInt((result.stdout ?? "").trim(), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isUnixProcessGroupAlive(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
     return true;
   } catch {
     return false;
@@ -24,11 +47,21 @@ export async function terminateProcess(
     if (platform === "win32") {
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
     } else {
-      process.kill(pid, "SIGTERM");
+      const processGroupId = getUnixProcessGroupId(pid);
+      const signalTarget = processGroupId != null ? -processGroupId : pid;
+      const isTargetAlive = (): boolean =>
+        processGroupId != null
+          ? isUnixProcessGroupAlive(processGroupId)
+          : isProcessAlive(pid);
+
+      process.kill(signalTarget, "SIGTERM");
       await delay(2_000);
-      if (isProcessAlive(pid)) {
-        process.kill(pid, "SIGKILL");
+      if (isTargetAlive()) {
+        process.kill(signalTarget, "SIGKILL");
+        await delay(500);
       }
+
+      return !isTargetAlive();
     }
   } catch {
     // Best effort. The caller only needs a boolean outcome.
