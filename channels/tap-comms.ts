@@ -22,12 +22,14 @@ import {
   RECEIPTS_LOCK,
   HEARTBEATS_LOCK,
   debug,
+  getAgentId,
   getAgentName,
   setAgentName,
   getRecentSenders,
   getLatestReviewDir,
   getLastActivityTime,
   updateActivityTime,
+  encodeRouteSegment,
   type ChannelSource,
 } from "./tap-utils.js";
 import {
@@ -368,21 +370,23 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       cc?: string[];
     };
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const senderId = getAgentId();
     const agentName = getAgentName();
-    const filename = `${date}-${agentName}-${to}-${subject}.md`;
+    const senderAddress = senderId !== "unknown" ? senderId : agentName;
+    const filename = `${date}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(to)}-${encodeRouteSegment(subject)}.md`;
     const filepath = join(INBOX_DIR, filename);
     const sentAt = new Date().toISOString();
-    const frontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: ${to}\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
+    const frontmatter = `---\ntype: inbox\nfrom: ${senderAddress}\nfrom_name: ${agentName}\nto: ${to}\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}\n\n` : "";
     writeFileSync(filepath, frontmatter + ccHeader + content, "utf-8");
-    dbInsertMessage(filename, agentName, to, subject, "inbox", Date.now());
+    dbInsertMessage(filename, senderAddress, to, subject, "inbox", Date.now());
 
     const sent = [`Sent to ${to}: ${filename}`];
     if (cc?.length) {
       for (const recipient of cc) {
         try {
-          const ccFilename = `${date}-${agentName}-${recipient}-${subject}.md`;
-          const ccFrontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: ${recipient}\nsubject: ${subject}\nsent_at: ${sentAt}\ncc_of: ${to}\n---\n\n`;
+          const ccFilename = `${date}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(recipient)}-${encodeRouteSegment(subject)}.md`;
+          const ccFrontmatter = `---\ntype: inbox\nfrom: ${senderAddress}\nfrom_name: ${agentName}\nto: ${recipient}\nsubject: ${subject}\nsent_at: ${sentAt}\ncc_of: ${to}\n---\n\n`;
           writeFileSync(
             join(INBOX_DIR, ccFilename),
             `${ccFrontmatter}> CC from message to ${to}\n\n${content}`,
@@ -390,7 +394,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           );
           dbInsertMessage(
             ccFilename,
-            agentName,
+            senderAddress,
             recipient,
             subject,
             "inbox",
@@ -415,11 +419,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     };
     const sentAt = new Date().toISOString();
     const date = sentAt.slice(0, 10).replace(/-/g, "");
+    const senderId = getAgentId();
     const agentName = getAgentName();
-    const filename = `${date}-${agentName}-전체-${subject}.md`;
-    const frontmatter = `---\ntype: inbox\nfrom: ${agentName}\nto: 전체\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
+    const senderAddress = senderId !== "unknown" ? senderId : agentName;
+    const filename = `${date}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment("전체")}-${encodeRouteSegment(subject)}.md`;
+    const frontmatter = `---\ntype: inbox\nfrom: ${senderAddress}\nfrom_name: ${agentName}\nto: 전체\nsubject: ${subject}\nsent_at: ${sentAt}\n---\n\n`;
     writeFileSync(join(INBOX_DIR, filename), frontmatter + content, "utf-8");
-    dbInsertMessage(filename, agentName, "전체", subject, "inbox", Date.now());
+    dbInsertMessage(
+      filename,
+      senderAddress,
+      "전체",
+      subject,
+      "inbox",
+      Date.now(),
+    );
     return { content: [{ type: "text", text: `Broadcast sent: ${filename}` }] };
   }
 

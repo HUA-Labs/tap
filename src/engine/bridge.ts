@@ -38,7 +38,10 @@ export {
 export {
   cleanupStaleWindowsSpawnWrappers,
   buildWindowsDetachedWrapperScript,
+  WINDOWS_DETACHED_LIVENESS_TIMEOUT_MS,
+  WINDOWS_DETACHED_LIVENESS_POLL_MS,
   startWindowsDetachedProcess,
+  waitForWindowsDetachedProcessLiveness,
   startWindowsCodexAppServer,
   findListeningProcessId,
 } from "./bridge-windows-spawn.js";

@@ -29,7 +29,33 @@ export const SERVER_START = Date.now();
 
 // ── Agent Name ──────────────────────────────────────────────────────────
 
+const PLACEHOLDER_NAMES = new Set(["unknown", "unnamed", "<set-per-session>"]);
+
+function canonicalizeAgentId(value: string): string {
+  return value.trim().replace(/-/g, "_");
+}
+
+function resolveInitialId(): string {
+  const envId = process.env.TAP_AGENT_ID;
+  if (envId && !PLACEHOLDER_NAMES.has(envId)) return canonicalizeAgentId(envId);
+
+  const envName = process.env.TAP_AGENT_NAME;
+  if (envName && !PLACEHOLDER_NAMES.has(envName)) {
+    return canonicalizeAgentId(envName);
+  }
+
+  return "unknown";
+}
+
+let _agentId = resolveInitialId();
 let _agentName = process.env.TAP_AGENT_NAME || "unknown";
+
+export function getAgentId(): string {
+  if (_agentId !== "unknown") {
+    return _agentId;
+  }
+  return canonicalizeAgentId(_agentName || "unknown");
+}
 
 export function getAgentName(): string {
   return _agentName;
@@ -91,26 +117,108 @@ export function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
+function getAddressAliases(value: string): Set<string> {
+  const normalized = value.trim();
+  if (!normalized) return new Set();
+
+  return new Set([
+    normalized,
+    normalized.replace(/-/g, "_"),
+    normalized.replace(/_/g, "-"),
+  ]);
+}
+
+export function encodeRouteSegment(value: string): string {
+  return encodeURIComponent(value.trim()).replace(/-/g, "%2D");
+}
+
+export function decodeRouteSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function parseFilename(filename: string): ParsedFilename | null {
-  const match = filename.match(/^\d{8}-(.+?)-(.+?)-(.+)\.md$/);
-  if (match) {
-    return { from: match[1], to: match[2], subject: match[3] };
+  const stem = filename.replace(/\.md$/i, "");
+  const dated = stem.match(/^(\d{8})-(.+)$/);
+  if (dated) {
+    const parts = dated[2].split("-");
+    if (parts.length >= 3) {
+      return {
+        from: decodeRouteSegment(parts[0] || "?"),
+        to: decodeRouteSegment(parts[1] || "?"),
+        subject: decodeRouteSegment(parts.slice(2).join("-") || "?"),
+      };
+    }
   }
 
-  const parts = filename.replace(/\.md$/, "").split("-");
+  const parts = stem.split("-");
   if (parts.length >= 4) {
     return {
-      from: parts[1] || "?",
-      to: parts[2] || "?",
-      subject: parts.slice(3).join("-") || "?",
+      from: decodeRouteSegment(parts[1] || "?"),
+      to: decodeRouteSegment(parts[2] || "?"),
+      subject: decodeRouteSegment(parts.slice(3).join("-") || "?"),
     };
   }
 
   return null;
 }
 
+export function parseInboxEnvelope(
+  filename: string,
+  content?: string,
+): ParsedFilename | null {
+  if (content) {
+    const frontmatter = stripBom(content).match(
+      /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/,
+    );
+    if (frontmatter) {
+      let from = "";
+      let to = "";
+      let subject = "";
+
+      for (const line of frontmatter[1].split(/\r?\n/)) {
+        const separator = line.indexOf(":");
+        if (separator <= 0) continue;
+
+        const key = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+
+        if (key === "from") from = value;
+        if (key === "to") to = value;
+        if (key === "subject") subject = value;
+      }
+
+      if (from && to && subject) {
+        return { from, to, subject };
+      }
+    }
+  }
+
+  return parseFilename(filename);
+}
+
 export function isForMe(to: string): boolean {
-  return to === _agentName || to === "전체" || to === "all";
+  const normalized = to.trim();
+  if (!normalized) return false;
+  if (normalized === "전체" || normalized === "all") return true;
+
+  return (
+    getAddressAliases(getAgentId()).has(normalized) ||
+    getAddressAliases(getAgentName()).has(normalized)
+  );
+}
+
+export function isOwnSender(from: string): boolean {
+  const normalized = from.trim();
+  if (!normalized) return false;
+
+  return (
+    getAddressAliases(getAgentId()).has(normalized) ||
+    getAddressAliases(getAgentName()).has(normalized)
+  );
 }
 
 export function normalizeSources(value: unknown): ChannelSource[] {

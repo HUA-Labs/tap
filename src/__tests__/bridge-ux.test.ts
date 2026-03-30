@@ -107,12 +107,23 @@ describe("agent-name persistence logic", () => {
  * Tests the routing rules without module-level state.
  */
 function isForMe(to: string, agentId: string, agentName: string): boolean {
-  return to === agentId || to === agentName || to === "전체" || to === "all";
+  const aliases = new Set([
+    agentId,
+    agentId.replace(/-/g, "_"),
+    agentId.replace(/_/g, "-"),
+    agentName,
+  ]);
+  return to === "전체" || to === "all" || aliases.has(to);
 }
 
 describe("isForMe — id-based routing", () => {
   it("matches by agent id", () => {
     expect(isForMe("codex_reviewer", "codex_reviewer", "묵")).toBe(true);
+  });
+
+  it("matches hyphen/underscore aliases for the same agent id", () => {
+    expect(isForMe("codex-reviewer", "codex_reviewer", "묵")).toBe(true);
+    expect(isForMe("codex_reviewer", "codex-reviewer", "묵")).toBe(true);
   });
 
   it("matches by agent name (fallback)", () => {

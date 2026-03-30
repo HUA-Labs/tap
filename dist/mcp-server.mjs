@@ -6895,29 +6895,84 @@ function debug(message) {
 function stripBom(text) {
   return text.charCodeAt(0) === 65279 ? text.slice(1) : text;
 }
+function getAddressAliases(value) {
+  const normalized = value?.trim();
+  if (!normalized) return /* @__PURE__ */ new Set();
+  return new Set([
+    normalized,
+    normalized.replace(/-/g, "_"),
+    normalized.replace(/_/g, "-")
+  ]);
+}
+function encodeRouteSegment(value) {
+  return encodeURIComponent(value.trim()).replace(/-/g, "%2D");
+}
+function decodeRouteSegment(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 function parseFilename(filename) {
   const withoutExt = filename.replace(/\.md$/, "");
   const dateMatch = withoutExt.match(/^(\d{8})-(.+)$/);
-  if (!dateMatch) return null;
-  const rest = dateMatch[2];
-  const cjkMatch = rest.match(
-    /^([\u3131-\uD79DA-Za-z][\w]*?)-([\u3131-\uD79DA-Za-z][\w]*?)-(.+)$/
-  );
-  if (cjkMatch) {
-    return { from: cjkMatch[1], to: cjkMatch[2], subject: cjkMatch[3] };
+  if (dateMatch) {
+    const parts = dateMatch[2].split("-");
+    if (parts.length >= 3) {
+      return {
+        from: decodeRouteSegment(parts[0] || "?"),
+        to: decodeRouteSegment(parts[1] || "?"),
+        subject: decodeRouteSegment(parts.slice(2).join("-") || "?")
+      };
+    }
+    return null;
   }
-  const parts = rest.split("-");
-  if (parts.length >= 3) {
+  const parts = withoutExt.split("-");
+  if (parts.length >= 4) {
     return {
-      from: parts[0] || "?",
-      to: parts[1] || "?",
-      subject: parts.slice(2).join("-") || "?"
+      from: decodeRouteSegment(parts[1] || "?"),
+      to: decodeRouteSegment(parts[2] || "?"),
+      subject: decodeRouteSegment(parts.slice(3).join("-") || "?")
     };
   }
   return null;
 }
+function parseInboxEnvelope(filename, content) {
+  if (content) {
+    const frontmatter = stripBom(content).match(
+      /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
+    );
+    if (frontmatter) {
+      let from = "";
+      let to = "";
+      let subject = "";
+      for (const line of frontmatter[1].split(/\r?\n/)) {
+        const separator = line.indexOf(":");
+        if (separator <= 0) continue;
+        const key = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+        if (key === "from") from = value;
+        if (key === "to") to = value;
+        if (key === "subject") subject = value;
+      }
+      if (from && to && subject) {
+        return { from, to, subject };
+      }
+    }
+  }
+  return parseFilename(filename);
+}
 function isForMe(to) {
-  return to === _agentId || to === _agentName || to === "\uC804\uCCB4" || to === "all";
+  const normalized = to?.trim();
+  if (!normalized) return false;
+  if (normalized === "\uC804\uCCB4" || normalized === "all") return true;
+  return getAddressAliases(getAgentId()).has(normalized) || getAddressAliases(getAgentName()).has(normalized);
+}
+function isOwnTapSender(from) {
+  const normalized = from?.trim();
+  if (!normalized) return false;
+  return getAddressAliases(getAgentId()).has(normalized) || getAddressAliases(getAgentName()).has(normalized);
 }
 function normalizeSources(value) {
   if (!Array.isArray(value) || value.length === 0) {
@@ -7158,10 +7213,9 @@ function getUnreadItems(options) {
       let to = "all";
       let subject = filename.replace(/\.md$/, "");
       if (source === "inbox") {
-        const parsed = parseFilename(filename);
+        const parsed = parseInboxEnvelope(filename, content);
         if (!parsed || !isForMe(parsed.to)) continue;
-        if (parsed.from === getAgentId() || parsed.from === getAgentName())
-          continue;
+        if (isOwnTapSender(parsed.from)) continue;
         from = resolveAgentLabel(parsed.from, heartbeatStore);
         to = resolveAgentLabel(parsed.to, heartbeatStore);
         subject = parsed.subject;
@@ -21452,11 +21506,11 @@ async function waitForFileReady(filepath) {
   return null;
 }
 function isOwnMessageArtifact(source, filename, parsed) {
-  const agentId = getAgentId();
-  const agentName = getAgentName();
-  if (parsed && (parsed.from === agentId || parsed.from === agentName)) {
+  if (parsed && isOwnTapSender(parsed.from)) {
     return true;
   }
+  const agentId = getAgentId();
+  const agentName = getAgentName();
   if (source === "reviews") {
     return filename.endsWith(`-${agentId}.md`) || filename.endsWith(`-${agentName}.md`);
   }
@@ -21476,9 +21530,6 @@ async function processWatchFile(dir, source, filename, mcp2) {
   const key = getSourceKey(source, filename);
   if (notifiedFiles.has(key) || inFlightFiles.has(key) || readFiles.has(key))
     return false;
-  const parsed = parseFilename(filename);
-  if (source === "inbox" && (!parsed || !isForMe(parsed.to))) return false;
-  if (isOwnMessageArtifact(source, filename, parsed)) return false;
   inFlightFiles.add(key);
   try {
     const filepath = join4(dir, filename);
@@ -21488,6 +21539,9 @@ async function processWatchFile(dir, source, filename, mcp2) {
       return false;
     }
     if (!file2) return false;
+    const parsed = source === "inbox" ? parseInboxEnvelope(filename, file2.content) : parseFilename(filename);
+    if (source === "inbox" && (!parsed || !isForMe(parsed.to))) return false;
+    if (isOwnMessageArtifact(source, filename, parsed)) return false;
     const rawFrom = parsed?.from || source;
     const rawTo = parsed?.to || "all";
     const from = parsed ? resolveAgentLabel(parsed.from) : source;
@@ -22157,17 +22211,34 @@ Recent active names: ${activeList}`;
         displayNameCount.set(hb.agent, ids);
       }
     }
+    const findKnownAlias = (value) => {
+      const normalized = value?.trim();
+      if (!normalized) return null;
+      for (const candidate of knownAgents) {
+        if (getAddressAliases(candidate).has(normalized)) {
+          return candidate;
+        }
+      }
+      return null;
+    };
     const knownList = [...knownAgents].filter((n) => n !== "unknown").join(", ");
     let resolvedTo = to;
     if (!broadcastNames.has(to)) {
-      if (!knownAgents.has(to)) {
+      const aliasMatch = knownAgents.has(to) ? to : findKnownAlias(to);
+      if (!aliasMatch) {
         recipientWarnings.push(
           `\u26A0\uFE0F WARNING: "${to}" is not a known agent. Check spelling. Known: ${knownList}`
         );
       } else {
-        const ids = displayNameCount.get(to);
+        resolvedTo = aliasMatch;
+        if (aliasMatch !== to) {
+          recipientWarnings.push(
+            `\u26A0\uFE0F Routed "${to}" \u2192 "${resolvedTo}" (alias match).`
+          );
+        }
+        const ids = displayNameCount.get(aliasMatch);
         if (ids && ids.length > 1) {
-          resolvedTo = resolveToMostRecent2(to);
+          resolvedTo = resolveToMostRecent2(aliasMatch);
           recipientWarnings.push(
             `\u26A0\uFE0F Routed "${to}" \u2192 "${resolvedTo}" (most recent of ${ids.join(", ")}).`
           );
@@ -22177,12 +22248,13 @@ Recent active names: ${activeList}`;
     if (cc?.length) {
       for (const recipient of cc) {
         if (broadcastNames.has(recipient)) continue;
-        if (!knownAgents.has(recipient)) {
+        const aliasMatch = knownAgents.has(recipient) ? recipient : findKnownAlias(recipient);
+        if (!aliasMatch) {
           recipientWarnings.push(
             `\u26A0\uFE0F WARNING: CC "${recipient}" is not a known agent. Known: ${knownList}`
           );
         } else {
-          const ids = displayNameCount.get(recipient);
+          const ids = displayNameCount.get(aliasMatch);
           if (ids && ids.length > 1) {
             recipientWarnings.push(
               `\u26A0\uFE0F WARNING: CC "${recipient}" matches multiple agents (${ids.join(", ")}). Use agent ID.`
@@ -22194,15 +22266,27 @@ Recent active names: ${activeList}`;
     const date4 = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "");
     const fromId = getAgentId();
     const fromName = getAgentName();
-    const filename = `${date4}-${fromId}-${resolvedTo}-${subject}.md`;
+    const senderAddress = fromId !== "unknown" ? fromId : fromName;
+    const sentAt = (/* @__PURE__ */ new Date()).toISOString();
+    const filename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(resolvedTo)}-${encodeRouteSegment(subject)}.md`;
     const filepath = join5(INBOX_DIR, filename);
+    const frontmatter = `---
+type: inbox
+from: ${senderAddress}
+from_name: ${fromName}
+to: ${resolvedTo}
+subject: ${subject}
+sent_at: ${sentAt}
+---
+
+`;
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}
 
 ` : "";
-    writeFileSync2(filepath, ccHeader + content, "utf-8");
+    writeFileSync2(filepath, frontmatter + ccHeader + content, "utf-8");
     dbInsertMessage(
       filename,
-      fromName,
+      senderAddress,
       resolvedTo,
       subject,
       "inbox",
@@ -22213,23 +22297,35 @@ Recent active names: ${activeList}`;
       const writtenFiles = /* @__PURE__ */ new Set([filename]);
       for (const recipient of cc) {
         try {
-          const resolvedRecipient = broadcastNames.has(recipient) ? recipient : resolveToMostRecent2(recipient);
-          const ccFilename = `${date4}-${fromId}-${resolvedRecipient}-${subject}.md`;
+          const aliasMatch = broadcastNames.has(recipient) ? recipient : knownAgents.has(recipient) ? recipient : findKnownAlias(recipient) ?? recipient;
+          const resolvedRecipient = broadcastNames.has(aliasMatch) ? aliasMatch : displayNameCount.get(aliasMatch)?.length > 1 ? resolveToMostRecent2(aliasMatch) : aliasMatch;
+          const ccFilename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(resolvedRecipient)}-${encodeRouteSegment(subject)}.md`;
           if (writtenFiles.has(ccFilename)) {
             sent.push(`CC to ${recipient}: skipped (resolves to same target)`);
             continue;
           }
           writtenFiles.add(ccFilename);
+          const ccFrontmatter = `---
+type: inbox
+from: ${senderAddress}
+from_name: ${fromName}
+to: ${resolvedRecipient}
+subject: ${subject}
+sent_at: ${sentAt}
+cc_of: ${resolvedTo}
+---
+
+`;
           writeFileSync2(
             join5(INBOX_DIR, ccFilename),
-            `> CC from message to ${to}
+            `${ccFrontmatter}> CC from message to ${to}
 
 ${content}`,
             "utf-8"
           );
           dbInsertMessage(
             ccFilename,
-            fromName,
+            senderAddress,
             resolvedRecipient,
             subject,
             "inbox",
@@ -22248,14 +22344,26 @@ ${content}`,
   }
   if (req.params.name === "tap_broadcast") {
     const { subject, content } = req.params.arguments;
-    const date4 = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "");
+    const sentAt = (/* @__PURE__ */ new Date()).toISOString();
+    const date4 = sentAt.slice(0, 10).replace(/-/g, "");
     const broadcastId = getAgentId();
     const broadcastName = getAgentName();
-    const filename = `${date4}-${broadcastId}-\uC804\uCCB4-${subject}.md`;
-    writeFileSync2(join5(INBOX_DIR, filename), content, "utf-8");
+    const senderAddress = broadcastId !== "unknown" ? broadcastId : broadcastName;
+    const filename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment("\uC804\uCCB4")}-${encodeRouteSegment(subject)}.md`;
+    const frontmatter = `---
+type: inbox
+from: ${senderAddress}
+from_name: ${broadcastName}
+to: \uC804\uCCB4
+subject: ${subject}
+sent_at: ${sentAt}
+---
+
+`;
+    writeFileSync2(join5(INBOX_DIR, filename), frontmatter + content, "utf-8");
     dbInsertMessage(
       filename,
-      broadcastName,
+      senderAddress,
       "\uC804\uCCB4",
       subject,
       "inbox",

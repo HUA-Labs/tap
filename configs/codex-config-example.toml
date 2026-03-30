@@ -13,11 +13,14 @@ multi_agent = true
 
 [mcp_servers.tap]
 command = "C:/Users/echon/AppData/Roaming/npm/bun.cmd"
+# Historical HUA ops example path. For a standalone checkout, replace with the
+# absolute path to this repo's local `packages/tap-plugin/channels/tap-comms.ts`.
 args = ["D:/HUA/hua-platform/packages/tap-plugin/channels/tap-comms.ts"]
 
 [mcp_servers.tap.env]
 # Override per session with tap_set_name when needed.
 TAP_AGENT_NAME = "<set-per-session>"
+# Historical HUA ops comms dir example. Point this at the active local comms dir.
 TAP_COMMS_DIR = "D:/HUA/hua-comms"
 
 [projects.'\\?\D:\HUA']

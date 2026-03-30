@@ -2387,6 +2387,27 @@ function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = pro
   }
   return pid;
 }
+async function waitForWindowsDetachedProcessLiveness(
+  pid,
+  timeoutMs = 1500,
+  pollMs = 100
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    await delay(pollMs);
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startWindowsDetachedProcess(
@@ -3484,6 +3505,15 @@ async function startBridge(options) {
     );
     if (!bridgePid) {
       throw new Error(`Failed to spawn bridge process for ${instanceId}`);
+    }
+    if (options.platform === "win32") {
+      const alive = await waitForWindowsDetachedProcessLiveness(bridgePid);
+      if (!alive) {
+        throw new Error(
+          `Bridge process for ${instanceId} exited immediately after Windows detached spawn.
+Check ${logPath} and ${stderrLogFilePath(logPath)}.`
+        );
+      }
     }
     const state = {
       pid: bridgePid,
