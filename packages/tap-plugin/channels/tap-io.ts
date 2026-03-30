@@ -19,9 +19,9 @@ import {
   HEARTBEATS_PATH,
   INBOX_DIR,
   stripBom,
-  parseFilename,
+  parseInboxEnvelope,
   isForMe,
-  getAgentName,
+  isOwnSender,
   getSourceDir,
   getSourceKey,
   normalizeSources,
@@ -196,9 +196,9 @@ export function getUnreadItems(options?: {
       let subject = filename.replace(/\.md$/, "");
 
       if (source === "inbox") {
-        const parsed = parseFilename(filename);
+        const parsed = parseInboxEnvelope(filename, content);
         if (!parsed || !isForMe(parsed.to)) continue;
-        if (parsed.from === getAgentName()) continue;
+        if (isOwnSender(parsed.from)) continue;
         from = parsed.from;
         to = parsed.to;
         subject = parsed.subject;

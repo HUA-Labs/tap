@@ -14,6 +14,9 @@ Use this checklist to attach a fresh Codex session to HUA review and ops work.
 - Repo-local MCP config: `D:/HUA/hua-platform/.mcp.json`
 - Repo-local instructions: `D:/HUA/hua-platform/AGENTS.md`
 
+Note: the `D:/HUA/hua-platform` paths above are historical HUA ops examples.
+For a standalone checkout, translate them to the current local repo paths.
+
 Verify:
 
 - model and reasoning effort

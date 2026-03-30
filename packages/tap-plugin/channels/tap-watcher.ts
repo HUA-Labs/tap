@@ -7,9 +7,9 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   SERVER_START,
   stripBom,
-  parseFilename,
+  parseInboxEnvelope,
   isForMe,
-  getAgentName,
+  isOwnSender,
   getSourceKey,
   debug,
   type ChannelSource,
@@ -33,13 +33,6 @@ export function watchDir(dir: string, source: ChannelSource, mcp: Server) {
     if (notifiedFiles.has(key)) return;
     notifiedFiles.add(key);
 
-    const parsed = parseFilename(filename);
-
-    if (source === "inbox") {
-      if (!parsed || !isForMe(parsed.to)) return;
-      if (parsed.from === getAgentName()) return; // skip echo-back
-    }
-
     const filepath = join(dir, filename);
     try {
       const mtime = statSync(filepath).mtimeMs;
@@ -53,6 +46,13 @@ export function watchDir(dir: string, source: ChannelSource, mcp: Server) {
       content = stripBom(readFileSync(filepath, "utf-8"));
     } catch {
       return;
+    }
+
+    const parsed = parseInboxEnvelope(filename, content);
+
+    if (source === "inbox") {
+      if (!parsed || !isForMe(parsed.to)) return;
+      if (isOwnSender(parsed.from)) return; // skip echo-back
     }
 
     const from = parsed?.from || source;

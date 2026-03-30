@@ -32,7 +32,7 @@ import {
   type ReviewRequest,
 } from "../engine/review.js";
 import { createHeadlessLoop } from "../engine/headless-loop.js";
-import { buildUserInput } from "../../../../scripts/codex-app-server-bridge.js";
+import { buildUserInput } from "../../scripts/codex-app-server-bridge.ts";
 
 let tmpDir: string;
 let commsDir: string;

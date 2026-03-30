@@ -22,22 +22,80 @@ const ARCHIVE_DIR = join(TEST_DIR, "archive");
 
 type ParsedFilename = { from: string; to: string; subject: string };
 
+function decodeRouteSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function parseFilename(filename: string): ParsedFilename | null {
-  const match = filename.match(/^\d{8}-(.+?)-(.+?)-(.+)\.md$/);
-  if (match) return { from: match[1], to: match[2], subject: match[3] };
-  const parts = filename.replace(/\.md$/, "").split("-");
+  const stem = filename.replace(/\.md$/i, "");
+  const dated = stem.match(/^(\d{8})-(.+)$/);
+  if (dated) {
+    const parts = dated[2].split("-");
+    if (parts.length >= 3) {
+      return {
+        from: decodeRouteSegment(parts[0] || "?"),
+        to: decodeRouteSegment(parts[1] || "?"),
+        subject: decodeRouteSegment(parts.slice(2).join("-") || "?"),
+      };
+    }
+  }
+
+  const parts = stem.split("-");
   if (parts.length >= 4) {
     return {
-      from: parts[1] || "?",
-      to: parts[2] || "?",
-      subject: parts.slice(3).join("-") || "?",
+      from: decodeRouteSegment(parts[1] || "?"),
+      to: decodeRouteSegment(parts[2] || "?"),
+      subject: decodeRouteSegment(parts.slice(3).join("-") || "?"),
     };
   }
   return null;
 }
 
-function isForMe(to: string, agentName: string): boolean {
-  return to === agentName || to === "전체" || to === "all";
+function parseInboxEnvelope(
+  filename: string,
+  content?: string,
+): ParsedFilename | null {
+  if (content) {
+    const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+    if (frontmatter) {
+      let from = "";
+      let to = "";
+      let subject = "";
+
+      for (const line of frontmatter[1].split(/\r?\n/)) {
+        const separator = line.indexOf(":");
+        if (separator <= 0) continue;
+
+        const key = line.slice(0, separator).trim();
+        const value = line.slice(separator + 1).trim();
+
+        if (key === "from") from = value;
+        if (key === "to") to = value;
+        if (key === "subject") subject = value;
+      }
+
+      if (from && to && subject) {
+        return { from, to, subject };
+      }
+    }
+  }
+
+  return parseFilename(filename);
+}
+
+function isForMe(to: string, agentId: string, agentName: string): boolean {
+  const aliases = new Set([
+    agentId,
+    agentId.replace(/-/g, "_"),
+    agentId.replace(/_/g, "-"),
+    agentName,
+  ]);
+
+  return to === "전체" || to === "all" || aliases.has(to);
 }
 
 function stripBom(text: string): string {
@@ -66,11 +124,45 @@ describe("happy path", () => {
     expect(result).toEqual({ from: "초", to: "매", subject: "m56-checkin" });
   });
 
-  it("isForMe matches agent name, 전체, and all", () => {
-    expect(isForMe("매", "매")).toBe(true);
-    expect(isForMe("전체", "매")).toBe(true);
-    expect(isForMe("all", "매")).toBe(true);
-    expect(isForMe("초", "매")).toBe(false);
+  it("parseFilename decodes delimiter-safe route segments", () => {
+    const result = parseFilename(
+      "20260330-codex%2Dcodex%2D1-codex_codex_2-dm%2Drouting%2Dtest.md",
+    );
+    expect(result).toEqual({
+      from: "codex-codex-1",
+      to: "codex_codex_2",
+      subject: "dm-routing-test",
+    });
+  });
+
+  it("parseInboxEnvelope recovers hyphenated recipient from frontmatter", () => {
+    const result = parseInboxEnvelope(
+      "20260330-claude-codex-codex-1-name-confirmed.md",
+      [
+        "---",
+        "type: inbox",
+        "from: claude",
+        "to: codex-codex-1",
+        "subject: name-confirmed",
+        "---",
+        "",
+        "body",
+      ].join("\n"),
+    );
+    expect(result).toEqual({
+      from: "claude",
+      to: "codex-codex-1",
+      subject: "name-confirmed",
+    });
+  });
+
+  it("isForMe matches agent id, aliases, 전체, and all", () => {
+    expect(isForMe("codex_codex_1", "codex_codex_1", "온")).toBe(true);
+    expect(isForMe("codex-codex-1", "codex_codex_1", "온")).toBe(true);
+    expect(isForMe("온", "codex_codex_1", "온")).toBe(true);
+    expect(isForMe("전체", "codex_codex_1", "온")).toBe(true);
+    expect(isForMe("all", "codex_codex_1", "온")).toBe(true);
+    expect(isForMe("초", "codex_codex_1", "온")).toBe(false);
   });
 
   it("receipts read-modify-write cycle", () => {

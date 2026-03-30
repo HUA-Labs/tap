@@ -479,16 +479,68 @@ function recipientMatchesAgent(recipient, agentId, agentName) {
   if (!normalizedRecipient) {
     return false;
   }
-  return normalizedRecipient === "\uC804\uCCB4" || normalizedRecipient === "all" || normalizedRecipient === agentId || normalizedRecipient === agentName;
+  const aliases = /* @__PURE__ */ new Set([
+    agentId.trim(),
+    agentId.trim().replace(/-/g, "_"),
+    agentId.trim().replace(/_/g, "-"),
+    agentName.trim(),
+    agentName.trim().replace(/-/g, "_"),
+    agentName.trim().replace(/_/g, "-")
+  ]);
+  return normalizedRecipient === "\uC804\uCCB4" || normalizedRecipient === "all" || aliases.has(normalizedRecipient);
 }
 function isOwnMessageSender(sender, agentId, agentName) {
   const normalizedSender = sender.trim();
   if (!normalizedSender) {
     return false;
   }
-  return normalizedSender === agentId || normalizedSender === agentName;
+  const aliases = /* @__PURE__ */ new Set([
+    agentId.trim(),
+    agentId.trim().replace(/-/g, "_"),
+    agentId.trim().replace(/_/g, "-"),
+    agentName.trim(),
+    agentName.trim().replace(/-/g, "_"),
+    agentName.trim().replace(/_/g, "-")
+  ]);
+  return aliases.has(normalizedSender);
 }
-function getInboxRoute(fileName) {
+function decodeRouteSegment(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+function parseInboxFrontmatter(body) {
+  if (!body) {
+    return null;
+  }
+  const frontmatter = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) {
+    return null;
+  }
+  let sender = "";
+  let recipient = "";
+  let subject = "";
+  for (const line of frontmatter[1].split(/\r?\n/)) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key === "from") sender = value;
+    if (key === "to") recipient = value;
+    if (key === "subject") subject = value;
+  }
+  if (!sender || !recipient || !subject) {
+    return null;
+  }
+  return { sender, recipient, subject };
+}
+function getInboxRoute(fileName, body) {
+  const frontmatterRoute = parseInboxFrontmatter(body);
+  if (frontmatterRoute) {
+    return frontmatterRoute;
+  }
   const stem = fileName.replace(/\.md$/i, "");
   const parts = stem.split("-");
   let offset = 0;
@@ -496,9 +548,9 @@ function getInboxRoute(fileName) {
     offset = 1;
   }
   return {
-    sender: parts[offset] ?? "",
-    recipient: parts[offset + 1] ?? "",
-    subject: parts.slice(offset + 2).join("-")
+    sender: decodeRouteSegment(parts[offset] ?? ""),
+    recipient: decodeRouteSegment(parts[offset + 1] ?? ""),
+    subject: decodeRouteSegment(parts.slice(offset + 2).join("-"))
   };
 }
 function buildMarkerId(filePath, mtimeMs) {
@@ -587,14 +639,14 @@ function collectCandidates(inboxDir, agentId, agentName) {
   }).sort((left, right) => left.stats.mtimeMs - right.stats.mtimeMs);
   const candidates = [];
   for (const item of entries) {
-    const route = getInboxRoute(item.entry.name);
+    const body = readFileSync(item.filePath, "utf8");
+    const route = getInboxRoute(item.entry.name, body);
     if (!recipientMatchesAgent(route.recipient, agentId, agentName)) {
       continue;
     }
     if (isOwnMessageSender(route.sender, agentId, agentName)) {
       continue;
     }
-    const body = readFileSync(item.filePath, "utf8");
     if (shouldSkipInHeadlessMode(item.entry.name, body)) {
       continue;
     }

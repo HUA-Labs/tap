@@ -12,7 +12,7 @@ import {
   resolveAddressLabel,
   resolveCurrentAgentName,
   threadCwdMatches,
-} from "../../../../scripts/codex-app-server-bridge.js";
+} from "../../scripts/codex-app-server-bridge.ts";
 
 describe("codex app-server bridge option building", () => {
   const createdDirs: string[] = [];

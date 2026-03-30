@@ -472,7 +472,7 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
 describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () => {
   it("integration: stale saved thread is replaced by newer heartbeat thread from same app-server", async () => {
     const { loadResumableThreadState } =
-      await import("../../../../scripts/codex-app-server-bridge.js");
+      await import("../../scripts/codex-app-server-bridge.ts");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),
@@ -524,7 +524,7 @@ describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () 
 
   it("integration: heartbeat from different app-server → keeps saved thread", async () => {
     const { loadResumableThreadState } =
-      await import("../../../../scripts/codex-app-server-bridge.js");
+      await import("../../scripts/codex-app-server-bridge.ts");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),
@@ -573,7 +573,7 @@ describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () 
 
   it("integration: equal timestamps → keeps saved thread (no unnecessary churn)", async () => {
     const { loadResumableThreadState } =
-      await import("../../../../scripts/codex-app-server-bridge.js");
+      await import("../../scripts/codex-app-server-bridge.ts");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),
