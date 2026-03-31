@@ -13,6 +13,7 @@ Usage:
 Description:
   Start all registered app-server bridge daemons with one command.
   This is the orchestration entrypoint for headless/background TAP operation.
+  tap up auto-prunes stale heartbeat entries before bridge startup.
 
 Examples:
   npx @hua-labs/tap up
@@ -42,7 +43,12 @@ export async function upCommand(args: string[]): Promise<CommandResult> {
   process.env.TAP_COLD_START_WARMUP = "true";
   let result: CommandResult;
   try {
-    result = await bridgeCommand(["start", "--all", ...args]);
+    result = await bridgeCommand([
+      "start",
+      "--all",
+      "--auto-prune-heartbeats",
+      ...args,
+    ]);
   } finally {
     if (previousColdStartWarmup === undefined) {
       delete process.env.TAP_COLD_START_WARMUP;

@@ -8,7 +8,7 @@ import type {
   RuntimeName,
   TapState,
 } from "./types.js";
-import { resolveConfig } from "./config/index.js";
+import { resolveConfig, normalizeTapPath } from "./config/index.js";
 
 const VALID_RUNTIMES: RuntimeName[] = ["claude", "codex", "gemini"];
 
@@ -68,7 +68,7 @@ export function resolveCommsDir(args: string[], repoRoot: string): string {
   // Check --comms-dir flag
   const idx = args.indexOf("--comms-dir");
   if (idx !== -1 && args[idx + 1]) {
-    return path.resolve(args[idx + 1]);
+    return path.resolve(normalizeTapPath(args[idx + 1]));
   }
 
   // Delegate to config resolution (env > local > shared > auto)
@@ -83,8 +83,8 @@ export function createAdapterContext(
   // Use config-resolved stateDir if available
   const { config } = resolveConfig({}, repoRoot);
   return {
-    commsDir: path.resolve(commsDir),
-    repoRoot: path.resolve(repoRoot),
+    commsDir: path.resolve(normalizeTapPath(commsDir)),
+    repoRoot: path.resolve(normalizeTapPath(repoRoot)),
     stateDir: config.stateDir,
     platform: detectPlatform(),
   };

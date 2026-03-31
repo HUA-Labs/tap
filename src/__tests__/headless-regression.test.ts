@@ -32,7 +32,7 @@ import {
   type ReviewRequest,
 } from "../engine/review.js";
 import { createHeadlessLoop } from "../engine/headless-loop.js";
-import { buildUserInput } from "../../scripts/codex-app-server-bridge.ts";
+import { buildUserInput } from "../../../../scripts/codex-app-server-bridge.js";
 
 let tmpDir: string;
 let commsDir: string;
@@ -241,16 +241,30 @@ describe("recipient isolation contract", () => {
     expect(gyeolPrs).not.toContain(800);
   });
 
-  it("requests from self are still returned (no self-filter yet)", () => {
-    // Note: self-review filtering is not implemented in scanInboxForReviews.
-    // This test documents current behavior. Self-filter could be a follow-up.
+  it("skips requests from self when sender matches agent name", () => {
     writeInboxFile(
       "20260326-묵-묵-review-request-pr803.md",
       "PR #803 리뷰요청",
     );
 
     const results = scanInboxForReviews(commsDir, stateDir, "gen15", "묵");
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(0);
+  });
+
+  it("skips requests from self when sender matches agent id", () => {
+    writeInboxFile(
+      "20260326-codex_codex_2-결-review-request-pr804.md",
+      "PR #804 리뷰요청",
+    );
+
+    const results = scanInboxForReviews(
+      commsDir,
+      stateDir,
+      "gen15",
+      "결",
+      "codex-codex-2",
+    );
+    expect(results).toHaveLength(0);
   });
 });
 

@@ -39,6 +39,7 @@ export interface HeadlessLoopOptions {
   commsDir: string;
   stateDir: string;
   repoRoot: string;
+  agentId?: string;
   agentName: string;
   generation: string;
   pollIntervalMs: number;
@@ -129,6 +130,7 @@ export function createHeadlessLoop(options: HeadlessLoopOptions): {
       options.stateDir,
       options.generation,
       options.agentName,
+      options.agentId,
     );
 
     if (requests.length === 0) {

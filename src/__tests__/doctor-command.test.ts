@@ -12,31 +12,31 @@ const isBridgeRunningMock = vi.fn();
 const getHeartbeatAgeMock = vi.fn();
 const loadBridgeStateMock = vi.fn();
 const saveBridgeStateMock = vi.fn();
-const loadRuntimeBridgeHeartbeatMock = vi.fn((bridgeState?: {
-  runtimeStateDir?: string | null;
-}) => {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) return null;
-  const heartbeatPath = path.join(runtimeStateDir, "heartbeat.json");
-  if (!fs.existsSync(heartbeatPath)) return null;
-  return JSON.parse(fs.readFileSync(heartbeatPath, "utf8")) as {
-    lastError?: string | null;
-    threadId?: string | null;
-    threadCwd?: string | null;
-  };
-});
-const loadRuntimeBridgeThreadStateMock = vi.fn((bridgeState?: {
-  runtimeStateDir?: string | null;
-}) => {
-  const runtimeStateDir = bridgeState?.runtimeStateDir;
-  if (!runtimeStateDir) return null;
-  const threadPath = path.join(runtimeStateDir, "thread.json");
-  if (!fs.existsSync(threadPath)) return null;
-  return JSON.parse(fs.readFileSync(threadPath, "utf8")) as {
-    threadId?: string;
-    cwd?: string | null;
-  };
-});
+const loadRuntimeBridgeHeartbeatMock = vi.fn(
+  (bridgeState?: { runtimeStateDir?: string | null }) => {
+    const runtimeStateDir = bridgeState?.runtimeStateDir;
+    if (!runtimeStateDir) return null;
+    const heartbeatPath = path.join(runtimeStateDir, "heartbeat.json");
+    if (!fs.existsSync(heartbeatPath)) return null;
+    return JSON.parse(fs.readFileSync(heartbeatPath, "utf8")) as {
+      lastError?: string | null;
+      threadId?: string | null;
+      threadCwd?: string | null;
+    };
+  },
+);
+const loadRuntimeBridgeThreadStateMock = vi.fn(
+  (bridgeState?: { runtimeStateDir?: string | null }) => {
+    const runtimeStateDir = bridgeState?.runtimeStateDir;
+    if (!runtimeStateDir) return null;
+    const threadPath = path.join(runtimeStateDir, "thread.json");
+    if (!fs.existsSync(threadPath)) return null;
+    return JSON.parse(fs.readFileSync(threadPath, "utf8")) as {
+      threadId?: string;
+      cwd?: string | null;
+    };
+  },
+);
 const resolveConfigMock = vi.fn();
 const findRepoRootMock = vi.fn();
 const logMock = vi.fn();
@@ -68,9 +68,16 @@ vi.mock("../engine/bridge.js", () => ({
   saveBridgeState: saveBridgeStateMock,
 }));
 
-vi.mock("../config/index.js", () => ({
-  resolveConfig: resolveConfigMock,
-}));
+vi.mock("../config/index.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../config/index.js")>(
+      "../config/index.js",
+    );
+  return {
+    ...actual,
+    resolveConfig: resolveConfigMock,
+  };
+});
 
 vi.mock("../adapters/common.js", () => ({
   buildManagedMcpServerSpec: buildManagedMcpServerSpecMock,
@@ -200,8 +207,7 @@ describe("doctorCommand", () => {
       command: "bun",
       args: ["server.ts"],
       env: {
-        TAP_AGENT_NAME: "온",
-        TAP_AGENT_ID: "codex",
+        TAP_AGENT_NAME: "<set-per-session>",
         TAP_COMMS_DIR: commsDir.replace(/\\/g, "/"),
         TAP_STATE_DIR: stateDir.replace(/\\/g, "/"),
         TAP_REPO_ROOT: repoRoot.replace(/\\/g, "/"),
@@ -221,8 +227,7 @@ describe("doctorCommand", () => {
         'args = ["server.ts"]',
         "",
         "[mcp_servers.tap.env]",
-        'TAP_AGENT_NAME = "온"',
-        'TAP_AGENT_ID = "codex"',
+        'TAP_AGENT_NAME = "<set-per-session>"',
         `TAP_COMMS_DIR = "${commsDir.replace(/\\/g, "/")}"`,
         `TAP_STATE_DIR = "${stateDir.replace(/\\/g, "/")}"`,
         `TAP_REPO_ROOT = "${repoRoot.replace(/\\/g, "/")}"`,
@@ -526,6 +531,8 @@ describe("doctorCommand", () => {
     expect(written).toContain("[mcp_servers.tap.env]");
     expect(written).not.toContain("[mcp_servers.tap-comms]");
     expect(written).not.toContain("[mcp_servers.tap-comms.env]");
+    expect(written).toContain('TAP_AGENT_NAME = "<set-per-session>"');
+    expect(written).not.toContain("TAP_AGENT_ID");
     expect(written).toContain(
       `TAP_COMMS_DIR = "${commsDir.replace(/\\/g, "/")}"`,
     );
@@ -541,7 +548,52 @@ describe("doctorCommand", () => {
     expect(written).toContain('trust_level = "trusted"');
   });
 
-  it("preserves existing Codex identity env on --fix in multi-instance setups", async () => {
+  it("warns when concrete Codex identity is persisted globally", async () => {
+    const codexConfigPath = path.join(codexHomeDir, ".codex", "config.toml");
+    fs.writeFileSync(
+      codexConfigPath,
+      [
+        "[mcp_servers.tap]",
+        'command = "bun"',
+        'args = ["server.ts"]',
+        "",
+        "[mcp_servers.tap.env]",
+        'TAP_AGENT_NAME = "온"',
+        'TAP_AGENT_ID = "codex"',
+        `TAP_COMMS_DIR = "${commsDir.replace(/\\/g, "/")}"`,
+        `TAP_STATE_DIR = "${stateDir.replace(/\\/g, "/")}"`,
+        `TAP_REPO_ROOT = "${repoRoot.replace(/\\/g, "/")}"`,
+        "",
+        `[projects.'${canonicalizeTrustPath(repoRoot)}']`,
+        'trust_level = "trusted"',
+        "",
+        `[projects.'${canonicalizeTrustPath(process.cwd())}']`,
+        'trust_level = "trusted"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await doctorCommand([]);
+
+    const checks = result.data?.checks as Array<{
+      name: string;
+      status: string;
+      message?: string;
+    }>;
+    const codexCheck = checks.find(
+      (c) => c.name === "MCP config (~/.codex/config.toml)",
+    );
+    expect(codexCheck?.status).toBe("warn");
+    expect(codexCheck?.message).toContain(
+      "non-neutral TAP_AGENT_NAME persisted (온)",
+    );
+    expect(codexCheck?.message).toContain(
+      "concrete TAP_AGENT_ID persisted (codex)",
+    );
+  });
+
+  it("neutralizes Codex identity env on --fix in multi-instance setups", async () => {
     loadStateMock.mockReturnValue({
       schemaVersion: 2,
       createdAt: "2026-03-25T00:00:00.000Z",
@@ -609,7 +661,153 @@ describe("doctorCommand", () => {
     await doctorCommand(["--fix"]);
 
     const written = fs.readFileSync(codexConfigPath, "utf8");
-    expect(written).toContain('TAP_AGENT_NAME = "덱"');
-    expect(written).toContain('TAP_AGENT_ID = "codex-reviewer"');
+    expect(written).toContain('TAP_AGENT_NAME = "<set-per-session>"');
+    expect(written).not.toContain("TAP_AGENT_ID");
+  });
+
+  it("prunes stale bridge heartbeats during --fix cleanup", async () => {
+    isBridgeRunningMock.mockReturnValue(false);
+
+    const pidDir = path.join(stateDir, "pids");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({ pid: 1234 }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "온",
+            timestamp: "2026-03-25T00:00:00.000Z",
+            lastActivity: "2026-03-25T00:00:00.000Z",
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await doctorCommand(["--fix"]);
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(commsDir, "heartbeats.json"), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(result.ok).toBe(true);
+    expect(heartbeats.codex).toBeUndefined();
+    expect(result.data).toEqual(
+      expect.objectContaining({
+        fixed: expect.arrayContaining([
+          expect.stringContaining("Pruned 1 stale heartbeat entry"),
+          expect.stringContaining(
+            "Cleaned stale bridge + managed processes for codex",
+          ),
+        ]),
+      }),
+    );
+  });
+
+  it("warns about and prunes orphaned stale heartbeats", async () => {
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "온",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+          },
+          haru: {
+            id: "haru",
+            agent: "하루",
+            timestamp: "2026-03-25T00:00:00.000Z",
+            lastActivity: "2026-03-25T00:00:00.000Z",
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const warnResult = await doctorCommand([]);
+    const warnChecks = warnResult.data?.checks as Array<{
+      name: string;
+      status: string;
+      message?: string;
+    }>;
+    const staleCheck = warnChecks.find((c) => c.name === "stale heartbeats");
+
+    expect(staleCheck?.status).toBe("warn");
+    expect(staleCheck?.message).toContain("하루");
+
+    const fixResult = await doctorCommand(["--fix"]);
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(commsDir, "heartbeats.json"), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(heartbeats.codex).toBeDefined();
+    expect(heartbeats.haru).toBeUndefined();
+    expect(fixResult.data).toEqual(
+      expect.objectContaining({
+        fixed: expect.arrayContaining([
+          expect.stringContaining("Pruned 1 stale heartbeat entry"),
+        ]),
+      }),
+    );
+  });
+
+  it("keeps idle orphaned heartbeats within the grace window", async () => {
+    const idleStartedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "온",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+          },
+          quiet: {
+            id: "quiet",
+            agent: "하루",
+            timestamp: idleStartedAt,
+            lastActivity: idleStartedAt,
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const warnResult = await doctorCommand([]);
+    const warnChecks = warnResult.data?.checks as Array<{
+      name: string;
+      status: string;
+      message?: string;
+    }>;
+    const staleCheck = warnChecks.find((c) => c.name === "stale heartbeats");
+
+    expect(staleCheck?.status).toBe("pass");
+
+    await doctorCommand(["--fix"]);
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(commsDir, "heartbeats.json"), "utf8"),
+    ) as Record<string, unknown>;
+
+    expect(heartbeats.codex).toBeDefined();
+    expect(heartbeats.quiet).toBeDefined();
   });
 });

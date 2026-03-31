@@ -1,9 +1,10 @@
 {
   "name": "@hua-labs/tap",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Zero-dependency CLI for cross-model AI agent communication setup",
   "bin": {
-    "tap": "./bin/tap.mjs"
+    "tap": "bin/tap.mjs",
+    "tap-comms": "bin/tap.mjs"
   },
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",

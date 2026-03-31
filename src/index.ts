@@ -59,6 +59,7 @@ export {
   loadLocalConfig,
   saveSharedConfig,
   saveLocalConfig,
+  normalizeTapPath,
   SHARED_CONFIG_FILE,
   LOCAL_CONFIG_FILE,
 } from "./config/index.js";

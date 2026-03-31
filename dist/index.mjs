@@ -71,8 +71,8 @@ function findRepoRoot(startDir = process.cwd()) {
 function createAdapterContext(commsDir, repoRoot) {
   const { config: config2 } = resolveConfig({}, repoRoot);
   return {
-    commsDir: path.resolve(commsDir),
-    repoRoot: path.resolve(repoRoot),
+    commsDir: path.resolve(normalizeTapPath(commsDir)),
+    repoRoot: path.resolve(normalizeTapPath(repoRoot)),
     stateDir: config2.stateDir,
     platform: detectPlatform()
   };
@@ -7414,10 +7414,29 @@ var init_bridge_port_network = __esm({
 });
 
 // src/engine/bridge-process-control.ts
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 function isProcessAlive(pid) {
   try {
     process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function getUnixProcessGroupId(pid) {
+  const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], {
+    encoding: "utf-8",
+    windowsHide: true
+  });
+  if (!result || result.status !== 0) {
+    return null;
+  }
+  const parsed = Number.parseInt((result.stdout ?? "").trim(), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function isUnixProcessGroupAlive(processGroupId) {
+  try {
+    process.kill(-processGroupId, 0);
     return true;
   } catch {
     return false;
@@ -7431,11 +7450,16 @@ async function terminateProcess(pid, platform) {
     if (platform === "win32") {
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
     } else {
-      process.kill(pid, "SIGTERM");
+      const processGroupId = getUnixProcessGroupId(pid);
+      const signalTarget = processGroupId != null ? -processGroupId : pid;
+      const isTargetAlive = () => processGroupId != null ? isUnixProcessGroupAlive(processGroupId) : isProcessAlive(pid);
+      process.kill(signalTarget, "SIGTERM");
       await delay(2e3);
-      if (isProcessAlive(pid)) {
-        process.kill(pid, "SIGKILL");
+      if (isTargetAlive()) {
+        process.kill(signalTarget, "SIGKILL");
+        await delay(500);
       }
+      return !isTargetAlive();
     }
   } catch {
   }
@@ -7619,11 +7643,11 @@ var init_bridge_observability = __esm({
 import * as fs9 from "fs";
 import * as os3 from "os";
 import * as path9 from "path";
-import { spawnSync } from "child_process";
+import { spawnSync as spawnSync2 } from "child_process";
 import { fileURLToPath as fileURLToPath2 } from "url";
 function probeCommand(candidates) {
   for (const candidate of candidates) {
-    const result = spawnSync(candidate, ["--version"], {
+    const result = spawnSync2(candidate, ["--version"], {
       encoding: "utf-8",
       shell: process.platform === "win32"
     });
@@ -7639,7 +7663,7 @@ function resolveCommandPath(command) {
   if (path9.isAbsolute(command)) return command;
   const whichCmd = process.platform === "win32" ? "where.exe" : "which";
   try {
-    const result = spawnSync(whichCmd, [command], {
+    const result = spawnSync2(whichCmd, [command], {
       encoding: "utf-8",
       windowsHide: true
     });
@@ -7732,7 +7756,7 @@ function findPreferredBunCommand() {
   const candidates = process.platform === "win32" ? [path9.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path9.join(home, ".bun", "bin", "bun"), "bun"];
   for (const candidate of candidates) {
     if (path9.isAbsolute(candidate) && !fs9.existsSync(candidate)) continue;
-    const result = spawnSync(candidate, ["--version"], {
+    const result = spawnSync2(candidate, ["--version"], {
       encoding: "utf-8",
       shell: process.platform === "win32"
     });
@@ -7894,7 +7918,7 @@ import * as fs11 from "fs";
 import * as os4 from "os";
 import * as path11 from "path";
 import { randomBytes } from "crypto";
-import { spawnSync as spawnSync2 } from "child_process";
+import { spawnSync as spawnSync3 } from "child_process";
 function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
   let entries;
   try {
@@ -7970,7 +7994,7 @@ function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = pro
     "-PassThru",
     "; Write-Output $p.Id"
   ].join(" ");
-  const result = spawnSync2(
+  const result = spawnSync3(
     powerShellCommand,
     ["-NoLogo", "-NoProfile", "-Command", psCommand],
     {
@@ -7988,27 +8012,6 @@ function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = pro
     return null;
   }
   return pid;
-}
-async function waitForWindowsDetachedProcessLiveness(
-  pid,
-  timeoutMs = 1500,
-  pollMs = 100
-) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return false;
-    }
-    await delay(pollMs);
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 function startWindowsCodexAppServer(command, url2, repoRoot, logPath) {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
@@ -8033,7 +8036,7 @@ function findListeningProcessId(url2, platform) {
   if (port == null || !Number.isFinite(port)) {
     return null;
   }
-  const result = spawnSync2(
+  const result = spawnSync3(
     resolvePowerShellCommand(),
     [
       "-NoLogo",
@@ -8070,15 +8073,55 @@ var init_bridge_windows_spawn = __esm({
 
 // src/engine/bridge-unix-spawn.ts
 import * as fs12 from "fs";
-import { spawn, spawnSync as spawnSync3 } from "child_process";
-function startUnixDetachedProcess(command, args, repoRoot, logPath, env = process.env) {
+import { spawn, spawnSync as spawnSync4 } from "child_process";
+function resolveUnixSpawnCommand(command, args, platform) {
+  if (platform === "linux") {
+    return {
+      command: "nohup",
+      args: [command, ...args]
+    };
+  }
+  return { command, args };
+}
+function findListeningPidWithLsof(port) {
+  const result = spawnSync4(
+    "lsof",
+    ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
+    {
+      encoding: "utf-8",
+      windowsHide: true
+    }
+  );
+  if (!result || result.status !== 0) {
+    return null;
+  }
+  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
+  return Number.isFinite(parsedPid) ? parsedPid : null;
+}
+function findListeningPidWithSs(port) {
+  const result = spawnSync4("ss", ["-ltnpH", `sport = :${port}`], {
+    encoding: "utf-8",
+    windowsHide: true
+  });
+  if (!result || result.status !== 0) {
+    return null;
+  }
+  const match = (result.stdout ?? "").match(/\bpid=(\d+)\b/);
+  if (!match) {
+    return null;
+  }
+  const parsedPid = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsedPid) ? parsedPid : null;
+}
+function startUnixDetachedProcess(command, args, repoRoot, logPath, env = process.env, platform = DEFAULT_UNIX_PLATFORM) {
   const stderrPath = stderrLogFilePath(logPath);
   let logFd = null;
   let stderrFd = null;
   try {
     logFd = fs12.openSync(logPath, "a");
     stderrFd = fs12.openSync(stderrPath, "a");
-    const child = spawn(command, args, {
+    const launch = resolveUnixSpawnCommand(command, args, platform);
+    const child = spawn(launch.command, launch.args, {
       cwd: repoRoot,
       detached: true,
       stdio: ["ignore", logFd, stderrFd],
@@ -8096,13 +8139,15 @@ function startUnixDetachedProcess(command, args, repoRoot, logPath, env = proces
     }
   }
 }
-function startUnixCodexAppServer(command, url2, repoRoot, logPath) {
+function startUnixCodexAppServer(command, url2, repoRoot, logPath, platform = DEFAULT_UNIX_PLATFORM) {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startUnixDetachedProcess(
     exe,
     [...prefixArgs, "app-server", "--listen", url2],
     repoRoot,
-    logPath
+    logPath,
+    process.env,
+    platform
   );
 }
 function findUnixListeningProcessId(url2, platform) {
@@ -8119,25 +8164,21 @@ function findUnixListeningProcessId(url2, platform) {
   if (port == null || !Number.isFinite(port)) {
     return null;
   }
-  const result = spawnSync3(
-    "lsof",
-    ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
-    {
-      encoding: "utf-8",
-      windowsHide: true
+  if (platform === "linux") {
+    const ssPid = findListeningPidWithSs(port);
+    if (ssPid != null) {
+      return ssPid;
     }
-  );
-  if (!result || result.status !== 0) {
-    return null;
   }
-  const parsedPid = Number.parseInt((result.stdout ?? "").trim(), 10);
-  return Number.isFinite(parsedPid) ? parsedPid : null;
+  return findListeningPidWithLsof(port);
 }
+var DEFAULT_UNIX_PLATFORM;
 var init_bridge_unix_spawn = __esm({
   "src/engine/bridge-unix-spawn.ts"() {
     "use strict";
     init_bridge_codex_command();
     init_bridge_paths();
+    DEFAULT_UNIX_PLATFORM = process.platform === "darwin" ? "darwin" : "linux";
   }
 });
 
@@ -8186,6 +8227,7 @@ var init_bridge_config = __esm({
 });
 
 // src/engine/bridge-app-server-health.ts
+import * as net2 from "net";
 async function checkAppServerHealth(url2, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken) {
   const WebSocket = getWebSocketCtor();
   if (!WebSocket) {
@@ -8218,10 +8260,100 @@ async function checkAppServerHealth(url2, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_
     }
   });
 }
-async function waitForAppServerHealth(url2, timeoutMs, gatewayToken) {
+function buildAppServerReadyzUrl(url2) {
+  let parsed;
+  try {
+    parsed = new URL(url2);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol === "ws:") {
+    parsed.protocol = "http:";
+  } else if (parsed.protocol === "wss:") {
+    parsed.protocol = "https:";
+  } else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  parsed.pathname = APP_SERVER_READYZ_PATH;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+async function checkAppServerReadyz(url2, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  const readyzUrl = buildAppServerReadyzUrl(url2);
+  if (!readyzUrl) {
+    return "unsupported";
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(readyzUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json"
+      }
+    });
+    if (response.ok) {
+      return "ready";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 405 || response.status === 426 || response.status === 501) {
+      return "unsupported";
+    }
+    return "not-ready";
+  } catch {
+    return "not-ready";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function checkTcpPortListening(url2, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  let hostname3;
+  let port;
+  try {
+    const parsed = new URL(url2.replace(/^ws/, "http"));
+    hostname3 = parsed.hostname;
+    port = parseInt(parsed.port, 10);
+  } catch {
+    return false;
+  }
+  if (!port || !Number.isFinite(port)) return false;
+  return new Promise((resolve11) => {
+    const socket = net2.createConnection({ host: hostname3, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve11(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve11(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve11(false);
+    });
+  });
+}
+async function checkManagedAppServerReady(url2, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  const readyzStatus = await checkAppServerReadyz(url2, timeoutMs);
+  if (readyzStatus === "ready") {
+    return true;
+  }
+  if (readyzStatus === "unsupported") {
+    return checkTcpPortListening(url2, timeoutMs);
+  }
+  return false;
+}
+async function waitForManagedAppServerReady(url2, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await checkAppServerHealth(url2, APP_SERVER_HEALTH_TIMEOUT_MS, gatewayToken)) {
+    const remaining = Math.max(
+      1,
+      Math.min(APP_SERVER_HEALTH_TIMEOUT_MS, deadline - Date.now())
+    );
+    if (await checkManagedAppServerReady(url2, remaining)) {
       return true;
     }
     await delay(APP_SERVER_HEALTH_RETRY_MS);
@@ -8237,13 +8369,14 @@ function markAppServerHealthy(appServer) {
     lastHealthyAt: checkedAt
   };
 }
-var APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, AUTH_SUBPROTOCOL_PREFIX;
+var APP_SERVER_HEALTH_TIMEOUT_MS, APP_SERVER_HEALTH_RETRY_MS, APP_SERVER_READYZ_PATH, AUTH_SUBPROTOCOL_PREFIX;
 var init_bridge_app_server_health = __esm({
   "src/engine/bridge-app-server-health.ts"() {
     "use strict";
     init_bridge_port_network();
     APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
     APP_SERVER_HEALTH_RETRY_MS = 250;
+    APP_SERVER_READYZ_PATH = "/readyz";
     AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
   }
 });
@@ -8515,7 +8648,8 @@ async function createManagedAppServerAuth(options) {
       gatewayArgs,
       options.repoRoot,
       gatewayLogPath,
-      gatewayEnv
+      gatewayEnv,
+      options.platform
     );
   } catch (error2) {
     removeFileIfExists2(tokenPath);
@@ -8701,7 +8835,8 @@ Start it manually:
           resolvedCommand,
           effectiveUrl,
           options.repoRoot,
-          logPath
+          logPath,
+          options.platform
         );
       } catch (err) {
         throw new Error(
@@ -8719,7 +8854,7 @@ Start it manually:
   ${manualCommand2}`
       );
     }
-    const healthy2 = await waitForAppServerHealth(
+    const healthy2 = await waitForManagedAppServerReady(
       effectiveUrl,
       APP_SERVER_START_TIMEOUT_MS
     );
@@ -8781,7 +8916,8 @@ Start it manually:
         resolvedCommand,
         auth.upstreamUrl,
         options.repoRoot,
-        logPath
+        logPath,
+        options.platform
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -8807,7 +8943,7 @@ Start it manually:
   ${manualCommand}`
     );
   }
-  const healthy = await waitForAppServerHealth(
+  const healthy = await waitForManagedAppServerReady(
     auth.upstreamUrl,
     APP_SERVER_START_TIMEOUT_MS
   );
@@ -8833,10 +8969,9 @@ Or start it manually:
     removeFileIfExists2(auth.tokenPath);
     throw new Error("Tap auth gateway token is missing after startup.");
   }
-  const gatewayHealthy = await waitForAppServerHealth(
+  const gatewayHealthy = await waitForManagedAppServerReady(
     effectiveUrl,
-    APP_SERVER_GATEWAY_START_TIMEOUT_MS,
-    gatewayToken
+    APP_SERVER_GATEWAY_START_TIMEOUT_MS
   );
   if (!gatewayHealthy) {
     await terminateProcess(pid, options.platform);
@@ -9002,19 +9137,11 @@ async function startBridge(options) {
       [bridgeScript],
       repoRoot,
       logPath,
-      bridgeEnv
+      bridgeEnv,
+      options.platform
     );
     if (!bridgePid) {
       throw new Error(`Failed to spawn bridge process for ${instanceId}`);
-    }
-    if (options.platform === "win32") {
-      const alive = await waitForWindowsDetachedProcessLiveness(bridgePid);
-      if (!alive) {
-        throw new Error(
-          `Bridge process for ${instanceId} exited immediately after Windows detached spawn.
-Check ${logPath} and ${stderrLogFilePath(logPath)}.`
-        );
-      }
     }
     const state = {
       pid: bridgePid,
@@ -9740,9 +9867,26 @@ function writeTomlFile(filePath, content) {
   fs22.writeFileSync(tmp, content, "utf-8");
   fs22.renameSync(tmp, filePath);
 }
+function buildSessionNeutralCodexSpec(ctx) {
+  const managed = buildManagedMcpServerSpec(ctx);
+  const env = {
+    ...managed.env,
+    TAP_AGENT_NAME: SESSION_NEUTRAL_AGENT_NAME
+  };
+  delete env.TAP_AGENT_ID;
+  return { ...managed, env };
+}
+function buildCodexEnvEntries(existingTable, managedEnv) {
+  const preservedEnv = parseTomlAssignments(existingTable ?? "");
+  delete preservedEnv.TAP_AGENT_ID;
+  return {
+    ...preservedEnv,
+    ...managedEnv
+  };
+}
 function verifyManagedToml(content, ctx, configPath) {
   const checks = [];
-  const managed = buildManagedMcpServerSpec(ctx);
+  const managed = buildSessionNeutralCodexSpec(ctx);
   const mainTable = extractTomlTable(content, MCP_SELECTOR);
   const envTable = extractTomlTable(content, ENV_SELECTOR);
   checks.push({
@@ -9779,9 +9923,22 @@ function verifyManagedToml(content, ctx, configPath) {
       message: "Managed tap command/args do not match expected values"
     });
   }
+  if (envTable) {
+    const envValues = parseTomlAssignments(envTable);
+    checks.push({
+      name: "Managed TAP_AGENT_NAME is session-neutral",
+      passed: envValues.TAP_AGENT_NAME === managed.env.TAP_AGENT_NAME,
+      message: `TAP_AGENT_NAME should be "${SESSION_NEUTRAL_AGENT_NAME}"`
+    });
+    checks.push({
+      name: "Managed TAP_AGENT_ID is omitted",
+      passed: typeof envValues.TAP_AGENT_ID !== "string",
+      message: "TAP_AGENT_ID should not be persisted in Codex config"
+    });
+  }
   return checks;
 }
-var MCP_SELECTOR, ENV_SELECTOR, OLD_MCP_SELECTOR, OLD_ENV_SELECTOR, codexAdapter;
+var MCP_SELECTOR, ENV_SELECTOR, SESSION_NEUTRAL_AGENT_NAME, OLD_MCP_SELECTOR, OLD_ENV_SELECTOR, codexAdapter;
 var init_codex = __esm({
   "src/adapters/codex.ts"() {
     "use strict";
@@ -9791,6 +9948,7 @@ var init_codex = __esm({
     init_common();
     MCP_SELECTOR = "mcp_servers.tap";
     ENV_SELECTOR = "mcp_servers.tap.env";
+    SESSION_NEUTRAL_AGENT_NAME = "<set-per-session>";
     OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
     OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
     codexAdapter = {
@@ -9874,7 +10032,7 @@ var init_codex = __esm({
         const configPath = plan.operations[0]?.path ?? findCodexConfigPath();
         const warnings = [];
         const changedFiles = [];
-        const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
+        const managed = buildSessionNeutralCodexSpec(ctx);
         warnings.push(...managed.warnings);
         if (managed.issues.length > 0 || !managed.command) {
           return {
@@ -9931,8 +10089,10 @@ var init_codex = __esm({
           ENV_SELECTOR,
           renderTomlTable(
             ENV_SELECTOR,
-            managed.env,
-            extractTomlTable(existingContent, ENV_SELECTOR)
+            buildCodexEnvEntries(
+              extractTomlTable(existingContent, ENV_SELECTOR),
+              managed.env
+            )
           )
         );
         for (const target of getTrustTargets(ctx)) {
@@ -10334,11 +10494,72 @@ var init_adapters = __esm({
 });
 
 // src/commands/bridge.ts
+import { existsSync as existsSync19, readFileSync as readFileSync15, renameSync as renameSync9, writeFileSync as writeFileSync10 } from "fs";
 import * as path23 from "path";
 function formatAge(seconds) {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m ago`;
+}
+function loadBridgeHeartbeatStore(commsDir) {
+  const heartbeatsPath = path23.join(commsDir, "heartbeats.json");
+  if (!existsSync19(heartbeatsPath)) return {};
+  try {
+    return JSON.parse(readFileSync15(heartbeatsPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function saveBridgeHeartbeatStore(commsDir, store) {
+  const heartbeatsPath = path23.join(commsDir, "heartbeats.json");
+  const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
+  writeFileSync10(tmp, JSON.stringify(store, null, 2), "utf-8");
+  renameSync9(tmp, heartbeatsPath);
+}
+function parseBridgeHeartbeatAgeMs(record2, now) {
+  const raw = record2.lastActivity ?? record2.timestamp;
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, now - parsed);
+}
+function resolveBridgeHeartbeatInstanceId(state, heartbeatId) {
+  if (state.instances[heartbeatId]) return heartbeatId;
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]) return hyphenated;
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]) return underscored;
+  return null;
+}
+function pruneStaleHeartbeatsForBridgeUp(state, stateDir, commsDir) {
+  const store = loadBridgeHeartbeatStore(commsDir);
+  if (store === null) {
+    return {
+      removed: 0,
+      warning: "Auto-clean skipped \u2014 heartbeats.json unreadable"
+    };
+  }
+  const now = Date.now();
+  let removed = 0;
+  for (const [heartbeatId, heartbeat] of Object.entries(store)) {
+    const ageMs = parseBridgeHeartbeatAgeMs(heartbeat, now);
+    const instanceId = resolveBridgeHeartbeatInstanceId(state, heartbeatId);
+    const instance = instanceId ? state.instances[instanceId] : null;
+    const bridgeBacked = instance?.bridgeMode === "app-server";
+    const bridgeRunning = bridgeBacked && instanceId ? getBridgeStatus(stateDir, instanceId) === "running" : false;
+    const status = heartbeat.status ?? "active";
+    const staleByStatus = status === "signing-off" && ageMs >= BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS;
+    const staleByDeadBridge = bridgeBacked && !bridgeRunning && ageMs >= BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS;
+    const staleByAge = !bridgeRunning && ageMs >= BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS;
+    if (staleByStatus || staleByDeadBridge || staleByAge) {
+      delete store[heartbeatId];
+      removed += 1;
+    }
+  }
+  if (removed > 0) {
+    saveBridgeHeartbeatStore(commsDir, store);
+  }
+  return { removed };
 }
 function formatAppServerState(appServer) {
   const ownership = appServer.managed ? "managed" : "external";
@@ -10357,6 +10578,18 @@ function redactProtectedUrl(url2) {
   } catch {
     return url2.replace(/[?&]tap_token=[^&]+/g, "");
   }
+}
+function resolveTuiConnectUrl(appServer) {
+  return appServer.auth?.upstreamUrl ?? appServer.url;
+}
+function quoteCliArg(value) {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+function formatCodexTuiAttachCommand(tuiConnectUrl, cwd) {
+  return `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+}
+function resolveTuiAttachCwd(repoRoot, stateRepoRoot, runtimeThreadCwd, savedThreadCwd) {
+  return runtimeThreadCwd ?? savedThreadCwd ?? stateRepoRoot ?? repoRoot;
 }
 function loadCurrentBridgeState(stateDir, instanceId, fallback) {
   return loadBridgeState(stateDir, instanceId) ?? fallback ?? null;
@@ -10725,6 +10958,26 @@ async function bridgeStartAll(flags = {}) {
       data: {}
     };
   }
+  const ctx = createAdapterContext(state.commsDir, repoRoot);
+  const warnings = [];
+  let prunedHeartbeats = 0;
+  if (flags["auto-prune-heartbeats"] === true) {
+    const cleanup = pruneStaleHeartbeatsForBridgeUp(
+      state,
+      ctx.stateDir,
+      ctx.commsDir
+    );
+    prunedHeartbeats = cleanup.removed;
+    if (cleanup.warning) {
+      warnings.push(cleanup.warning);
+      log(cleanup.warning);
+    }
+    if (prunedHeartbeats > 0) {
+      log(
+        `Auto-clean: pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}`
+      );
+    }
+  }
   const instanceIds = Object.keys(state.instances);
   const appServerInstances = instanceIds.filter((id) => {
     const inst = state.instances[id];
@@ -10733,13 +10986,14 @@ async function bridgeStartAll(flags = {}) {
     return adapter.bridgeMode() === "app-server";
   });
   if (appServerInstances.length === 0) {
+    const cleanupSuffix2 = prunedHeartbeats > 0 ? ` Auto-clean pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}.` : "";
     return {
       ok: true,
       command: "bridge",
       code: "TAP_NO_OP",
-      message: "No app-server instances found to start.",
-      warnings: [],
-      data: {}
+      message: `No app-server instances found to start.${cleanupSuffix2}`,
+      warnings,
+      data: { prunedHeartbeats }
     };
   }
   logHeader("@hua-labs/tap bridge start --all");
@@ -10749,7 +11003,6 @@ async function bridgeStartAll(flags = {}) {
   log("");
   const started = [];
   const failed = [];
-  const warnings = [];
   for (const instanceId of appServerInstances) {
     const inst = state.instances[instanceId];
     const storedName = inst?.agentName ?? void 0;
@@ -10759,8 +11012,26 @@ async function bridgeStartAll(flags = {}) {
       warnings.push(msg);
       continue;
     }
+    const stateDir = path23.join(repoRoot, ".tap-comms");
+    const currentBridgeState = loadBridgeState(stateDir, instanceId);
+    const { manageAppServer, noAuth } = inferRestartMode(
+      currentBridgeState,
+      {
+        noServer: flags["no-server"] === true ? true : void 0,
+        noAuth: flags["no-auth"] === true ? true : void 0
+      },
+      {
+        manageAppServer: inst.manageAppServer,
+        noAuth: inst.noAuth
+      }
+    );
+    const mergedFlags = {
+      ...flags,
+      ...manageAppServer === false ? { "no-server": true } : {},
+      ...noAuth === true ? { "no-auth": true } : {}
+    };
     log(`Starting ${instanceId} (agent: ${storedName})...`);
-    const result = await bridgeStart(instanceId, storedName, flags);
+    const result = await bridgeStart(instanceId, storedName, mergedFlags);
     if (result.ok) {
       started.push(instanceId);
       logSuccess(`${instanceId} started`);
@@ -10771,13 +11042,14 @@ async function bridgeStartAll(flags = {}) {
     log("");
   }
   const message = started.length > 0 ? `Started ${started.length}/${appServerInstances.length} bridge(s): ${started.join(", ")}` + (failed.length > 0 ? `. Failed: ${failed.join(", ")}` : "") : `No bridges started. Failed: ${failed.join(", ")}`;
+  const cleanupSuffix = prunedHeartbeats > 0 ? ` Auto-clean pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}.` : "";
   return {
     ok: failed.length === 0 && started.length > 0,
     command: "bridge",
     code: started.length > 0 ? "TAP_BRIDGE_START_OK" : "TAP_BRIDGE_START_FAILED",
-    message,
+    message: `${message}${cleanupSuffix}`,
     warnings,
-    data: { started, failed }
+    data: { started, failed, prunedHeartbeats }
   };
 }
 async function bridgeStopOne(identifier) {
@@ -11359,6 +11631,122 @@ function bridgeStatusOne(identifier) {
     }
   };
 }
+function bridgeTuiOne(identifier) {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {}
+    };
+  }
+  const resolved = resolveInstanceId(identifier, state);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: resolved.code,
+      message: resolved.message,
+      warnings: [],
+      data: {}
+    };
+  }
+  const instanceId = resolved.instanceId;
+  const inst = state.instances[instanceId];
+  if (!inst?.installed) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_INSTANCE_NOT_FOUND",
+      message: `${instanceId} is not installed.`,
+      warnings: [],
+      data: {}
+    };
+  }
+  if (inst.runtime !== "codex" || inst.bridgeMode !== "app-server") {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message: `${instanceId} does not support Codex TUI attach. Use a Codex app-server bridge instance.`,
+      warnings: [],
+      data: {}
+    };
+  }
+  const { config: resolvedConfig } = resolveConfig({}, repoRoot);
+  const stateDir = resolvedConfig.stateDir;
+  const status = getBridgeStatus(stateDir, instanceId);
+  if (status !== "running") {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_BRIDGE_NOT_RUNNING",
+      message: `${instanceId} bridge is ${status}. Start it first with: npx @hua-labs/tap bridge start ${instanceId}`,
+      warnings: [],
+      data: { status }
+    };
+  }
+  const bridgeState = loadBridgeState(stateDir, instanceId);
+  const appServer = bridgeState?.appServer;
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
+  if (!appServer) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_BRIDGE_NOT_RUNNING",
+      message: `${instanceId} app-server state is missing. Restart the bridge first.`,
+      warnings: [],
+      data: { status }
+    };
+  }
+  const tuiConnectUrl = resolveTuiConnectUrl(appServer);
+  const attachCwd = resolveTuiAttachCwd(
+    repoRoot,
+    state.repoRoot,
+    runtimeHeartbeat?.threadCwd,
+    savedThread?.cwd
+  );
+  const attachCommand = formatCodexTuiAttachCommand(tuiConnectUrl, attachCwd);
+  const warnings = appServer.auth != null ? [
+    "Use the upstream TUI URL, not the protected gateway URL. The protected URL is bridge-only."
+  ] : [];
+  logHeader(`@hua-labs/tap bridge tui ${instanceId}`);
+  if (appServer.auth) {
+    log(`Protected: ${redactProtectedUrl(appServer.auth.protectedUrl)}`);
+    log(`Upstream:  ${appServer.auth.upstreamUrl}`);
+  }
+  log(`Using:     ${tuiConnectUrl}`);
+  log(`Attach:    ${attachCommand}`);
+  log("");
+  return {
+    ok: true,
+    command: "bridge",
+    instanceId,
+    runtime: inst.runtime,
+    code: "TAP_BRIDGE_STATUS_OK",
+    message: `${instanceId} TUI attach command ready`,
+    warnings,
+    data: {
+      status,
+      tuiConnectUrl,
+      attachCwd,
+      attachCommand,
+      appServer
+    }
+  };
+}
 async function bridgeRestart(identifier, flags) {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
@@ -11558,6 +11946,19 @@ async function bridgeCommand(args) {
       }
       return bridgeStatusAll();
     }
+    case "tui": {
+      if (!identifierArg) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message: "Missing instance. Usage: npx @hua-labs/tap bridge tui <instance>",
+          warnings: [],
+          data: {}
+        };
+      }
+      return bridgeTuiOne(identifierArg);
+    }
     case "watch": {
       const intervalStr = typeof flags["interval"] === "string" ? flags["interval"] : void 0;
       const interval = intervalStr ? parseInt(intervalStr, 10) : 30;
@@ -11583,13 +11984,13 @@ async function bridgeCommand(args) {
         ok: false,
         command: "bridge",
         code: "TAP_INVALID_ARGUMENT",
-        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status`,
+        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status, tui`,
         warnings: [],
         data: {}
       };
   }
 }
-var BRIDGE_HELP;
+var BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS, BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS, BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS, BRIDGE_HELP;
 var init_bridge2 = __esm({
   "src/commands/bridge.ts"() {
     "use strict";
@@ -11598,6 +11999,9 @@ var init_bridge2 = __esm({
     init_config();
     init_adapters();
     init_utils();
+    BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1e3;
+    BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1e3;
+    BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1e3;
     BRIDGE_HELP = `
 Usage:
   tap bridge <subcommand> [instance] [options]
@@ -11609,6 +12013,7 @@ Subcommands:
   stop              Stop all running bridges
   status            Show bridge status for all instances
   status <instance> Show bridge status for a specific instance
+  tui <instance>    Show the safe Codex TUI attach command for a running bridge
   watch             Monitor bridges and auto-restart stuck/stale ones
 
 Options:
@@ -11637,6 +12042,7 @@ Examples:
   npx @hua-labs/tap bridge stop codex
   npx @hua-labs/tap bridge stop
   npx @hua-labs/tap bridge status
+  npx @hua-labs/tap bridge tui codex
 `.trim();
   }
 });
@@ -11663,7 +12069,12 @@ async function upCommand(args) {
   process.env.TAP_COLD_START_WARMUP = "true";
   let result;
   try {
-    result = await bridgeCommand(["start", "--all", ...args]);
+    result = await bridgeCommand([
+      "start",
+      "--all",
+      "--auto-prune-heartbeats",
+      ...args
+    ]);
   } finally {
     if (previousColdStartWarmup === void 0) {
       delete process.env.TAP_COLD_START_WARMUP;
@@ -11711,6 +12122,7 @@ Usage:
 Description:
   Start all registered app-server bridge daemons with one command.
   This is the orchestration entrypoint for headless/background TAP operation.
+  tap up auto-prunes stale heartbeat entries before bridge startup.
 
 Examples:
   npx @hua-labs/tap up
@@ -27749,8 +28161,10 @@ async function startHttpServer(options) {
       resolve11();
     });
   });
+  const addr = server.address();
+  const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {
-    port,
+    port: actualPort,
     token,
     close: () => new Promise((resolve11, reject) => {
       server.close((err) => err ? reject(err) : resolve11());
@@ -27774,6 +28188,7 @@ export {
   loadLocalConfig,
   loadSharedConfig,
   loadState,
+  normalizeTapPath,
   probeFnmNode,
   readNodeVersion,
   resolveConfig,

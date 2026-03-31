@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 // @ts-expect-error script entrypoint is runtime-typed only
-import { runChainRouterPass } from "../../scripts/lib/chain-review-router-core.mjs";
+import { runChainRouterPass } from "../../../../scripts/lib/chain-review-router-core.mjs";
 
 function makeHeartbeat(now: Date, minutesAgo = 1) {
   return new Date(now.getTime() - minutesAgo * 60 * 1000).toISOString();

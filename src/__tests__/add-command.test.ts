@@ -22,8 +22,11 @@ vi.mock("../adapters/index.js", () => ({
   getAdapter: getAdapterMock,
 }));
 
+const findNextAvailableAppServerPortMock = vi.fn().mockResolvedValue(4501);
+
 vi.mock("../engine/bridge.js", () => ({
   startBridge: startBridgeMock,
+  findNextAvailableAppServerPort: findNextAvailableAppServerPortMock,
 }));
 
 vi.mock("../config/index.js", () => ({

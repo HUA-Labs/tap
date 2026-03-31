@@ -2,6 +2,60 @@
 
 All notable changes to tap will be documented in this file.
 
+## 0.4.0 (2026-03-31)
+
+Gen 19-21 release — DM routing, session-neutral bootstrap, bridge stability, multi-model team ops.
+
+### Features
+
+- **M202**: DM routing Phase 1 — frontmatter-based message routing for direct messages
+- **M204**: DM routing Phase 2 — ID canonicalization (hyphen/underscore normalization)
+- **M180**: Codex session-neutral bootstrap — multi-instance identity fix
+- **M182**: Agent identity unification — plugin slice with shared routing helpers
+- **M206**: Unified bridge routing — shared identity helpers across bridge and plugin
+
+### Fixes
+
+- **M208**: `tap add codex` now passes `manageAppServer` to `startBridge()` and persists in state — bridge auto-launches app-server correctly
+- **M209**: Bridge restart no longer re-dispatches already-processed messages — cutoff stored as dispatched max mtime instead of wall-clock
+- **M207**: `tap up` auto-prunes stale heartbeats before starting bridges (orphan 24h, dead bridge 10m, signing-off 5m)
+- **M203**: Bridge stale turn fallback — `waitingOnApproval` detection prevents stuck turns
+- **M201**: MCP server `bun` → `node` for multi-OS portability
+- **M175**: WebSocket no-auth warning + doctor check
+- **M197**: `inferRestartMode` connected to `bridge start --all`
+- **M200**: Unified `normalizeTapPath` across all entrypoints
+- **M186**: Restore `tap-comms` bin compatibility alias
+- **M210**: Phantom agent heartbeat filtering — `tap_who`, HUD count, and write cycle prune entries without valid agent ID
+- **M211**: `tap add codex` auto-assigns next free port when `--port` omitted, preventing multi-instance port collision
+- **M212**: Managed startup health check upgraded to HTTP `/readyz` probe — no WebSocket session created, auth gateway end-to-end readiness restored, TCP fallback for legacy servers
+- Standalone bridge runtime path sync + Windows spawn liveness gate
+- Dual session fix: managed startup no longer opens extra Codex sessions via WebSocket health checks
+
+### Architecture
+
+- **M205**: App-server bridge splitting — 2289 → 22-line barrel + 8 extracted modules
+
+### Security
+
+- **M174**: Bridge token leak sanitization — all error output paths masked (query, JSON, subprotocol, Bearer)
+
+### Tests
+
+- **M176**: HTTP CSRF protection test coverage + port:0 dynamic binding
+- Bridge inbox cutoff race condition coverage (M209)
+- Heartbeat pruning: orphan, dead bridge, signing-off scenarios (M207)
+- Bridge log visibility regression coverage (M181)
+- TCP health probe: 6 tests for managed startup readiness
+- HTTP `/readyz` health probe: readyz URL conversion, 200/unsupported/503 branching, auth gateway readyz (M212)
+- Port auto-assignment: `findNextAvailableAppServerPort()` in `tap add` (M211)
+
+## 0.3.1 (2026-03-29)
+
+- Agent ID canonicalization — hyphen/underscore normalization
+- Linux spawn helper — cross-platform detached process spawning
+- prepack fix for CI publish
+- Mini HUD statusline integration
+
 ## 0.3.0 (2026-03-28)
 
 Gen 18 mega release — 48 PRs merged, headless durahan achieved, bridge.ts fully split.

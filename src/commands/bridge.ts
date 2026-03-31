@@ -1,3 +1,4 @@
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { loadState, saveState, updateInstanceState } from "../state.js";
 import {
@@ -49,6 +50,115 @@ function formatAge(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m ago`;
 }
 
+interface BridgeHeartbeatRecord {
+  agent?: string;
+  timestamp?: string;
+  lastActivity?: string;
+  status?: "active" | "idle" | "signing-off" | string;
+}
+
+const BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1000;
+const BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1000;
+
+function loadBridgeHeartbeatStore(
+  commsDir: string,
+): Record<string, BridgeHeartbeatRecord> | null {
+  const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+  if (!existsSync(heartbeatsPath)) return {};
+  try {
+    return JSON.parse(readFileSync(heartbeatsPath, "utf-8")) as Record<
+      string,
+      BridgeHeartbeatRecord
+    >;
+  } catch {
+    return null;
+  }
+}
+
+function saveBridgeHeartbeatStore(
+  commsDir: string,
+  store: Record<string, BridgeHeartbeatRecord>,
+): void {
+  const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+  const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+  renameSync(tmp, heartbeatsPath);
+}
+
+function parseBridgeHeartbeatAgeMs(
+  record: BridgeHeartbeatRecord,
+  now: number,
+): number {
+  const raw = record.lastActivity ?? record.timestamp;
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, now - parsed);
+}
+
+function resolveBridgeHeartbeatInstanceId(
+  state: TapState,
+  heartbeatId: string,
+): InstanceId | null {
+  if (state.instances[heartbeatId]) return heartbeatId as InstanceId;
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]) return hyphenated as InstanceId;
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]) return underscored as InstanceId;
+  return null;
+}
+
+function pruneStaleHeartbeatsForBridgeUp(
+  state: TapState,
+  stateDir: string,
+  commsDir: string,
+): { removed: number; warning?: string } {
+  const store = loadBridgeHeartbeatStore(commsDir);
+  if (store === null) {
+    return {
+      removed: 0,
+      warning: "Auto-clean skipped — heartbeats.json unreadable",
+    };
+  }
+
+  const now = Date.now();
+  let removed = 0;
+
+  for (const [heartbeatId, heartbeat] of Object.entries(store)) {
+    const ageMs = parseBridgeHeartbeatAgeMs(heartbeat, now);
+    const instanceId = resolveBridgeHeartbeatInstanceId(state, heartbeatId);
+    const instance = instanceId ? state.instances[instanceId] : null;
+    const bridgeBacked = instance?.bridgeMode === "app-server";
+    const bridgeRunning =
+      bridgeBacked && instanceId
+        ? getBridgeStatus(stateDir, instanceId) === "running"
+        : false;
+    const status = heartbeat.status ?? "active";
+
+    const staleByStatus =
+      status === "signing-off" &&
+      ageMs >= BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS;
+    const staleByDeadBridge =
+      bridgeBacked &&
+      !bridgeRunning &&
+      ageMs >= BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS;
+    const staleByAge =
+      !bridgeRunning && ageMs >= BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS;
+
+    if (staleByStatus || staleByDeadBridge || staleByAge) {
+      delete store[heartbeatId];
+      removed += 1;
+    }
+  }
+
+  if (removed > 0) {
+    saveBridgeHeartbeatStore(commsDir, store);
+  }
+
+  return { removed };
+}
+
 const BRIDGE_HELP = `
 Usage:
   tap bridge <subcommand> [instance] [options]
@@ -60,6 +170,7 @@ Subcommands:
   stop              Stop all running bridges
   status            Show bridge status for all instances
   status <instance> Show bridge status for a specific instance
+  tui <instance>    Show the safe Codex TUI attach command for a running bridge
   watch             Monitor bridges and auto-restart stuck/stale ones
 
 Options:
@@ -88,6 +199,7 @@ Examples:
   npx @hua-labs/tap bridge stop codex
   npx @hua-labs/tap bridge stop
   npx @hua-labs/tap bridge status
+  npx @hua-labs/tap bridge tui codex
 `.trim();
 
 function formatAppServerState(appServer: AppServerState): string {
@@ -113,6 +225,30 @@ function redactProtectedUrl(url: string): string {
   } catch {
     return url.replace(/[?&]tap_token=[^&]+/g, "");
   }
+}
+
+function resolveTuiConnectUrl(appServer: AppServerState): string {
+  return appServer.auth?.upstreamUrl ?? appServer.url;
+}
+
+function quoteCliArg(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function formatCodexTuiAttachCommand(
+  tuiConnectUrl: string,
+  cwd: string,
+): string {
+  return `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+}
+
+function resolveTuiAttachCwd(
+  repoRoot: string,
+  stateRepoRoot: string | null | undefined,
+  runtimeThreadCwd: string | null | undefined,
+  savedThreadCwd: string | null | undefined,
+): string {
+  return runtimeThreadCwd ?? savedThreadCwd ?? stateRepoRoot ?? repoRoot;
 }
 
 function loadCurrentBridgeState(
@@ -592,6 +728,27 @@ async function bridgeStartAll(
     };
   }
 
+  const ctx = createAdapterContext(state.commsDir, repoRoot);
+  const warnings: string[] = [];
+  let prunedHeartbeats = 0;
+  if (flags["auto-prune-heartbeats"] === true) {
+    const cleanup = pruneStaleHeartbeatsForBridgeUp(
+      state,
+      ctx.stateDir,
+      ctx.commsDir,
+    );
+    prunedHeartbeats = cleanup.removed;
+    if (cleanup.warning) {
+      warnings.push(cleanup.warning);
+      log(cleanup.warning);
+    }
+    if (prunedHeartbeats > 0) {
+      log(
+        `Auto-clean: pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}`,
+      );
+    }
+  }
+
   const instanceIds = Object.keys(state.instances) as InstanceId[];
   const appServerInstances = instanceIds.filter((id) => {
     const inst = state.instances[id];
@@ -601,13 +758,17 @@ async function bridgeStartAll(
   });
 
   if (appServerInstances.length === 0) {
+    const cleanupSuffix =
+      prunedHeartbeats > 0
+        ? ` Auto-clean pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}.`
+        : "";
     return {
       ok: true,
       command: "bridge",
       code: "TAP_NO_OP",
-      message: "No app-server instances found to start.",
-      warnings: [],
-      data: {},
+      message: `No app-server instances found to start.${cleanupSuffix}`,
+      warnings,
+      data: { prunedHeartbeats },
     };
   }
 
@@ -619,7 +780,6 @@ async function bridgeStartAll(
 
   const started: string[] = [];
   const failed: string[] = [];
-  const warnings: string[] = [];
 
   for (const instanceId of appServerInstances) {
     const inst = state.instances[instanceId];
@@ -632,8 +792,28 @@ async function bridgeStartAll(
       continue;
     }
 
+    // Restore saved --no-server / --no-auth mode (M197: inferRestartMode for start --all)
+    const stateDir = path.join(repoRoot, ".tap-comms");
+    const currentBridgeState = loadBridgeState(stateDir, instanceId);
+    const { manageAppServer, noAuth } = inferRestartMode(
+      currentBridgeState,
+      {
+        noServer: flags["no-server"] === true ? true : undefined,
+        noAuth: flags["no-auth"] === true ? true : undefined,
+      },
+      {
+        manageAppServer: inst.manageAppServer,
+        noAuth: inst.noAuth,
+      },
+    );
+    const mergedFlags = {
+      ...flags,
+      ...(manageAppServer === false ? { "no-server": true } : {}),
+      ...(noAuth === true ? { "no-auth": true } : {}),
+    };
+
     log(`Starting ${instanceId} (agent: ${storedName})...`);
-    const result = await bridgeStart(instanceId, storedName, flags);
+    const result = await bridgeStart(instanceId, storedName, mergedFlags);
 
     if (result.ok) {
       started.push(instanceId);
@@ -650,15 +830,19 @@ async function bridgeStartAll(
       ? `Started ${started.length}/${appServerInstances.length} bridge(s): ${started.join(", ")}` +
         (failed.length > 0 ? `. Failed: ${failed.join(", ")}` : "")
       : `No bridges started. Failed: ${failed.join(", ")}`;
+  const cleanupSuffix =
+    prunedHeartbeats > 0
+      ? ` Auto-clean pruned ${prunedHeartbeats} stale heartbeat entr${prunedHeartbeats === 1 ? "y" : "ies"}.`
+      : "";
 
   return {
     ok: failed.length === 0 && started.length > 0,
     command: "bridge",
     code:
       started.length > 0 ? "TAP_BRIDGE_START_OK" : "TAP_BRIDGE_START_FAILED",
-    message,
+    message: `${message}${cleanupSuffix}`,
     warnings,
-    data: { started, failed },
+    data: { started, failed, prunedHeartbeats },
   };
 }
 
@@ -1384,6 +1568,136 @@ function bridgeStatusOne(identifier: string): CommandResult {
   };
 }
 
+function bridgeTuiOne(identifier: string): CommandResult {
+  const repoRoot = findRepoRoot();
+  const state = loadState(repoRoot);
+
+  if (!state) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: "TAP_NOT_INITIALIZED",
+      message: "Not initialized. Run: npx @hua-labs/tap init",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const resolved = resolveInstanceId(identifier, state);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      command: "bridge",
+      code: resolved.code,
+      message: resolved.message,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const instanceId = resolved.instanceId;
+  const inst = state.instances[instanceId];
+
+  if (!inst?.installed) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      code: "TAP_INSTANCE_NOT_FOUND",
+      message: `${instanceId} is not installed.`,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  if (inst.runtime !== "codex" || inst.bridgeMode !== "app-server") {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message: `${instanceId} does not support Codex TUI attach. Use a Codex app-server bridge instance.`,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const { config: resolvedConfig } = resolveConfig({}, repoRoot);
+  const stateDir = resolvedConfig.stateDir;
+  const status = getBridgeStatus(stateDir, instanceId);
+  if (status !== "running") {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_BRIDGE_NOT_RUNNING",
+      message: `${instanceId} bridge is ${status}. Start it first with: npx @hua-labs/tap bridge start ${instanceId}`,
+      warnings: [],
+      data: { status },
+    };
+  }
+
+  const bridgeState = loadBridgeState(stateDir, instanceId);
+  const appServer = bridgeState?.appServer;
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
+  if (!appServer) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: inst.runtime,
+      code: "TAP_BRIDGE_NOT_RUNNING",
+      message: `${instanceId} app-server state is missing. Restart the bridge first.`,
+      warnings: [],
+      data: { status },
+    };
+  }
+
+  const tuiConnectUrl = resolveTuiConnectUrl(appServer);
+  const attachCwd = resolveTuiAttachCwd(
+    repoRoot,
+    state.repoRoot,
+    runtimeHeartbeat?.threadCwd,
+    savedThread?.cwd,
+  );
+  const attachCommand = formatCodexTuiAttachCommand(tuiConnectUrl, attachCwd);
+  const warnings =
+    appServer.auth != null
+      ? [
+          "Use the upstream TUI URL, not the protected gateway URL. The protected URL is bridge-only.",
+        ]
+      : [];
+
+  logHeader(`@hua-labs/tap bridge tui ${instanceId}`);
+  if (appServer.auth) {
+    log(`Protected: ${redactProtectedUrl(appServer.auth.protectedUrl)}`);
+    log(`Upstream:  ${appServer.auth.upstreamUrl}`);
+  }
+  log(`Using:     ${tuiConnectUrl}`);
+  log(`Attach:    ${attachCommand}`);
+  log("");
+
+  return {
+    ok: true,
+    command: "bridge",
+    instanceId,
+    runtime: inst.runtime,
+    code: "TAP_BRIDGE_STATUS_OK",
+    message: `${instanceId} TUI attach command ready`,
+    warnings,
+    data: {
+      status,
+      tuiConnectUrl,
+      attachCwd,
+      attachCommand,
+      appServer,
+    },
+  };
+}
+
 // ─── Command Router ────────────────────────────────────────────
 
 async function bridgeRestart(
@@ -1612,6 +1926,21 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
       return bridgeStatusAll();
     }
 
+    case "tui": {
+      if (!identifierArg) {
+        return {
+          ok: false,
+          command: "bridge",
+          code: "TAP_INVALID_ARGUMENT",
+          message:
+            "Missing instance. Usage: npx @hua-labs/tap bridge tui <instance>",
+          warnings: [],
+          data: {},
+        };
+      }
+      return bridgeTuiOne(identifierArg);
+    }
+
     case "watch": {
       const intervalStr =
         typeof flags["interval"] === "string" ? flags["interval"] : undefined;
@@ -1646,7 +1975,7 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
         ok: false,
         command: "bridge",
         code: "TAP_INVALID_ARGUMENT",
-        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status`,
+        message: `Unknown bridge subcommand: ${subcommand}. Use: start, stop, restart, status, tui`,
         warnings: [],
         data: {},
       };

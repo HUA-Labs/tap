@@ -11,11 +11,8 @@ import type {
 } from "../types.js";
 import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
 
-import { pidFilePath, logFilePath, stderrLogFilePath } from "./bridge-paths.js";
-import {
-  startWindowsDetachedProcess,
-  waitForWindowsDetachedProcessLiveness,
-} from "./bridge-windows-spawn.js";
+import { pidFilePath, logFilePath } from "./bridge-paths.js";
+import { startWindowsDetachedProcess } from "./bridge-windows-spawn.js";
 import { startUnixDetachedProcess } from "./bridge-unix-spawn.js";
 import { stopManagedAppServer } from "./bridge-process-control.js";
 import { resolveAgentName } from "./bridge-config.js";
@@ -211,19 +208,11 @@ export async function startBridge(
             repoRoot,
             logPath,
             bridgeEnv,
+            options.platform,
           );
 
     if (!bridgePid) {
       throw new Error(`Failed to spawn bridge process for ${instanceId}`);
-    }
-
-    if (options.platform === "win32") {
-      const alive = await waitForWindowsDetachedProcessLiveness(bridgePid);
-      if (!alive) {
-        throw new Error(
-          `Bridge process for ${instanceId} exited immediately after Windows detached spawn.\nCheck ${logPath} and ${stderrLogFilePath(logPath)}.`,
-        );
-      }
     }
 
     const state: BridgeState = {

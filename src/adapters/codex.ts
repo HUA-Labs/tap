@@ -8,6 +8,7 @@ import {
 } from "../artifact-backups.js";
 import {
   extractTomlTable,
+  parseTomlAssignments,
   removeTomlTable,
   renderTomlTable,
   replaceTomlTable,
@@ -30,9 +31,11 @@ import {
   getHomeDir,
   probeCommand,
 } from "./common.js";
+import type { ManagedMcpServerSpec } from "./common.js";
 
 const MCP_SELECTOR = "mcp_servers.tap";
 const ENV_SELECTOR = "mcp_servers.tap.env";
+const SESSION_NEUTRAL_AGENT_NAME = "<set-per-session>";
 
 // Legacy key names — used for auto-migration from pre-0.3 configs
 const OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
@@ -92,13 +95,37 @@ function writeTomlFile(filePath: string, content: string): void {
   fs.renameSync(tmp, filePath);
 }
 
+function buildSessionNeutralCodexSpec(
+  ctx: AdapterContext,
+): ManagedMcpServerSpec {
+  const managed = buildManagedMcpServerSpec(ctx);
+  const env: Record<string, string> = {
+    ...managed.env,
+    TAP_AGENT_NAME: SESSION_NEUTRAL_AGENT_NAME,
+  };
+  delete env.TAP_AGENT_ID;
+  return { ...managed, env };
+}
+
+function buildCodexEnvEntries(
+  existingTable: string | null,
+  managedEnv: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const preservedEnv = parseTomlAssignments(existingTable ?? "");
+  delete preservedEnv.TAP_AGENT_ID;
+  return {
+    ...preservedEnv,
+    ...managedEnv,
+  };
+}
+
 function verifyManagedToml(
   content: string,
   ctx: AdapterContext,
   configPath: string,
 ): VerifyCheck[] {
   const checks: VerifyCheck[] = [];
-  const managed = buildManagedMcpServerSpec(ctx);
+  const managed = buildSessionNeutralCodexSpec(ctx);
   const mainTable = extractTomlTable(content, MCP_SELECTOR);
   const envTable = extractTomlTable(content, ENV_SELECTOR);
 
@@ -142,6 +169,20 @@ function verifyManagedToml(
           `command = "${managed.command.replace(/\\/g, "\\\\")}"`,
         ) && mainTable.includes(`args = [${expectedArgs}]`),
       message: "Managed tap command/args do not match expected values",
+    });
+  }
+
+  if (envTable) {
+    const envValues = parseTomlAssignments(envTable);
+    checks.push({
+      name: "Managed TAP_AGENT_NAME is session-neutral",
+      passed: envValues.TAP_AGENT_NAME === managed.env.TAP_AGENT_NAME,
+      message: `TAP_AGENT_NAME should be "${SESSION_NEUTRAL_AGENT_NAME}"`,
+    });
+    checks.push({
+      name: "Managed TAP_AGENT_ID is omitted",
+      passed: typeof envValues.TAP_AGENT_ID !== "string",
+      message: "TAP_AGENT_ID should not be persisted in Codex config",
     });
   }
 
@@ -239,7 +280,7 @@ export const codexAdapter: RuntimeAdapter = {
     const configPath = plan.operations[0]?.path ?? findCodexConfigPath();
     const warnings: string[] = [];
     const changedFiles: string[] = [];
-    const managed = buildManagedMcpServerSpec(ctx, ctx.instanceId);
+    const managed = buildSessionNeutralCodexSpec(ctx);
 
     warnings.push(...managed.warnings);
     if (managed.issues.length > 0 || !managed.command) {
@@ -308,8 +349,10 @@ export const codexAdapter: RuntimeAdapter = {
       ENV_SELECTOR,
       renderTomlTable(
         ENV_SELECTOR,
-        managed.env,
-        extractTomlTable(existingContent, ENV_SELECTOR),
+        buildCodexEnvEntries(
+          extractTomlTable(existingContent, ENV_SELECTOR),
+          managed.env,
+        ),
       ),
     );
 

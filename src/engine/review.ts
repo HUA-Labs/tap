@@ -68,6 +68,28 @@ const PR_NUMBER_PATTERNS = [
   /review[-_ ]?(\d+)/i,
 ];
 
+function trimAddress(value: string): string {
+  return value.trim();
+}
+
+function canonicalizeAgentId(value: string): string {
+  return trimAddress(value).replace(/-/g, "_").toLowerCase();
+}
+
+export function isOwnMessageAddress(
+  sender: string,
+  agentId: string,
+  agentName: string,
+): boolean {
+  const normalizedSender = trimAddress(sender);
+  if (!normalizedSender) return false;
+
+  return (
+    canonicalizeAgentId(normalizedSender) === canonicalizeAgentId(agentId) ||
+    normalizedSender.toLowerCase() === trimAddress(agentName).toLowerCase()
+  );
+}
+
 /**
  * Parse inbox filename to extract routing info.
  * Format: YYYYMMDD-sender-recipient-subject.md
@@ -487,6 +509,7 @@ export function scanInboxForReviews(
   stateDir: string,
   generation: string,
   agentName: string,
+  agentId: string = agentName,
 ): ReviewRequest[] {
   const inboxDir = path.join(commsDir, "inbox");
   if (!fs.existsSync(inboxDir)) return [];
@@ -511,6 +534,8 @@ export function scanInboxForReviews(
     ) {
       continue;
     }
+
+    if (isOwnMessageAddress(request.sender, agentId, agentName)) continue;
 
     if (isStaleReviewRequest(request, commsDir, agentName)) continue;
     if (isAlreadyProcessed(stateDir, filePath)) continue;

@@ -26,6 +26,7 @@ beforeEach(() => {
     args: ["new-server.ts"],
     env: {
       TAP_AGENT_NAME: "reviewer",
+      TAP_AGENT_ID: "codex-reviewer",
       TAP_COMMS_DIR: path.join(tmpDir, "comms").replace(/\\/g, "/"),
       TAP_STATE_DIR: path.join(tmpDir, ".tap-comms").replace(/\\/g, "/"),
       TAP_REPO_ROOT: tmpDir.replace(/\\/g, "/"),
@@ -110,9 +111,13 @@ TAP_COMMS_DIR = "C:/old-comms"
 
     const newEnv = extractTomlTable(written, "mcp_servers.tap.env");
     expect(newEnv).not.toBeNull();
-    expect(newEnv).toContain("TAP_AGENT_NAME");
+    expect(newEnv).toContain('TAP_AGENT_NAME = "<set-per-session>"');
+    expect(newEnv).not.toContain("TAP_AGENT_ID");
 
     // Unrelated content preserved
     expect(written).toContain('model = "gpt-5.4"');
+
+    const verify = await codexAdapter.verify(ctx, plan);
+    expect(verify.ok).toBe(true);
   });
 });

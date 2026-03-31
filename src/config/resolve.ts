@@ -245,7 +245,7 @@ function resolvePath(repoRoot: string, p: string): string {
     : path.resolve(repoRoot, normalized);
 }
 
-function normalizeTapPath(input: string): string {
+export function normalizeTapPath(input: string): string {
   const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
   if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
     return trimmed;

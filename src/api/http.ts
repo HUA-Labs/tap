@@ -281,8 +281,12 @@ export async function startHttpServer(options?: HttpServerOptions): Promise<{
     });
   });
 
+  // Resolve actual port (supports port: 0 for OS-assigned free port)
+  const addr = server.address();
+  const actualPort = typeof addr === "object" && addr ? addr.port : port;
+
   return {
-    port,
+    port: actualPort,
     token,
     close: () =>
       new Promise<void>((resolve, reject) => {

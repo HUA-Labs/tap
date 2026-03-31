@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe("startUnixDetachedProcess", () => {
-  it("spawns a detached process and creates stdout/stderr logs", () => {
+  it("spawns via nohup on linux and creates stdout/stderr logs", () => {
     const unref = vi.fn();
     spawnMock.mockReturnValue({ pid: 4242, unref });
     const logPath = path.join(tmpDir, "bridge.log");
@@ -48,12 +48,13 @@ describe("startUnixDetachedProcess", () => {
       tmpDir,
       logPath,
       { TAP_AGENT_NAME: "신" },
+      "linux",
     );
 
     expect(pid).toBe(4242);
     expect(spawnMock).toHaveBeenCalledWith(
-      "node",
-      ["bridge.js"],
+      "nohup",
+      ["node", "bridge.js"],
       expect.objectContaining({
         cwd: tmpDir,
         detached: true,
@@ -68,7 +69,7 @@ describe("startUnixDetachedProcess", () => {
 });
 
 describe("startUnixCodexAppServer", () => {
-  it("unwraps NUL-separated commands before spawning codex app-server", () => {
+  it("unwraps NUL-separated commands and routes through nohup on linux", () => {
     const unref = vi.fn();
     spawnMock.mockReturnValue({ pid: 5150, unref });
     const logPath = path.join(tmpDir, "app-server.log");
@@ -78,18 +79,46 @@ describe("startUnixCodexAppServer", () => {
       "ws://127.0.0.1:4501",
       tmpDir,
       logPath,
+      "linux",
     );
 
     expect(pid).toBe(5150);
     expect(spawnMock).toHaveBeenCalledWith(
-      "node",
-      ["/tmp/codex.js", "app-server", "--listen", "ws://127.0.0.1:4501"],
+      "nohup",
+      [
+        "node",
+        "/tmp/codex.js",
+        "app-server",
+        "--listen",
+        "ws://127.0.0.1:4501",
+      ],
       expect.any(Object),
     );
   });
 });
 
 describe("findUnixListeningProcessId", () => {
+  it("uses ss first on linux", () => {
+    spawnSyncMock.mockReturnValue({
+      status: 0,
+      stdout:
+        'LISTEN 0 511 127.0.0.1:4501 0.0.0.0:* users:(("node",pid=9132,fd=25))\n',
+      stderr: "",
+    });
+
+    expect(findUnixListeningProcessId("ws://127.0.0.1:4501", "linux")).toBe(
+      9132,
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "ss",
+      ["-ltnpH", "sport = :4501"],
+      expect.objectContaining({
+        encoding: "utf-8",
+        windowsHide: true,
+      }),
+    );
+  });
+
   it("returns the first lsof PID on macOS", () => {
     spawnSyncMock.mockReturnValue({
       status: 0,

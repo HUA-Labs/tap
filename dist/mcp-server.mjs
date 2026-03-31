@@ -6807,6 +6807,88 @@ var require_dist = __commonJS({
   }
 });
 
+// ../tap-plugin/channels/tap-identity.ts
+function trimAddress(value) {
+  return value?.trim() ?? "";
+}
+function canonicalizeAgentId(value) {
+  return trimAddress(value).replace(/-/g, "_");
+}
+function isBroadcastRecipient(value) {
+  return BROADCAST_RECIPIENTS.has(trimAddress(value));
+}
+function isPlaceholderAgentValue(value) {
+  const normalized = trimAddress(value);
+  return !normalized || PLACEHOLDER_AGENT_VALUES.has(normalized);
+}
+function sameRoutingAddress(left, right) {
+  const normalizedLeft = trimAddress(left);
+  const normalizedRight = trimAddress(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  if (isBroadcastRecipient(normalizedLeft) && isBroadcastRecipient(normalizedRight)) {
+    return true;
+  }
+  return normalizedLeft === normalizedRight || canonicalizeAgentId(normalizedLeft) === canonicalizeAgentId(normalizedRight);
+}
+function matchesAgentRecipient(recipient, agentId, agentName) {
+  const normalizedRecipient = trimAddress(recipient);
+  if (!normalizedRecipient) {
+    return false;
+  }
+  return isBroadcastRecipient(normalizedRecipient) || sameRoutingAddress(normalizedRecipient, agentId) || normalizedRecipient === trimAddress(agentName);
+}
+function isOwnMessageAddress(sender, agentId, agentName) {
+  const normalizedSender = trimAddress(sender);
+  if (!normalizedSender) {
+    return false;
+  }
+  return sameRoutingAddress(normalizedSender, agentId) || normalizedSender === trimAddress(agentName);
+}
+function normalizeRecipientList(rawRecipients, exclude = []) {
+  let recipients;
+  if (rawRecipients == null) {
+    recipients = void 0;
+  } else if (typeof rawRecipients === "string") {
+    const trimmed = trimAddress(rawRecipients);
+    recipients = trimmed ? [trimmed] : void 0;
+  } else if (Array.isArray(rawRecipients)) {
+    const valid = rawRecipients.filter(
+      (value) => typeof value === "string" && trimAddress(value).length > 0
+    ).map((value) => trimAddress(value));
+    recipients = valid.length > 0 ? valid : void 0;
+  } else {
+    recipients = void 0;
+  }
+  if (!recipients) {
+    return void 0;
+  }
+  const filtered = [];
+  for (const recipient of recipients) {
+    if (exclude.some((value) => sameRoutingAddress(value, recipient))) {
+      continue;
+    }
+    if (filtered.some((value) => sameRoutingAddress(value, recipient))) {
+      continue;
+    }
+    filtered.push(recipient);
+  }
+  return filtered.length > 0 ? filtered : void 0;
+}
+var BROADCAST_RECIPIENTS, PLACEHOLDER_AGENT_VALUES;
+var init_tap_identity = __esm({
+  "../tap-plugin/channels/tap-identity.ts"() {
+    "use strict";
+    BROADCAST_RECIPIENTS = /* @__PURE__ */ new Set(["\uC804\uCCB4", "all"]);
+    PLACEHOLDER_AGENT_VALUES = /* @__PURE__ */ new Set([
+      "unknown",
+      "unnamed",
+      "<set-per-session>"
+    ]);
+  }
+});
+
 // ../tap-plugin/channels/tap-utils.ts
 var tap_utils_exports = {};
 __export(tap_utils_exports, {
@@ -6822,6 +6904,7 @@ __export(tap_utils_exports, {
   RECEIPTS_PATH: () => RECEIPTS_PATH,
   REVIEWS_DIR: () => REVIEWS_DIR,
   SERVER_START: () => SERVER_START,
+  canonicalizeAgentId: () => canonicalizeAgentId2,
   debug: () => debug,
   getAgentId: () => getAgentId,
   getAgentName: () => getAgentName,
@@ -6835,30 +6918,63 @@ __export(tap_utils_exports, {
   isNameConfirmed: () => isNameConfirmed,
   normalizeSources: () => normalizeSources,
   parseFilename: () => parseFilename,
+  parseFrontmatter: () => parseFrontmatter,
+  parseMessageRoute: () => parseMessageRoute,
   setAgentName: () => setAgentName,
   stripBom: () => stripBom,
+  stripFrontmatter: () => stripFrontmatter,
   updateActivityTime: () => updateActivityTime
 });
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";
-function resolveInitialId() {
-  const envId = process.env.TAP_AGENT_ID;
-  if (envId && !PLACEHOLDER_NAMES.has(envId)) return envId.replace(/-/g, "_");
-  const envName = process.env.TAP_AGENT_NAME;
-  if (envName && !PLACEHOLDER_NAMES.has(envName))
-    return envName.replace(/-/g, "_");
-  return "unknown";
+function isConcreteIdentity(value) {
+  return !isPlaceholderAgentValue(value);
 }
-function resolveNameFromState() {
+function normalizeAgentId(value) {
+  return canonicalizeAgentId(value);
+}
+function loadStateInstances() {
   const stateDir = process.env.TAP_STATE_DIR;
-  const agentId = process.env.TAP_AGENT_ID;
-  if (!stateDir || !agentId) return null;
+  if (!stateDir) return null;
   try {
     const statePath = join(stateDir, "state.json");
     if (!existsSync(statePath)) return null;
     const state = JSON.parse(readFileSync(statePath, "utf-8"));
-    const instance = state.instances?.[agentId] ?? state.instances?.[agentId.replace(/_/g, "-")];
-    return instance?.agentName ?? null;
+    return state.instances ?? null;
+  } catch {
+    return null;
+  }
+}
+function resolveSingleCodexBootstrap() {
+  const instances = loadStateInstances();
+  if (!instances) return null;
+  const installedCodexInstances = Object.entries(instances).filter(
+    ([, instance2]) => instance2?.runtime === "codex" && instance2?.installed
+  );
+  if (installedCodexInstances.length !== 1) return null;
+  const [instanceId, instance] = installedCodexInstances[0];
+  return {
+    agentId: normalizeAgentId(instanceId),
+    agentName: typeof instance.agentName === "string" && !isPlaceholderAgentValue(instance.agentName) ? instance.agentName : null
+  };
+}
+function resolveInitialId(stateBootstrap2) {
+  const envId = process.env.TAP_AGENT_ID;
+  if (isConcreteIdentity(envId)) return normalizeAgentId(envId);
+  const envName = process.env.TAP_AGENT_NAME;
+  if (isConcreteIdentity(envName)) return normalizeAgentId(envName);
+  return stateBootstrap2?.agentId ?? "unknown";
+}
+function resolveNameFromState(agentId, stateBootstrap2) {
+  if (agentId === "unknown") return null;
+  if (stateBootstrap2?.agentId === agentId && stateBootstrap2.agentName) {
+    return stateBootstrap2.agentName;
+  }
+  try {
+    const instances = loadStateInstances();
+    if (!instances) return null;
+    const instance = instances[agentId] ?? instances[agentId.replace(/_/g, "-")];
+    return typeof instance?.agentName === "string" && !isPlaceholderAgentValue(instance.agentName) ? instance.agentName : null;
   } catch {
     return null;
   }
@@ -6876,7 +6992,7 @@ function setAgentName(name) {
   _agentName = name;
   _nameConfirmed = true;
   if (!_idLocked) {
-    _agentId = name.replace(/-/g, "_");
+    _agentId = canonicalizeAgentId(name);
     _idLocked = true;
   }
 }
@@ -6895,84 +7011,61 @@ function debug(message) {
 function stripBom(text) {
   return text.charCodeAt(0) === 65279 ? text.slice(1) : text;
 }
-function getAddressAliases(value) {
-  const normalized = value?.trim();
-  if (!normalized) return /* @__PURE__ */ new Set();
-  return new Set([
-    normalized,
-    normalized.replace(/-/g, "_"),
-    normalized.replace(/_/g, "-")
-  ]);
-}
-function encodeRouteSegment(value) {
-  return encodeURIComponent(value.trim()).replace(/-/g, "%2D");
-}
-function decodeRouteSegment(value) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
+function parseFrontmatter(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return null;
+  const fields = {};
+  for (const line of match[1].split("\n")) {
+    const kv = line.match(/^(\w+):\s*(.+)$/);
+    if (kv) fields[kv[1]] = kv[2].trim();
   }
+  if (!fields.from || !fields.to) return null;
+  return {
+    from: fields.from,
+    from_name: fields.from_name,
+    to: fields.to,
+    to_name: fields.to_name,
+    subject: fields.subject ?? "",
+    sent_at: fields.sent_at,
+    type: fields.type
+  };
+}
+function stripFrontmatter(content) {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, "");
+}
+function parseMessageRoute(filename, content) {
+  if (content) {
+    const fm = parseFrontmatter(content);
+    if (fm) return { from: fm.from, to: fm.to, subject: fm.subject };
+  }
+  return parseFilename(filename);
 }
 function parseFilename(filename) {
   const withoutExt = filename.replace(/\.md$/, "");
   const dateMatch = withoutExt.match(/^(\d{8})-(.+)$/);
-  if (dateMatch) {
-    const parts = dateMatch[2].split("-");
-    if (parts.length >= 3) {
-      return {
-        from: decodeRouteSegment(parts[0] || "?"),
-        to: decodeRouteSegment(parts[1] || "?"),
-        subject: decodeRouteSegment(parts.slice(2).join("-") || "?")
-      };
-    }
-    return null;
+  if (!dateMatch) return null;
+  const rest = dateMatch[2];
+  const cjkMatch = rest.match(
+    /^([\u3131-\uD79DA-Za-z][\w]*?)-([\u3131-\uD79DA-Za-z][\w]*?)-(.+)$/
+  );
+  if (cjkMatch) {
+    return { from: cjkMatch[1], to: cjkMatch[2], subject: cjkMatch[3] };
   }
-  const parts = withoutExt.split("-");
-  if (parts.length >= 4) {
+  const parts = rest.split("-");
+  if (parts.length >= 3) {
     return {
-      from: decodeRouteSegment(parts[1] || "?"),
-      to: decodeRouteSegment(parts[2] || "?"),
-      subject: decodeRouteSegment(parts.slice(3).join("-") || "?")
+      from: parts[0] || "?",
+      to: parts[1] || "?",
+      subject: parts.slice(2).join("-") || "?"
     };
   }
   return null;
 }
-function parseInboxEnvelope(filename, content) {
-  if (content) {
-    const frontmatter = stripBom(content).match(
-      /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
-    );
-    if (frontmatter) {
-      let from = "";
-      let to = "";
-      let subject = "";
-      for (const line of frontmatter[1].split(/\r?\n/)) {
-        const separator = line.indexOf(":");
-        if (separator <= 0) continue;
-        const key = line.slice(0, separator).trim();
-        const value = line.slice(separator + 1).trim();
-        if (key === "from") from = value;
-        if (key === "to") to = value;
-        if (key === "subject") subject = value;
-      }
-      if (from && to && subject) {
-        return { from, to, subject };
-      }
-    }
-  }
-  return parseFilename(filename);
+function canonicalizeAgentId2(id) {
+  return canonicalizeAgentId(id);
 }
 function isForMe(to) {
-  const normalized = to?.trim();
-  if (!normalized) return false;
-  if (normalized === "\uC804\uCCB4" || normalized === "all") return true;
-  return getAddressAliases(getAgentId()).has(normalized) || getAddressAliases(getAgentName()).has(normalized);
-}
-function isOwnTapSender(from) {
-  const normalized = from?.trim();
-  if (!normalized) return false;
-  return getAddressAliases(getAgentId()).has(normalized) || getAddressAliases(getAgentName()).has(normalized);
+  return matchesAgentRecipient(to, _agentId, _agentName);
 }
 function normalizeSources(value) {
   if (!Array.isArray(value) || value.length === 0) {
@@ -7014,10 +7107,11 @@ function getRecentSenders() {
   }
   return senders;
 }
-var RAW_COMMS_DIR, COMMS_DIR, INBOX_DIR, REVIEWS_DIR, FINDINGS_DIR, RECEIPTS_DIR, RECEIPTS_PATH, RECEIPTS_LOCK, HEARTBEATS_PATH, HEARTBEATS_LOCK, ARCHIVE_DIR, DB_PATH, SERVER_START, PLACEHOLDER_NAMES, _agentId, _agentName, _idLocked, _nameConfirmed, _lastActivityTime;
+var RAW_COMMS_DIR, COMMS_DIR, INBOX_DIR, REVIEWS_DIR, FINDINGS_DIR, RECEIPTS_DIR, RECEIPTS_PATH, RECEIPTS_LOCK, HEARTBEATS_PATH, HEARTBEATS_LOCK, ARCHIVE_DIR, DB_PATH, SERVER_START, stateBootstrap, _agentId, _agentName, _idLocked, _nameConfirmed, _lastActivityTime;
 var init_tap_utils = __esm({
   "../tap-plugin/channels/tap-utils.ts"() {
     "use strict";
+    init_tap_identity();
     RAW_COMMS_DIR = process.env.TAP_COMMS_DIR;
     if (!RAW_COMMS_DIR) {
       console.error(
@@ -7037,11 +7131,11 @@ var init_tap_utils = __esm({
     ARCHIVE_DIR = join(COMMS_DIR, "archive");
     DB_PATH = join(COMMS_DIR, "tap.db");
     SERVER_START = Date.now();
-    PLACEHOLDER_NAMES = /* @__PURE__ */ new Set(["unknown", "unnamed", "<set-per-session>"]);
-    _agentId = resolveInitialId();
-    _agentName = resolveNameFromState() ?? (process.env.TAP_AGENT_NAME && !PLACEHOLDER_NAMES.has(process.env.TAP_AGENT_NAME) ? process.env.TAP_AGENT_NAME : "unknown");
+    stateBootstrap = resolveSingleCodexBootstrap();
+    _agentId = resolveInitialId(stateBootstrap);
+    _agentName = resolveNameFromState(_agentId, stateBootstrap) ?? (isConcreteIdentity(process.env.TAP_AGENT_NAME) ? process.env.TAP_AGENT_NAME : "unknown");
     _idLocked = _agentId !== "unknown";
-    _nameConfirmed = _agentName !== "unknown" && !PLACEHOLDER_NAMES.has(_agentName);
+    _nameConfirmed = !isPlaceholderAgentValue(_agentName);
     _lastActivityTime = (/* @__PURE__ */ new Date()).toISOString();
   }
 });
@@ -7073,7 +7167,37 @@ import {
   unlinkSync,
   writeFileSync
 } from "fs";
+import { createHash } from "crypto";
 import { join as join2 } from "path";
+function getBridgeProcessedDirs() {
+  const now = Date.now();
+  if (now - _bridgeDirsCachedAt < BRIDGE_DIR_CACHE_TTL_MS) {
+    return _bridgeProcessedDirs;
+  }
+  _bridgeDirsCachedAt = now;
+  if (!REPO_ROOT) {
+    _bridgeProcessedDirs = [];
+    return _bridgeProcessedDirs;
+  }
+  const tmpDir = join2(REPO_ROOT, ".tmp");
+  if (!existsSync2(tmpDir)) {
+    _bridgeProcessedDirs = [];
+    return _bridgeProcessedDirs;
+  }
+  try {
+    _bridgeProcessedDirs = readdirSync2(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge")).map((d) => join2(tmpDir, d, "processed")).filter((p) => existsSync2(p));
+  } catch {
+    _bridgeProcessedDirs = [];
+  }
+  return _bridgeProcessedDirs;
+}
+function isBridgeProcessed(filePath, mtimeMs) {
+  const dirs = getBridgeProcessedDirs();
+  if (dirs.length === 0) return false;
+  const markerId = createHash("sha1").update(`${filePath}|${mtimeMs}`).digest("hex");
+  const markerFile = `${markerId}.done`;
+  return dirs.some((dir) => existsSync2(join2(dir, markerFile)));
+}
 function acquireLock(lockPath, retries = 3, delayMs = 100) {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -7203,6 +7327,10 @@ function getUnreadItems(options) {
         continue;
       }
       if (effectiveSinceMs && mtime < effectiveSinceMs) continue;
+      if (isBridgeProcessed(fullPath, mtime)) {
+        readFiles.add(key);
+        continue;
+      }
       let content;
       try {
         content = stripBom(readFileSync2(fullPath, "utf-8"));
@@ -7213,12 +7341,17 @@ function getUnreadItems(options) {
       let to = "all";
       let subject = filename.replace(/\.md$/, "");
       if (source === "inbox") {
-        const parsed = parseInboxEnvelope(filename, content);
+        const fm = parseFrontmatter(content);
+        const parsed = fm ? { from: fm.from, to: fm.to, subject: fm.subject } : parseFilename(filename);
         if (!parsed || !isForMe(parsed.to)) continue;
-        if (isOwnTapSender(parsed.from)) continue;
-        from = resolveAgentLabel(parsed.from, heartbeatStore);
-        to = resolveAgentLabel(parsed.to, heartbeatStore);
+        if (isOwnMessageAddress(parsed.from, getAgentId(), getAgentName()))
+          continue;
+        from = resolveAgentLabel(fm?.from_name ?? parsed.from, heartbeatStore);
+        to = resolveAgentLabel(fm?.to_name ?? parsed.to, heartbeatStore);
         subject = parsed.subject;
+        if (fm && includeContent) {
+          content = stripFrontmatter(content);
+        }
       }
       const item = {
         source,
@@ -7243,13 +7376,18 @@ function getUnreadItems(options) {
   }
   return items;
 }
-var startupFiles, readFiles;
+var startupFiles, readFiles, REPO_ROOT, BRIDGE_DIR_CACHE_TTL_MS, _bridgeProcessedDirs, _bridgeDirsCachedAt;
 var init_tap_io = __esm({
   "../tap-plugin/channels/tap-io.ts"() {
     "use strict";
     init_tap_utils();
+    init_tap_identity();
     startupFiles = /* @__PURE__ */ new Set();
     readFiles = /* @__PURE__ */ new Set();
+    REPO_ROOT = process.env.TAP_REPO_ROOT ?? null;
+    BRIDGE_DIR_CACHE_TTL_MS = 3e4;
+    _bridgeProcessedDirs = [];
+    _bridgeDirsCachedAt = 0;
   }
 });
 
@@ -21263,6 +21401,7 @@ var StdioServerTransport = class {
 };
 
 // ../tap-plugin/channels/tap-comms.ts
+init_tap_identity();
 init_tap_utils();
 init_tap_io();
 import { existsSync as existsSync6, mkdirSync as mkdirSync2, readFileSync as readFileSync5, writeFileSync as writeFileSync2 } from "fs";
@@ -21470,6 +21609,7 @@ init_tap_utils();
 import { existsSync as existsSync4, readFileSync as readFileSync4, statSync as statSync4, watch } from "fs";
 import { join as join4 } from "path";
 init_tap_io();
+init_tap_identity();
 var notifiedFiles = /* @__PURE__ */ new Set();
 var recentEvents = /* @__PURE__ */ new Map();
 var inFlightFiles = /* @__PURE__ */ new Set();
@@ -21506,11 +21646,11 @@ async function waitForFileReady(filepath) {
   return null;
 }
 function isOwnMessageArtifact(source, filename, parsed) {
-  if (parsed && isOwnTapSender(parsed.from)) {
-    return true;
-  }
   const agentId = getAgentId();
   const agentName = getAgentName();
+  if (parsed && isOwnMessageAddress(parsed.from, agentId, agentName)) {
+    return true;
+  }
   if (source === "reviews") {
     return filename.endsWith(`-${agentId}.md`) || filename.endsWith(`-${agentName}.md`);
   }
@@ -21539,7 +21679,13 @@ async function processWatchFile(dir, source, filename, mcp2) {
       return false;
     }
     if (!file2) return false;
-    const parsed = source === "inbox" ? parseInboxEnvelope(filename, file2.content) : parseFilename(filename);
+    let parsed = null;
+    if (source === "inbox") {
+      const fm = parseFrontmatter(file2.content);
+      parsed = fm ? { from: fm.from, to: fm.to, subject: fm.subject } : parseFilename(filename);
+    } else {
+      parsed = parseFilename(filename);
+    }
     if (source === "inbox" && (!parsed || !isForMe(parsed.to))) return false;
     if (isOwnMessageArtifact(source, filename, parsed)) return false;
     const rawFrom = parsed?.from || source;
@@ -21633,7 +21779,7 @@ import { readdirSync as readdirSync5, renameSync as renameSync2, statSync as sta
 // ../tap-plugin/channels/tap-poll-fallback.ts
 init_tap_utils();
 import { existsSync as existsSync5, readdirSync as readdirSync4, statSync as statSync5 } from "fs";
-var POLL_INTERVAL_MS = 3e4;
+var POLL_INTERVAL_MS = process.platform === "win32" ? 1e4 : 3e4;
 var POLL_SOURCES = ["inbox", "reviews"];
 var recoveredCount = 0;
 var pollCycles = 0;
@@ -21711,8 +21857,8 @@ function loadOnboardingTeaser() {
   const commsDir = process.env.TAP_COMMS_DIR;
   if (!commsDir) return "";
   const stateDir = process.env.TAP_STATE_DIR;
-  const agentId = process.env.TAP_AGENT_ID;
-  if (stateDir && agentId) {
+  const agentId = getAgentId();
+  if (stateDir && agentId !== "unknown") {
     try {
       const markerPath = join5(stateDir, "onboarded.json");
       if (existsSync6(markerPath)) {
@@ -21727,7 +21873,7 @@ function loadOnboardingTeaser() {
     if (!existsSync6(welcomePath)) return "";
     const content = readFileSync5(welcomePath, "utf-8");
     const lines = content.split("\n").slice(0, ONBOARDING_TEASER_LINES);
-    if (stateDir && agentId) {
+    if (stateDir && agentId !== "unknown") {
       try {
         const markerPath = join5(stateDir, "onboarded.json");
         let store = {};
@@ -21937,11 +22083,22 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     }
   ]
 }));
+function prunePhantomHeartbeats(store) {
+  let removed = 0;
+  for (const key of Object.keys(store)) {
+    if (!store[key].id) {
+      delete store[key];
+      removed++;
+    }
+  }
+  return removed;
+}
 function persistActivity(id, name) {
   const locked = acquireLock(HEARTBEATS_LOCK);
   if (!locked) return;
   try {
     const store = loadHeartbeats();
+    prunePhantomHeartbeats(store);
     const existing = store[id];
     store[id] = {
       id,
@@ -22173,72 +22330,31 @@ Recent active names: ${activeList}`;
         ]
       };
     }
-    let cc;
-    if (rawCc == null) {
-      cc = void 0;
-    } else if (typeof rawCc === "string") {
-      const trimmed = rawCc.trim();
-      cc = trimmed ? [trimmed] : void 0;
-    } else if (Array.isArray(rawCc)) {
-      const valid = rawCc.filter(
-        (v) => typeof v === "string" && v.trim().length > 0
-      ).map((v) => v.trim());
-      cc = valid.length > 0 ? valid : void 0;
-    } else {
-      cc = void 0;
-    }
-    if (cc) {
-      const seen = /* @__PURE__ */ new Set([to]);
-      cc = cc.filter((r) => {
-        if (seen.has(r)) return false;
-        seen.add(r);
-        return true;
-      });
-      if (cc.length === 0) cc = void 0;
-    }
-    const broadcastNames = /* @__PURE__ */ new Set(["\uC804\uCCB4", "all"]);
+    const cc = normalizeRecipientList(rawCc, [to]);
     const recipientWarnings = [];
     const store = loadHeartbeats();
     const knownAgents = /* @__PURE__ */ new Set();
     const displayNameCount = /* @__PURE__ */ new Map();
-    const placeholders = /* @__PURE__ */ new Set(["unknown", "unnamed", "<set-per-session>"]);
     for (const [key, hb] of Object.entries(store)) {
-      if (!placeholders.has(key)) knownAgents.add(key);
-      if (hb.agent && !placeholders.has(hb.agent)) {
+      if (!isPlaceholderAgentValue(key)) knownAgents.add(key);
+      if (!isPlaceholderAgentValue(hb.agent)) {
         knownAgents.add(hb.agent);
         const ids = displayNameCount.get(hb.agent) ?? [];
         ids.push(key);
         displayNameCount.set(hb.agent, ids);
       }
     }
-    const findKnownAlias = (value) => {
-      const normalized = value?.trim();
-      if (!normalized) return null;
-      for (const candidate of knownAgents) {
-        if (getAddressAliases(candidate).has(normalized)) {
-          return candidate;
-        }
-      }
-      return null;
-    };
     const knownList = [...knownAgents].filter((n) => n !== "unknown").join(", ");
     let resolvedTo = to;
-    if (!broadcastNames.has(to)) {
-      const aliasMatch = knownAgents.has(to) ? to : findKnownAlias(to);
-      if (!aliasMatch) {
+    if (!isBroadcastRecipient(to)) {
+      if (!knownAgents.has(to)) {
         recipientWarnings.push(
           `\u26A0\uFE0F WARNING: "${to}" is not a known agent. Check spelling. Known: ${knownList}`
         );
       } else {
-        resolvedTo = aliasMatch;
-        if (aliasMatch !== to) {
-          recipientWarnings.push(
-            `\u26A0\uFE0F Routed "${to}" \u2192 "${resolvedTo}" (alias match).`
-          );
-        }
-        const ids = displayNameCount.get(aliasMatch);
+        const ids = displayNameCount.get(to);
         if (ids && ids.length > 1) {
-          resolvedTo = resolveToMostRecent2(aliasMatch);
+          resolvedTo = resolveToMostRecent2(to);
           recipientWarnings.push(
             `\u26A0\uFE0F Routed "${to}" \u2192 "${resolvedTo}" (most recent of ${ids.join(", ")}).`
           );
@@ -22247,14 +22363,13 @@ Recent active names: ${activeList}`;
     }
     if (cc?.length) {
       for (const recipient of cc) {
-        if (broadcastNames.has(recipient)) continue;
-        const aliasMatch = knownAgents.has(recipient) ? recipient : findKnownAlias(recipient);
-        if (!aliasMatch) {
+        if (isBroadcastRecipient(recipient)) continue;
+        if (!knownAgents.has(recipient)) {
           recipientWarnings.push(
             `\u26A0\uFE0F WARNING: CC "${recipient}" is not a known agent. Known: ${knownList}`
           );
         } else {
-          const ids = displayNameCount.get(aliasMatch);
+          const ids = displayNameCount.get(recipient);
           if (ids && ids.length > 1) {
             recipientWarnings.push(
               `\u26A0\uFE0F WARNING: CC "${recipient}" matches multiple agents (${ids.join(", ")}). Use agent ID.`
@@ -22263,30 +22378,31 @@ Recent active names: ${activeList}`;
         }
       }
     }
-    const date4 = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "");
+    const now = /* @__PURE__ */ new Date();
+    const date4 = now.toISOString().slice(0, 10).replace(/-/g, "");
     const fromId = getAgentId();
     const fromName = getAgentName();
-    const senderAddress = fromId !== "unknown" ? fromId : fromName;
-    const sentAt = (/* @__PURE__ */ new Date()).toISOString();
-    const filename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(resolvedTo)}-${encodeRouteSegment(subject)}.md`;
+    const filename = `${date4}-${fromId}-${resolvedTo}-${subject}.md`;
     const filepath = join5(INBOX_DIR, filename);
-    const frontmatter = `---
-type: inbox
-from: ${senderAddress}
-from_name: ${fromName}
-to: ${resolvedTo}
-subject: ${subject}
-sent_at: ${sentAt}
----
-
-`;
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}
 
 ` : "";
+    const frontmatter = [
+      "---",
+      "type: inbox",
+      `from: ${fromId}`,
+      `from_name: ${fromName}`,
+      `to: ${resolvedTo}`,
+      `to_name: ${to}`,
+      `subject: ${subject}`,
+      `sent_at: ${now.toISOString()}`,
+      "---",
+      ""
+    ].join("\n");
     writeFileSync2(filepath, frontmatter + ccHeader + content, "utf-8");
     dbInsertMessage(
       filename,
-      senderAddress,
+      fromName,
       resolvedTo,
       subject,
       "inbox",
@@ -22297,35 +22413,35 @@ sent_at: ${sentAt}
       const writtenFiles = /* @__PURE__ */ new Set([filename]);
       for (const recipient of cc) {
         try {
-          const aliasMatch = broadcastNames.has(recipient) ? recipient : knownAgents.has(recipient) ? recipient : findKnownAlias(recipient) ?? recipient;
-          const resolvedRecipient = broadcastNames.has(aliasMatch) ? aliasMatch : displayNameCount.get(aliasMatch)?.length > 1 ? resolveToMostRecent2(aliasMatch) : aliasMatch;
-          const ccFilename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment(resolvedRecipient)}-${encodeRouteSegment(subject)}.md`;
+          const resolvedRecipient = isBroadcastRecipient(recipient) ? recipient : resolveToMostRecent2(recipient);
+          const ccFilename = `${date4}-${fromId}-${resolvedRecipient}-${subject}.md`;
           if (writtenFiles.has(ccFilename)) {
             sent.push(`CC to ${recipient}: skipped (resolves to same target)`);
             continue;
           }
           writtenFiles.add(ccFilename);
-          const ccFrontmatter = `---
-type: inbox
-from: ${senderAddress}
-from_name: ${fromName}
-to: ${resolvedRecipient}
-subject: ${subject}
-sent_at: ${sentAt}
-cc_of: ${resolvedTo}
----
-
-`;
+          const ccFrontmatter = [
+            "---",
+            "type: inbox",
+            `from: ${fromId}`,
+            `from_name: ${fromName}`,
+            `to: ${resolvedRecipient}`,
+            `to_name: ${recipient}`,
+            `subject: ${subject}`,
+            `sent_at: ${now.toISOString()}`,
+            "---",
+            ""
+          ].join("\n");
           writeFileSync2(
             join5(INBOX_DIR, ccFilename),
-            `${ccFrontmatter}> CC from message to ${to}
+            ccFrontmatter + `> CC from message to ${to}
 
 ${content}`,
             "utf-8"
           );
           dbInsertMessage(
             ccFilename,
-            senderAddress,
+            fromName,
             resolvedRecipient,
             subject,
             "inbox",
@@ -22344,26 +22460,30 @@ ${content}`,
   }
   if (req.params.name === "tap_broadcast") {
     const { subject, content } = req.params.arguments;
-    const sentAt = (/* @__PURE__ */ new Date()).toISOString();
-    const date4 = sentAt.slice(0, 10).replace(/-/g, "");
+    const now = /* @__PURE__ */ new Date();
+    const date4 = now.toISOString().slice(0, 10).replace(/-/g, "");
     const broadcastId = getAgentId();
     const broadcastName = getAgentName();
-    const senderAddress = broadcastId !== "unknown" ? broadcastId : broadcastName;
-    const filename = `${date4}-${encodeRouteSegment(senderAddress)}-${encodeRouteSegment("\uC804\uCCB4")}-${encodeRouteSegment(subject)}.md`;
-    const frontmatter = `---
-type: inbox
-from: ${senderAddress}
-from_name: ${broadcastName}
-to: \uC804\uCCB4
-subject: ${subject}
-sent_at: ${sentAt}
----
-
-`;
-    writeFileSync2(join5(INBOX_DIR, filename), frontmatter + content, "utf-8");
+    const filename = `${date4}-${broadcastId}-\uC804\uCCB4-${subject}.md`;
+    const broadcastFrontmatter = [
+      "---",
+      "type: inbox",
+      `from: ${broadcastId}`,
+      `from_name: ${broadcastName}`,
+      "to: \uC804\uCCB4",
+      `subject: ${subject}`,
+      `sent_at: ${now.toISOString()}`,
+      "---",
+      ""
+    ].join("\n");
+    writeFileSync2(
+      join5(INBOX_DIR, filename),
+      broadcastFrontmatter + content,
+      "utf-8"
+    );
     dbInsertMessage(
       filename,
-      senderAddress,
+      broadcastName,
       "\uC804\uCCB4",
       subject,
       "inbox",
@@ -22417,9 +22537,30 @@ sent_at: ${sentAt}
       releaseLock(RECEIPTS_LOCK);
     }
   }
+  function buildHudLine() {
+    const hbStore = loadHeartbeats();
+    const aliveWindow = Date.now() - 10 * 60 * 1e3;
+    let agentCount = 0;
+    for (const hb of Object.values(hbStore)) {
+      if (!hb.id) continue;
+      const t = new Date(hb.lastActivity ?? hb.timestamp ?? 0).getTime();
+      if (t >= aliveWindow && hb.status !== "signing-off") agentCount++;
+    }
+    const unreadItems = getUnreadItems({
+      sources: ["inbox"],
+      limit: 100,
+      includeContent: false,
+      markRead: false
+    });
+    const unreadCount = unreadItems.length;
+    const unreadDisplay = unreadCount >= 100 ? "99+" : String(unreadCount);
+    const status = agentCount > 0 ? "\u{1F7E2}" : "\u26AA";
+    return `[tap] ${status} ${agentCount} agents | \u{1F4E8} ${unreadDisplay} unread`;
+  }
   if (req.params.name === "tap_stats") {
     const hours = typeof req.params.arguments?.hours === "number" ? req.params.arguments.hours : 24;
     const cutoff = Date.now() - hours * 60 * 60 * 1e3;
+    const hud = buildHudLine();
     const dbResult = dbGetStats(cutoff);
     if (dbResult) {
       return {
@@ -22427,7 +22568,7 @@ sent_at: ${sentAt}
           {
             type: "text",
             text: JSON.stringify(
-              { hours, ...dbResult, source: "sqlite" },
+              { hours, ...dbResult, source: "sqlite", hud },
               null,
               2
             )
@@ -22446,11 +22587,11 @@ sent_at: ${sentAt}
         } catch {
           continue;
         }
-        const { parseFilename: parseFilename3 } = (init_tap_utils(), __toCommonJS(tap_utils_exports));
-        const parsed = parseFilename3(filename);
+        const { parseFilename: parseFilename2 } = (init_tap_utils(), __toCommonJS(tap_utils_exports));
+        const parsed = parseFilename2(filename);
         if (!parsed) continue;
         sent[parsed.from] = (sent[parsed.from] || 0) + 1;
-        if (parsed.to === "\uC804\uCCB4" || parsed.to === "all") broadcasts++;
+        if (isBroadcastRecipient(parsed.to)) broadcasts++;
         else received[parsed.to] = (received[parsed.to] || 0) + 1;
       }
     }
@@ -22465,7 +22606,14 @@ sent_at: ${sentAt}
         {
           type: "text",
           text: JSON.stringify(
-            { hours, sent, received, broadcasts, totalReceipts: receiptCount },
+            {
+              hours,
+              sent,
+              received,
+              broadcasts,
+              totalReceipts: receiptCount,
+              hud
+            },
             null,
             2
           )
@@ -22513,6 +22661,7 @@ sent_at: ${sentAt}
     const store = loadHeartbeats();
     const agents = [];
     for (const [agentId, hb] of Object.entries(store)) {
+      if (!hb.id) continue;
       const actTime = new Date(hb.lastActivity).getTime();
       if (actTime < cutoff) continue;
       const alive = hb.status !== "signing-off";

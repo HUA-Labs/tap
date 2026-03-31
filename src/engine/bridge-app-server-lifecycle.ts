@@ -22,7 +22,7 @@ import {
 import { terminateProcess, isProcessAlive } from "./bridge-process-control.js";
 import {
   checkAppServerHealth,
-  waitForAppServerHealth,
+  waitForManagedAppServerReady,
   markAppServerHealthy,
 } from "./bridge-app-server-health.js";
 import {
@@ -212,6 +212,7 @@ export async function ensureCodexAppServer(
           effectiveUrl,
           options.repoRoot,
           logPath,
+          options.platform,
         );
       } catch (err) {
         throw new Error(
@@ -227,7 +228,9 @@ export async function ensureCodexAppServer(
       );
     }
 
-    const healthy = await waitForAppServerHealth(
+    // Managed startup uses HTTP /readyz (with TCP fallback for older servers)
+    // so readiness is verified without opening an extra WebSocket session.
+    const healthy = await waitForManagedAppServerReady(
       effectiveUrl,
       APP_SERVER_START_TIMEOUT_MS,
     );
@@ -293,6 +296,7 @@ export async function ensureCodexAppServer(
         auth.upstreamUrl,
         options.repoRoot,
         logPath,
+        options.platform,
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -316,7 +320,9 @@ export async function ensureCodexAppServer(
     );
   }
 
-  const healthy = await waitForAppServerHealth(
+  // Managed startup uses HTTP /readyz (with TCP fallback for older servers)
+  // so readiness is verified without opening an extra WebSocket session.
+  const healthy = await waitForManagedAppServerReady(
     auth.upstreamUrl,
     APP_SERVER_START_TIMEOUT_MS,
   );
@@ -342,10 +348,12 @@ export async function ensureCodexAppServer(
     throw new Error("Tap auth gateway token is missing after startup.");
   }
 
-  const gatewayHealthy = await waitForAppServerHealth(
+  // Gateway readiness hits /readyz on the public URL, which verifies the
+  // gateway itself plus upstream readiness end-to-end without creating a
+  // WebSocket session.
+  const gatewayHealthy = await waitForManagedAppServerReady(
     effectiveUrl,
     APP_SERVER_GATEWAY_START_TIMEOUT_MS,
-    gatewayToken,
   );
   if (!gatewayHealthy) {
     await terminateProcess(pid, options.platform);

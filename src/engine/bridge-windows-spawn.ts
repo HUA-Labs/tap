@@ -23,12 +23,9 @@ import {
   resolvePowerShellCommand,
   splitResolvedCommand,
 } from "./bridge-codex-command.js";
-import { delay } from "./bridge-port-network.js";
 
 const WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
 const WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1000;
-export const WINDOWS_DETACHED_LIVENESS_TIMEOUT_MS = 1_500;
-export const WINDOWS_DETACHED_LIVENESS_POLL_MS = 100;
 
 export function cleanupStaleWindowsSpawnWrappers(now = Date.now()): void {
   let entries: string[];
@@ -170,36 +167,6 @@ export function startWindowsDetachedProcess(
   }
 
   return pid;
-}
-
-/**
- * PowerShell hidden-spawn returns before we know whether the wrapper survives.
- * Treat the spawn as successful only if the wrapper PID stays alive for a
- * short grace period; otherwise bridge startup reports a false positive.
- */
-export async function waitForWindowsDetachedProcessLiveness(
-  pid: number,
-  timeoutMs: number = WINDOWS_DETACHED_LIVENESS_TIMEOUT_MS,
-  pollMs: number = WINDOWS_DETACHED_LIVENESS_POLL_MS,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return false;
-    }
-
-    await delay(pollMs);
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function startWindowsCodexAppServer(

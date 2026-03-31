@@ -75,6 +75,7 @@ describe("up/down orchestration commands", () => {
     expect(bridgeCommandMock).toHaveBeenCalledWith([
       "start",
       "--all",
+      "--auto-prune-heartbeats",
       "--no-auth",
     ]);
     expect(result.ok).toBe(true);

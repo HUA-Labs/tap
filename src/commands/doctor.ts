@@ -20,7 +20,10 @@ import {
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
-import { buildManagedMcpServerSpec } from "../adapters/common.js";
+import {
+  buildManagedMcpServerSpec,
+  type ManagedMcpServerSpec,
+} from "../adapters/common.js";
 import { loadState, saveState, getInstalledInstances } from "../state.js";
 import {
   isBridgeRunning,
@@ -57,16 +60,28 @@ interface Check {
   fix?: () => string; // Returns description of what was fixed
 }
 
+interface DoctorHeartbeatRecord {
+  id?: string;
+  agent?: string;
+  timestamp?: string;
+  lastActivity?: string;
+  status?: "active" | "idle" | "signing-off" | string;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const PASS = "pass" as const;
 const WARN = "warn" as const;
 const FAIL = "fail" as const;
+const HEARTBEAT_ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+const ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1000;
 const CODEX_ENV_DRIFT_KEYS = [
   "TAP_COMMS_DIR",
   "TAP_STATE_DIR",
   "TAP_REPO_ROOT",
 ] as const;
+const CODEX_SESSION_NEUTRAL_NAME = "<set-per-session>";
 
 function normalizeComparablePath(value: string): string {
   return resolve(value).replace(/\\/g, "/").toLowerCase();
@@ -141,7 +156,37 @@ function getCodexTrustTargets(repoRoot: string): string[] {
   return [...new Set([repoRoot, process.cwd()].map((value) => resolve(value)))];
 }
 
-function buildCodexDoctorSpec(repoRoot: string, commsDir: string) {
+function buildSessionNeutralCodexEnv(
+  env: Record<string, string>,
+): Record<string, string> {
+  const neutralEnv: Record<string, string> = {
+    ...env,
+    TAP_AGENT_NAME: CODEX_SESSION_NEUTRAL_NAME,
+  };
+  delete neutralEnv.TAP_AGENT_ID;
+  return neutralEnv;
+}
+
+function buildCodexEnvEntries(
+  existingTable: string | null,
+  managedEnv: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const preservedEnv = parseTomlAssignments(existingTable ?? "");
+  delete preservedEnv.TAP_AGENT_ID;
+  return {
+    ...preservedEnv,
+    ...managedEnv,
+  };
+}
+
+function buildCodexDoctorSpec(
+  repoRoot: string,
+  commsDir: string,
+): {
+  configPath: string;
+  trustTargets: string[];
+  managed: ManagedMcpServerSpec;
+} | null {
   const state = loadState(repoRoot);
   if (!hasInstalledCodexInstance(state)) {
     return null;
@@ -153,7 +198,10 @@ function buildCodexDoctorSpec(repoRoot: string, commsDir: string) {
   return {
     configPath: findCodexConfigPath(),
     trustTargets: getCodexTrustTargets(repoRoot),
-    managed,
+    managed: {
+      ...managed,
+      env: buildSessionNeutralCodexEnv(managed.env),
+    },
   };
 }
 
@@ -183,12 +231,14 @@ function repairCodexConfig(repoRoot: string, commsDir: string): string {
   const preservedEnv = parseTomlAssignments(
     existingTapEnvTable ?? existingLegacyEnvTable ?? "",
   );
-  const repairedEnv = {
+  const repairedEnv: Record<string, string | string[]> = {
     ...preservedEnv,
-    ...Object.fromEntries(
+    ...(Object.fromEntries(
       CODEX_ENV_DRIFT_KEYS.map((key) => [key, spec.managed.env[key]]),
-    ),
+    ) as Record<string, string>),
   };
+  repairedEnv.TAP_AGENT_NAME = spec.managed.env.TAP_AGENT_NAME;
+  delete repairedEnv.TAP_AGENT_ID;
 
   let nextContent = existingContent;
   if (extractTomlTable(nextContent, "mcp_servers.tap-comms.env")) {
@@ -215,8 +265,10 @@ function repairCodexConfig(repoRoot: string, commsDir: string): string {
     "mcp_servers.tap.env",
     renderTomlTable(
       "mcp_servers.tap.env",
-      repairedEnv,
-      existingTapEnvTable ?? existingLegacyEnvTable,
+      buildCodexEnvEntries(
+        existingTapEnvTable ?? existingLegacyEnvTable,
+        repairedEnv,
+      ),
     ),
   );
   for (const trustTarget of spec.trustTargets) {
@@ -262,6 +314,115 @@ function recentFileCount(dir: string, withinMs: number): number {
     // skip
   }
   return count;
+}
+
+function loadDoctorHeartbeatStore(
+  commsDir: string,
+): Record<string, DoctorHeartbeatRecord> | null {
+  const heartbeatsPath = join(commsDir, "heartbeats.json");
+  if (!existsSync(heartbeatsPath)) return null;
+  try {
+    return JSON.parse(readFileSync(heartbeatsPath, "utf-8")) as Record<
+      string,
+      DoctorHeartbeatRecord
+    >;
+  } catch {
+    return null;
+  }
+}
+
+function saveDoctorHeartbeatStore(
+  commsDir: string,
+  store: Record<string, DoctorHeartbeatRecord>,
+): void {
+  const heartbeatsPath = join(commsDir, "heartbeats.json");
+  const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+  renameSync(tmp, heartbeatsPath);
+}
+
+function parseHeartbeatAgeMs(
+  record: DoctorHeartbeatRecord,
+  now: number,
+): number {
+  const raw = record.lastActivity ?? record.timestamp;
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, now - parsed);
+}
+
+function resolveHeartbeatInstanceId(
+  state: TapState | null,
+  heartbeatId: string,
+): string | null {
+  if (!state) return null;
+  if (state.instances[heartbeatId]) return heartbeatId;
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]) return hyphenated;
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]) return underscored;
+  return null;
+}
+
+function collectStaleHeartbeatIds(
+  commsDir: string,
+  state: TapState | null,
+  stateDir: string,
+): Array<{ id: string; label: string; ageMs: number }> {
+  const store = loadDoctorHeartbeatStore(commsDir);
+  if (!store) return [];
+
+  const now = Date.now();
+  const stale: Array<{ id: string; label: string; ageMs: number }> = [];
+
+  for (const [heartbeatId, heartbeat] of Object.entries(store)) {
+    const ageMs = parseHeartbeatAgeMs(heartbeat, now);
+    const instanceId = resolveHeartbeatInstanceId(state, heartbeatId);
+    const instance = instanceId ? state?.instances[instanceId] : null;
+    const bridgeBacked = instance?.bridgeMode === "app-server";
+    const bridgeRunning =
+      bridgeBacked && instanceId
+        ? isBridgeRunning(stateDir, instanceId)
+        : false;
+    const status = heartbeat.status ?? "active";
+
+    const staleByStatus =
+      status === "signing-off" && ageMs >= SIGNING_OFF_HEARTBEAT_WINDOW_MS;
+    const staleByDeadBridge =
+      bridgeBacked && !bridgeRunning && ageMs >= HEARTBEAT_ACTIVE_WINDOW_MS;
+    const staleByAge = !bridgeRunning && ageMs >= ORPHAN_HEARTBEAT_WINDOW_MS;
+
+    if (staleByStatus || staleByDeadBridge || staleByAge) {
+      stale.push({
+        id: heartbeatId,
+        label: heartbeat.agent?.trim() || heartbeatId,
+        ageMs,
+      });
+    }
+  }
+
+  return stale;
+}
+
+function pruneHeartbeatIds(commsDir: string, heartbeatIds: string[]): number {
+  if (heartbeatIds.length === 0) return 0;
+  const store = loadDoctorHeartbeatStore(commsDir);
+  if (!store) return 0;
+
+  let removed = 0;
+  for (const heartbeatId of new Set(heartbeatIds)) {
+    if (heartbeatId in store) {
+      delete store[heartbeatId];
+      removed += 1;
+    }
+  }
+
+  if (removed > 0) {
+    saveDoctorHeartbeatStore(commsDir, store);
+  }
+
+  return removed;
 }
 
 // ── Checks ──────────────────────────────────────────────────────────────
@@ -316,7 +477,7 @@ function checkComms(commsDir: string): Check[] {
       const now = Date.now();
       const active = agents.filter((a) => {
         const ts = store[a]?.lastActivity;
-        return ts && now - new Date(ts).getTime() < 10 * 60 * 1000;
+        return ts && now - new Date(ts).getTime() < HEARTBEAT_ACTIVE_WINDOW_MS;
       });
       checks.push({
         name: "heartbeats",
@@ -341,7 +502,52 @@ function checkComms(commsDir: string): Check[] {
   return checks;
 }
 
-function checkInstances(repoRoot: string, stateDir: string): Check[] {
+function checkStaleHeartbeats(
+  repoRoot: string,
+  commsDir: string,
+  stateDir: string,
+): Check[] {
+  const state = loadState(repoRoot);
+  const stale = collectStaleHeartbeatIds(commsDir, state, stateDir);
+  if (stale.length === 0) {
+    return [
+      {
+        name: "stale heartbeats",
+        status: PASS,
+        message: "none",
+      },
+    ];
+  }
+
+  const preview = stale
+    .slice(0, 3)
+    .map((entry) => `${entry.label} (${Math.round(entry.ageMs / 60000)}m)`)
+    .join(", ");
+
+  return [
+    {
+      name: "stale heartbeats",
+      status: WARN,
+      message:
+        stale.length > 3
+          ? `${stale.length} stale entries: ${preview}, ...`
+          : `${stale.length} stale entr${stale.length === 1 ? "y" : "ies"}: ${preview}`,
+      fix: () => {
+        const removed = pruneHeartbeatIds(
+          commsDir,
+          stale.map((entry) => entry.id),
+        );
+        return `Pruned ${removed} stale heartbeat entr${removed === 1 ? "y" : "ies"}`;
+      },
+    },
+  ];
+}
+
+function checkInstances(
+  repoRoot: string,
+  stateDir: string,
+  commsDir: string,
+): Check[] {
   const checks: Check[] = [];
   const state = loadState(repoRoot);
 
@@ -421,7 +627,16 @@ function checkInstances(repoRoot: string, stateDir: string): Check[] {
             currentState.updatedAt = new Date().toISOString();
             saveState(repoRoot, currentState);
           }
-          return `Cleaned stale bridge + managed processes for ${id}`;
+          const removedHeartbeats = pruneHeartbeatIds(commsDir, [
+            id,
+            id.replace(/-/g, "_"),
+            id.replace(/_/g, "-"),
+          ]);
+          const suffix =
+            removedHeartbeats > 0
+              ? `; pruned ${removedHeartbeats} heartbeat entr${removedHeartbeats === 1 ? "y" : "ies"}`
+              : "";
+          return `Cleaned stale bridge + managed processes for ${id}${suffix}`;
         };
       } else {
         status = WARN;
@@ -770,6 +985,18 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
     }
   }
 
+  const actualAgentName = selectedEnv.TAP_AGENT_NAME;
+  if (typeof actualAgentName !== "string") {
+    issues.push("TAP_AGENT_NAME missing");
+  } else if (actualAgentName !== spec.managed.env.TAP_AGENT_NAME) {
+    issues.push(`non-neutral TAP_AGENT_NAME persisted (${actualAgentName})`);
+  }
+
+  const actualAgentId = selectedEnv.TAP_AGENT_ID;
+  if (typeof actualAgentId === "string" && actualAgentId.trim()) {
+    issues.push(`concrete TAP_AGENT_ID persisted (${actualAgentId})`);
+  }
+
   for (const trustTarget of spec.trustTargets) {
     const trustTable = extractTomlTable(content, trustSelector(trustTarget));
     if (!trustTable || !trustTable.includes('trust_level = "trusted"')) {
@@ -843,6 +1070,7 @@ function checkBridgeTurnHealth(repoRoot: string): Check[] {
       lastNotificationMethod?: string;
       connected?: boolean;
       initialized?: boolean;
+      authenticated?: boolean;
       consecutiveFailureCount?: number;
       lastError?: string | null;
     };
@@ -926,6 +1154,17 @@ function checkBridgeTurnHealth(repoRoot: string): Check[] {
         message: `slow — ${failures} consecutive failures, last: ${heartbeat.lastError ?? "unknown"}`,
       });
       continue;
+    }
+
+    // M175: Warn when a live bridge is running without auth
+    if (heartbeat.authenticated === false) {
+      checks.push({
+        name: `turn: ${dir}`,
+        status: WARN,
+        message:
+          "bridge running without auth — app-server session is unprotected. " +
+          "Use --gateway-token-file to enable auth.",
+      });
     }
 
     // Healthy
@@ -1015,7 +1254,8 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
   function runAllChecks(): Check[] {
     const checks: Check[] = [];
     checks.push(...checkComms(commsDir));
-    checks.push(...checkInstances(repoRoot, config.stateDir));
+    checks.push(...checkStaleHeartbeats(repoRoot, commsDir, config.stateDir));
+    checks.push(...checkInstances(repoRoot, config.stateDir, commsDir));
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
     checks.push(...checkCodexConfig(repoRoot, commsDir));
@@ -1040,6 +1280,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
           "reviews directory",
           "findings directory",
           "heartbeats",
+          "stale heartbeats",
         ].includes(c.name),
       ),
       Instances: initialChecks.filter(

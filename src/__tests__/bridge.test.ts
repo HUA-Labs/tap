@@ -283,26 +283,38 @@ describe("startBridge agent name requirement", () => {
     if (origCodex) process.env.CODEX_TAP_AGENT_NAME = origCodex;
   });
 
-  it("fails when Windows detached bridge spawn exits during the liveness gate", async () => {
+  it("accepts explicit agentName option without throwing", async () => {
     // Clear env vars to prove agentName option is used
     const origAgent = process.env.TAP_AGENT_NAME;
     const origCodex = process.env.CODEX_TAP_AGENT_NAME;
     delete process.env.TAP_AGENT_NAME;
     delete process.env.CODEX_TAP_AGENT_NAME;
 
-    await expect(
-      startBridge({
-        instanceId: "codex",
-        runtime: "codex",
-        stateDir,
-        commsDir: tmpDir,
-        bridgeScript: "/nonexistent/bridge.js",
-        platform: "win32",
-        agentName: "testAgent",
-        repoRoot: tmpDir,
-      }),
-    ).rejects.toThrow(/exited immediately after Windows detached spawn/i);
-    expect(loadBridgeState(stateDir, "codex")).toBeNull();
+    // With agentName provided, should NOT throw "No agent name"
+    // (spawn may succeed even with nonexistent script — node process starts then fails)
+    const result = await startBridge({
+      instanceId: "codex",
+      runtime: "codex",
+      stateDir,
+      commsDir: tmpDir,
+      bridgeScript: "/nonexistent/bridge.js",
+      platform: "win32",
+      agentName: "testAgent",
+      repoRoot: tmpDir,
+    });
+
+    expect(result.pid).toBeGreaterThan(0);
+    expect(result.runtimeStateDir).toBe(
+      path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+    );
+
+    // Clean up spawned process
+    try {
+      process.kill(result.pid);
+    } catch {
+      /* already exited */
+    }
+    clearBridgeState(stateDir, "codex");
 
     // Restore
     if (origAgent) process.env.TAP_AGENT_NAME = origAgent;

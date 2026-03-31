@@ -159,6 +159,7 @@ export async function createManagedAppServerAuth(
             options.repoRoot,
             gatewayLogPath,
             gatewayEnv,
+            options.platform,
           );
   } catch (error) {
     removeFileIfExists(tokenPath);

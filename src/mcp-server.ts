@@ -1,1 +1,1 @@
-import "../packages/tap-plugin/channels/tap-comms.ts";
+import "../../tap-plugin/channels/tap-comms.ts";

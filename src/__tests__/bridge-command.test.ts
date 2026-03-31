@@ -73,6 +73,13 @@ describe("bridgeCommand routing", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("TAP_NOT_INITIALIZED");
   });
+
+  it("tui requires instance argument", async () => {
+    const result = await bridgeCommand(["tui"]);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("TAP_INVALID_ARGUMENT");
+    expect(result.message).toContain("Missing instance");
+  });
 });
 
 function makeV2State(instances: Record<string, unknown>) {
@@ -152,7 +159,11 @@ describe("bridgeCommand with initialized state", () => {
   });
 
   it("status exposes active and saved thread metadata", async () => {
-    const runtimeStateDir = path.join(tmpDir, ".tmp", "codex-app-server-bridge");
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
     const pidDir = path.join(tmpDir, ".tap-comms", "pids");
     fs.mkdirSync(runtimeStateDir, { recursive: true });
     fs.mkdirSync(pidDir, { recursive: true });
@@ -201,7 +212,11 @@ describe("bridgeCommand with initialized state", () => {
   });
 
   it("does not print a saved thread line when cwd differs only by path format", async () => {
-    const runtimeStateDir = path.join(tmpDir, ".tmp", "codex-app-server-bridge");
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
     const pidDir = path.join(tmpDir, ".tap-comms", "pids");
     fs.mkdirSync(runtimeStateDir, { recursive: true });
     fs.mkdirSync(pidDir, { recursive: true });
@@ -241,8 +256,8 @@ describe("bridgeCommand with initialized state", () => {
     const result = await bridgeCommand(["status", "codex"]);
     expect(result.ok).toBe(true);
     expect(
-      logSpy.mock.calls.some(([line]) =>
-        typeof line === "string" && line.includes("Saved:"),
+      logSpy.mock.calls.some(
+        ([line]) => typeof line === "string" && line.includes("Saved:"),
       ),
     ).toBe(false);
     vi.restoreAllMocks();
@@ -301,6 +316,156 @@ describe("bridgeCommand with initialized state", () => {
     // Verify state.json bridge field was cleared
     const after = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
     expect(after.instances.codex.bridge).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it("tui uses the upstream app-server URL when auth gateway is enabled", async () => {
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        appServer: {
+          url: "ws://127.0.0.1:4501",
+          pid: 4510,
+          managed: true,
+          healthy: true,
+          lastCheckedAt: "2026-03-27T00:00:00.000Z",
+          auth: {
+            mode: "subprotocol",
+            protectedUrl: "ws://127.0.0.1:4501?tap_token=secret",
+            upstreamUrl: "ws://127.0.0.1:7785",
+            gatewayPid: 4501,
+            tokenPath: path.join(tmpDir, ".tap-comms", "gateway.token"),
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["tui", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_BRIDGE_STATUS_OK");
+    expect(result.data).toMatchObject({
+      status: "running",
+      tuiConnectUrl: "ws://127.0.0.1:7785",
+    });
+    expect(result.data.attachCommand).toContain(
+      '--remote "ws://127.0.0.1:7785"',
+    );
+    expect(result.data.attachCommand).toContain(`--cd "${tmpDir}"`);
+    expect(result.warnings).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it("tui uses the public app-server URL when auth is disabled", async () => {
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        appServer: {
+          url: "ws://127.0.0.1:4501",
+          pid: 4510,
+          managed: true,
+          healthy: true,
+          lastCheckedAt: "2026-03-27T00:00:00.000Z",
+          auth: null,
+        },
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["tui", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_BRIDGE_STATUS_OK");
+    expect(result.data).toMatchObject({
+      status: "running",
+      tuiConnectUrl: "ws://127.0.0.1:4501",
+    });
+    expect(result.data.attachCommand).toContain(
+      '--remote "ws://127.0.0.1:4501"',
+    );
+    expect(result.warnings).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("tui prefers the active thread cwd over the stored repoRoot", async () => {
+    const stateFile = path.join(tmpDir, ".tap-comms", "state.json");
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+    state.repoRoot = "D:/HUA/wrong-root";
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf-8");
+
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: {
+          url: "ws://127.0.0.1:4501",
+          pid: 4510,
+          managed: true,
+          healthy: true,
+          lastCheckedAt: "2026-03-27T00:00:00.000Z",
+          auth: {
+            mode: "subprotocol",
+            protectedUrl: "ws://127.0.0.1:4501?tap_token=secret",
+            upstreamUrl: "ws://127.0.0.1:7785",
+            gatewayPid: 4501,
+            tokenPath: path.join(tmpDir, ".tap-comms", "gateway.token"),
+          },
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:01:00.000Z",
+        threadId: "thread-live",
+        threadCwd: "D:/HUA/wt-1",
+        connected: true,
+        initialized: true,
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["tui", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_BRIDGE_STATUS_OK");
+    expect(result.data).toMatchObject({
+      attachCwd: "D:/HUA/wt-1",
+      tuiConnectUrl: "ws://127.0.0.1:7785",
+    });
+    expect(result.data.attachCommand).toContain('--cd "D:/HUA/wt-1"');
+    vi.restoreAllMocks();
+  });
+
+  it("tui rejects non-Codex instances", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["tui", "claude"]);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("TAP_INVALID_ARGUMENT");
+    expect(result.message).toContain("does not support Codex TUI attach");
     vi.restoreAllMocks();
   });
 });
@@ -362,6 +527,137 @@ describe("multi-instance resolution", () => {
     expect(Object.keys(bridges)).toHaveLength(2);
     expect(bridges).toHaveProperty("codex");
     expect(bridges).toHaveProperty("codex-reviewer");
+    vi.restoreAllMocks();
+  });
+});
+
+describe("bridge start --all auto-clean", () => {
+  beforeEach(() => {
+    const state = makeV2State({
+      codex: makeInstance("codex", { agentName: null }),
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, ".tap-comms", "state.json"),
+      JSON.stringify(state, null, 2),
+      "utf-8",
+    );
+    fs.mkdirSync(path.join(tmpDir, "comms"), { recursive: true });
+  });
+
+  it("prunes orphaned stale heartbeats when auto-clean is enabled", async () => {
+    const staleIso = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const freshIso = new Date().toISOString();
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          stale: {
+            agent: "stale",
+            timestamp: staleIso,
+            lastActivity: staleIso,
+            status: "active",
+          },
+          fresh: {
+            agent: "fresh",
+            timestamp: freshIso,
+            lastActivity: freshIso,
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand([
+      "start",
+      "--all",
+      "--auto-prune-heartbeats",
+    ]);
+    expect(result.data).toMatchObject({ prunedHeartbeats: 1 });
+
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "comms", "heartbeats.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    expect(heartbeats.stale).toBeUndefined();
+    expect(heartbeats.fresh).toBeDefined();
+    vi.restoreAllMocks();
+  });
+
+  it("prunes dead bridge heartbeats using the short bridge window", async () => {
+    const staleIso = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            agent: "codex",
+            timestamp: staleIso,
+            lastActivity: staleIso,
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand([
+      "start",
+      "--all",
+      "--auto-prune-heartbeats",
+    ]);
+    expect(result.data).toMatchObject({ prunedHeartbeats: 1 });
+
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "comms", "heartbeats.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    expect(heartbeats.codex).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it("prunes signing-off heartbeats after the short sign-off window", async () => {
+    const signingOffIso = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          wrapup: {
+            agent: "wrapup",
+            timestamp: signingOffIso,
+            lastActivity: signingOffIso,
+            status: "signing-off",
+          },
+          fresh: {
+            agent: "fresh",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand([
+      "start",
+      "--all",
+      "--auto-prune-heartbeats",
+    ]);
+    expect(result.data).toMatchObject({ prunedHeartbeats: 1 });
+
+    const heartbeats = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "comms", "heartbeats.json"), "utf-8"),
+    ) as Record<string, unknown>;
+    expect(heartbeats.wrapup).toBeUndefined();
+    expect(heartbeats.fresh).toBeDefined();
     vi.restoreAllMocks();
   });
 });

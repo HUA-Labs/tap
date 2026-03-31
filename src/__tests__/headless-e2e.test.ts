@@ -415,7 +415,7 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
     expect(appServer.managed).toBe(true);
   });
 
-  it("ensureCodexAppServer spawns codex directly on linux (no unwrap needed)", async () => {
+  it("ensureCodexAppServer spawns through nohup on linux (no unwrap needed)", async () => {
     socketEvents = ["error", "open", "open"];
     createAuthGatewayScriptStub(tmpDir);
 
@@ -434,13 +434,14 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
       appServerUrl: "ws://127.0.0.1:4522",
     });
 
-    // On linux, spawn is called directly (no PowerShell)
+    // On linux, spawn routes through nohup instead of PowerShell/cmd wrappers.
     expect(spawnMockE2E).toHaveBeenCalledTimes(2);
 
-    // The app-server spawn (2nd call) should use "codex" directly, not cmd
+    // The app-server spawn (2nd call) should wrap codex with nohup.
     const appServerSpawnCall = spawnMockE2E.mock.calls[1];
-    expect(appServerSpawnCall[0]).toBe("codex");
+    expect(appServerSpawnCall[0]).toBe("nohup");
     expect(appServerSpawnCall[1]).toEqual([
+      "codex",
       "app-server",
       "--listen",
       expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+$/),
@@ -472,7 +473,7 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
 describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () => {
   it("integration: stale saved thread is replaced by newer heartbeat thread from same app-server", async () => {
     const { loadResumableThreadState } =
-      await import("../../scripts/codex-app-server-bridge.ts");
+      await import("../../../../scripts/codex-app-server-bridge.js");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),
@@ -524,7 +525,7 @@ describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () 
 
   it("integration: heartbeat from different app-server → keeps saved thread", async () => {
     const { loadResumableThreadState } =
-      await import("../../scripts/codex-app-server-bridge.ts");
+      await import("../../../../scripts/codex-app-server-bridge.js");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),
@@ -573,7 +574,7 @@ describe("Scenario 4: Thread resume self-heal via loadResumableThreadState", () 
 
   it("integration: equal timestamps → keeps saved thread (no unnecessary churn)", async () => {
     const { loadResumableThreadState } =
-      await import("../../scripts/codex-app-server-bridge.ts");
+      await import("../../../../scripts/codex-app-server-bridge.js");
 
     const repoRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "headless-e2e-thread-"),

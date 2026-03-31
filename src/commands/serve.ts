@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { buildManagedMcpServerSpec } from "../adapters/common.js";
 import { createAdapterContext, findRepoRoot, log } from "../utils.js";
+import { normalizeTapPath } from "../config/index.js";
 import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
 
@@ -45,11 +46,11 @@ export async function serveCommand(args: string[]): Promise<CommandResult> {
 
   const commsDirIdx = args.indexOf("--comms-dir");
   if (commsDirIdx !== -1 && args[commsDirIdx + 1]) {
-    commsDir = path.resolve(args[commsDirIdx + 1]);
+    commsDir = path.resolve(normalizeTapPath(args[commsDirIdx + 1]));
   }
 
   if (!commsDir && process.env.TAP_COMMS_DIR) {
-    commsDir = process.env.TAP_COMMS_DIR;
+    commsDir = path.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
   }
 
   if (!commsDir) {

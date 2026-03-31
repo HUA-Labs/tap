@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 // prettier-ignore
 // @ts-expect-error — no type declarations for .mjs script
-import { getAutopilotStatus, runAutopilotLoop, runAutopilotPass } from "../../scripts/tap-autopilot.mjs";
+import { getAutopilotStatus, runAutopilotLoop, runAutopilotPass } from "../../../../scripts/tap-autopilot.mjs";
 
 describe("tap autopilot", () => {
   const createdDirs: string[] = [];

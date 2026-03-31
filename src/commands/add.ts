@@ -18,7 +18,10 @@ import {
   logHeader,
 } from "../utils.js";
 import { getAdapter } from "../adapters/index.js";
-import { startBridge } from "../engine/bridge.js";
+import {
+  startBridge,
+  findNextAvailableAppServerPort,
+} from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
 import type {
   RuntimeName,
@@ -379,6 +382,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
 
   // 7. Start bridge if needed (app-server mode only)
   let bridge: BridgeState | null = null;
+  let effectivePort = port;
   if (mode === "app-server") {
     const bridgeScript = adapter.resolveBridgeScript?.(ctx);
     if (!bridgeScript) {
@@ -386,8 +390,20 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
       const { config: resolvedCfg } = resolveConfig({}, repoRoot);
+      // Auto-assign a free port for managed codex instances without --port
+      if (effectivePort == null && runtime === "codex") {
+        const currentState = loadState(repoRoot);
+        effectivePort = await findNextAvailableAppServerPort(
+          currentState,
+          resolvedCfg.appServerUrl,
+          4501,
+          instanceId,
+        );
+        log(`Auto-assigned port ${effectivePort} for ${instanceId}`);
+      }
       log(`Starting bridge: ${bridgeScript}`);
       try {
+        const manageAppServer = runtime === "codex";
         bridge = await startBridge({
           instanceId,
           runtime,
@@ -399,7 +415,8 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
           runtimeCommand: resolvedCfg.runtimeCommand,
           appServerUrl: resolvedCfg.appServerUrl,
           repoRoot,
-          port: port ?? undefined,
+          port: effectivePort ?? undefined,
+          manageAppServer,
           headless,
         });
         logSuccess(`Bridge started (PID: ${bridge.pid})`);
@@ -416,7 +433,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     instanceId,
     runtime,
     agentName: resolvedAgentName,
-    port,
+    port: effectivePort,
     installed: true,
     configPath: probe.configPath ?? "",
     bridgeMode: mode,
@@ -426,6 +443,8 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     lastAppliedHash: result.lastAppliedHash,
     lastVerifiedAt: verify.ok ? new Date().toISOString() : null,
     bridge,
+    manageAppServer: runtime === "codex",
+    noAuth: false,
     headless,
     warnings: Array.from(new Set([...result.warnings, ...verify.warnings])),
   };

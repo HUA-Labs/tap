@@ -16,6 +16,7 @@ export {
   resolveConfig,
   saveSharedConfig,
   saveLocalConfig,
+  normalizeTapPath,
 } from "./resolve.js";
 
 export type { ConfigOverrides } from "./resolve.js";

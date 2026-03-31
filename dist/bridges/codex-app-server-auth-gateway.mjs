@@ -1,12 +1,109 @@
 // src/bridges/codex-app-server-auth-gateway.ts
+import {
+  createServer
+} from "http";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { pathToFileURL } from "url";
 import { timingSafeEqual } from "crypto";
 import { WebSocket, WebSocketServer } from "ws";
+
+// src/engine/bridge-app-server-health.ts
+import * as net from "net";
+var APP_SERVER_HEALTH_TIMEOUT_MS = 1500;
+var APP_SERVER_READYZ_PATH = "/readyz";
+function buildAppServerReadyzUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol === "ws:") {
+    parsed.protocol = "http:";
+  } else if (parsed.protocol === "wss:") {
+    parsed.protocol = "https:";
+  } else if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  parsed.pathname = APP_SERVER_READYZ_PATH;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+async function checkAppServerReadyz(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  const readyzUrl = buildAppServerReadyzUrl(url);
+  if (!readyzUrl) {
+    return "unsupported";
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(readyzUrl, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json"
+      }
+    });
+    if (response.ok) {
+      return "ready";
+    }
+    if (response.status === 400 || response.status === 404 || response.status === 405 || response.status === 426 || response.status === 501) {
+      return "unsupported";
+    }
+    return "not-ready";
+  } catch {
+    return "not-ready";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function checkTcpPortListening(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  let hostname;
+  let port;
+  try {
+    const parsed = new URL(url.replace(/^ws/, "http"));
+    hostname = parsed.hostname;
+    port = parseInt(parsed.port, 10);
+  } catch {
+    return false;
+  }
+  if (!port || !Number.isFinite(port)) return false;
+  return new Promise((resolve2) => {
+    const socket = net.createConnection({ host: hostname, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve2(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve2(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve2(false);
+    });
+  });
+}
+async function checkManagedAppServerReady(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_MS) {
+  const readyzStatus = await checkAppServerReadyz(url, timeoutMs);
+  if (readyzStatus === "ready") {
+    return true;
+  }
+  if (readyzStatus === "unsupported") {
+    return checkTcpPortListening(url, timeoutMs);
+  }
+  return false;
+}
+
+// src/bridges/codex-app-server-auth-gateway.ts
 var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 var CLOSE_UNAUTHORIZED = 4401;
 var CLOSE_UPSTREAM_ERROR = 1013;
+var GATEWAY_READYZ_PATH = "/readyz";
 function normalizeUrl(value) {
   return value.replace(/\/$/, "");
 }
@@ -101,6 +198,46 @@ function tokensMatch(presentedToken, expectedToken) {
 }
 async function main() {
   const options = buildGatewayOptions(process.argv.slice(2));
+  const runtime = await startGatewayServer(options);
+  const shutdown = () => {
+    void runtime.close().finally(() => {
+      process.exit(0);
+    });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+function writeJson(response, statusCode, body) {
+  response.statusCode = statusCode;
+  response.setHeader("Content-Type", "application/json");
+  response.end(JSON.stringify(body));
+}
+function writeUpgradeRequired(response) {
+  response.statusCode = 426;
+  response.setHeader("Connection", "Upgrade");
+  response.setHeader("Upgrade", "websocket");
+  response.end("Upgrade Required");
+}
+function writeNotFound(response) {
+  response.statusCode = 404;
+  response.end("Not Found");
+}
+function rejectUpgrade(socket, statusCode) {
+  socket.write(`HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r
+\r
+`);
+  socket.destroy();
+}
+function isUpgradePath(listenUrl, request) {
+  const requestUrl = new URL(request.url ?? "/", listenUrl.replace(/^ws/, "http"));
+  const listenPath = new URL(listenUrl).pathname;
+  return requestUrl.pathname === (listenPath || "/");
+}
+async function handleReadyzRequest(response, options) {
+  const ready = await checkManagedAppServerReady(options.upstreamUrl);
+  writeJson(response, ready ? 200 : 503, { ok: ready });
+}
+async function startGatewayServer(options) {
   const listen = new URL(options.listenUrl);
   const host = listen.hostname === "localhost" ? "127.0.0.1" : listen.hostname;
   const port = Number.parseInt(listen.port, 10);
@@ -109,13 +246,11 @@ async function main() {
       `Gateway listen URL must include a valid port: ${options.listenUrl}`
     );
   }
-  const server = new WebSocketServer({
-    host,
-    port,
-    path: listen.pathname === "/" ? void 0 : listen.pathname,
+  const wsServer = new WebSocketServer({
+    noServer: true,
     perMessageDeflate: false
   });
-  server.on("connection", (client, request) => {
+  wsServer.on("connection", (client, request) => {
     const protocols = request.headers["sec-websocket-protocol"]?.split(",").map((s) => s.trim()) ?? [];
     const authProtocol = protocols.find(
       (p) => p.startsWith(AUTH_SUBPROTOCOL_PREFIX)
@@ -159,18 +294,50 @@ async function main() {
       closeSocket(upstream, 1011, "Client error");
     });
   });
-  server.on("listening", () => {
-    console.log(
-      `[auth-gateway] listening ${options.listenUrl} -> ${options.upstreamUrl}`
+  const server = createServer(async (request, response) => {
+    const requestUrl = new URL(
+      request.url ?? "/",
+      options.listenUrl.replace(/^ws/, "http")
     );
+    if (request.method === "GET" && requestUrl.pathname === GATEWAY_READYZ_PATH) {
+      await handleReadyzRequest(response, options);
+      return;
+    }
+    if (isUpgradePath(options.listenUrl, request)) {
+      writeUpgradeRequired(response);
+      return;
+    }
+    writeNotFound(response);
   });
-  const shutdown = () => {
-    server.close(() => {
-      process.exit(0);
+  server.on("upgrade", (request, socket, head) => {
+    if (!isUpgradePath(options.listenUrl, request)) {
+      rejectUpgrade(socket, 404);
+      return;
+    }
+    wsServer.handleUpgrade(request, socket, head, (client) => {
+      wsServer.emit("connection", client, request);
     });
+  });
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.once("error", rejectPromise);
+    server.listen(port, host, () => {
+      server.off("error", rejectPromise);
+      console.log(
+        `[auth-gateway] listening ${options.listenUrl} -> ${options.upstreamUrl}`
+      );
+      resolvePromise();
+    });
+  });
+  return {
+    server,
+    close() {
+      return new Promise((resolvePromise) => {
+        server.close(() => {
+          wsServer.close(() => resolvePromise());
+        });
+      });
+    }
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
 }
 function isDirectExecution() {
   const entry = process.argv[1];
@@ -186,6 +353,8 @@ if (isDirectExecution()) {
   });
 }
 export {
-  buildGatewayOptions
+  GATEWAY_READYZ_PATH,
+  buildGatewayOptions,
+  startGatewayServer
 };
 //# sourceMappingURL=codex-app-server-auth-gateway.mjs.map

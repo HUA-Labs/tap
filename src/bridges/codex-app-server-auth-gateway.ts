@@ -1,18 +1,31 @@
-import type { IncomingMessage } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { readFileSync } from "node:fs";
+import type { Socket } from "node:net";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { checkManagedAppServerReady } from "../engine/bridge-app-server-health.js";
 
 const AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
 const CLOSE_UNAUTHORIZED = 4401;
 const CLOSE_UPSTREAM_ERROR = 1013;
+export const GATEWAY_READYZ_PATH = "/readyz";
 
-interface GatewayOptions {
+export interface GatewayOptions {
   listenUrl: string;
   upstreamUrl: string;
   token: string;
+}
+
+export interface GatewayRuntime {
+  server: HttpServer;
+  close(): Promise<void>;
 }
 
 function normalizeUrl(value: string): string {
@@ -138,6 +151,62 @@ function tokensMatch(
 
 async function main(): Promise<void> {
   const options = buildGatewayOptions(process.argv.slice(2));
+  const runtime = await startGatewayServer(options);
+
+  const shutdown = () => {
+    void runtime.close().finally(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+function writeJson(
+  response: ServerResponse,
+  statusCode: number,
+  body: Record<string, unknown>,
+): void {
+  response.statusCode = statusCode;
+  response.setHeader("Content-Type", "application/json");
+  response.end(JSON.stringify(body));
+}
+
+function writeUpgradeRequired(response: ServerResponse): void {
+  response.statusCode = 426;
+  response.setHeader("Connection", "Upgrade");
+  response.setHeader("Upgrade", "websocket");
+  response.end("Upgrade Required");
+}
+
+function writeNotFound(response: ServerResponse): void {
+  response.statusCode = 404;
+  response.end("Not Found");
+}
+
+function rejectUpgrade(socket: Socket | import("stream").Duplex, statusCode: number): void {
+  socket.write(`HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r\n\r\n`);
+  socket.destroy();
+}
+
+function isUpgradePath(listenUrl: string, request: IncomingMessage): boolean {
+  const requestUrl = new URL(request.url ?? "/", listenUrl.replace(/^ws/, "http"));
+  const listenPath = new URL(listenUrl).pathname;
+  return requestUrl.pathname === (listenPath || "/");
+}
+
+async function handleReadyzRequest(
+  response: ServerResponse,
+  options: GatewayOptions,
+): Promise<void> {
+  const ready = await checkManagedAppServerReady(options.upstreamUrl);
+  writeJson(response, ready ? 200 : 503, { ok: ready });
+}
+
+export async function startGatewayServer(
+  options: GatewayOptions,
+): Promise<GatewayRuntime> {
   const listen = new URL(options.listenUrl);
   const host = listen.hostname === "localhost" ? "127.0.0.1" : listen.hostname;
   const port = Number.parseInt(listen.port, 10);
@@ -147,14 +216,12 @@ async function main(): Promise<void> {
     );
   }
 
-  const server = new WebSocketServer({
-    host,
-    port,
-    path: listen.pathname === "/" ? undefined : listen.pathname,
+  const wsServer = new WebSocketServer({
+    noServer: true,
     perMessageDeflate: false,
   });
 
-  server.on("connection", (client: WebSocket, request: IncomingMessage) => {
+  wsServer.on("connection", (client: WebSocket, request: IncomingMessage) => {
     // Extract token from Sec-WebSocket-Protocol header (subprotocol auth).
     // Client sends: WebSocket(url, ["tap-auth-<token>"])
     // Falls back to query param for backward compatibility during migration.
@@ -216,20 +283,57 @@ async function main(): Promise<void> {
     });
   });
 
-  server.on("listening", () => {
-    console.log(
-      `[auth-gateway] listening ${options.listenUrl} -> ${options.upstreamUrl}`,
+  const server = createServer(async (request, response) => {
+    const requestUrl = new URL(
+      request.url ?? "/",
+      options.listenUrl.replace(/^ws/, "http"),
     );
+
+    if (request.method === "GET" && requestUrl.pathname === GATEWAY_READYZ_PATH) {
+      await handleReadyzRequest(response, options);
+      return;
+    }
+
+    if (isUpgradePath(options.listenUrl, request)) {
+      writeUpgradeRequired(response);
+      return;
+    }
+
+    writeNotFound(response);
   });
 
-  const shutdown = () => {
-    server.close(() => {
-      process.exit(0);
-    });
-  };
+  server.on("upgrade", (request, socket, head) => {
+    if (!isUpgradePath(options.listenUrl, request)) {
+      rejectUpgrade(socket, 404);
+      return;
+    }
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+    wsServer.handleUpgrade(request, socket, head, (client) => {
+      wsServer.emit("connection", client, request);
+    });
+  });
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    server.once("error", rejectPromise);
+    server.listen(port, host, () => {
+      server.off("error", rejectPromise);
+      console.log(
+        `[auth-gateway] listening ${options.listenUrl} -> ${options.upstreamUrl}`,
+      );
+      resolvePromise();
+    });
+  });
+
+  return {
+    server,
+    close() {
+      return new Promise<void>((resolvePromise) => {
+        server.close(() => {
+          wsServer.close(() => resolvePromise());
+        });
+      });
+    },
+  };
 }
 
 function isDirectExecution(): boolean {

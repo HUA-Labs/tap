@@ -38,10 +38,7 @@ export {
 export {
   cleanupStaleWindowsSpawnWrappers,
   buildWindowsDetachedWrapperScript,
-  WINDOWS_DETACHED_LIVENESS_TIMEOUT_MS,
-  WINDOWS_DETACHED_LIVENESS_POLL_MS,
   startWindowsDetachedProcess,
-  waitForWindowsDetachedProcessLiveness,
   startWindowsCodexAppServer,
   findListeningProcessId,
 } from "./bridge-windows-spawn.js";
@@ -93,14 +90,22 @@ export type { TurnInfo } from "./bridge-observability.js";
 export {
   checkAppServerHealth,
   waitForAppServerHealth,
+  buildAppServerReadyzUrl,
+  checkAppServerReadyz,
+  checkTcpPortListening,
+  checkManagedAppServerReady,
+  waitForTcpPortListening,
+  waitForManagedAppServerReady,
   markAppServerHealthy,
   APP_SERVER_HEALTH_TIMEOUT_MS,
   APP_SERVER_HEALTH_RETRY_MS,
+  APP_SERVER_READYZ_PATH,
 } from "./bridge-app-server-health.js";
 
 export type {
   WebSocketLike,
   WebSocketCtor,
+  AppServerReadyzStatus,
 } from "./bridge-app-server-health.js";
 
 export {

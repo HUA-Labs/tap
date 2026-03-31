@@ -21,6 +21,18 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+const waitForManagedAppServerReadyMock = vi.fn();
+
+vi.mock("../engine/bridge-app-server-health.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../engine/bridge-app-server-health.js")
+  >("../engine/bridge-app-server-health.js");
+  return {
+    ...actual,
+    waitForManagedAppServerReady: waitForManagedAppServerReadyMock,
+  };
+});
+
 vi.mock("../adapters/common.js", () => ({
   probeCommand: probeCommandMock,
 }));
@@ -103,6 +115,9 @@ beforeEach(() => {
     }
     return "";
   });
+  // Stub managed startup readiness so lifecycle tests stay focused on spawn
+  // orchestration rather than probing internals.
+  waitForManagedAppServerReadyMock.mockResolvedValue(true);
   (globalThis as { WebSocket?: unknown }).WebSocket =
     FakeWebSocket as unknown as typeof globalThis.WebSocket;
 });
@@ -189,7 +204,7 @@ describe("ensureCodexAppServer", () => {
   });
 
   it("spawns auth gateway plus codex app-server when the public listener is free", async () => {
-    socketEvents = ["error", "open", "open"];
+    socketEvents = ["error"];
     probeCommandMock.mockReturnValue({ command: "codex", version: "1.0.0" });
     const unref = vi.fn();
     spawnMock
@@ -212,8 +227,9 @@ describe("ensureCodexAppServer", () => {
 
     expect(spawnMock).toHaveBeenNthCalledWith(
       1,
-      process.execPath,
+      "nohup",
       expect.arrayContaining([
+        process.execPath,
         "--experimental-strip-types",
         expect.stringContaining("codex-app-server-auth-gateway.ts"),
       ]),
@@ -230,8 +246,9 @@ describe("ensureCodexAppServer", () => {
     );
     expect(spawnMock).toHaveBeenNthCalledWith(
       2,
-      "codex",
+      "nohup",
       [
+        "codex",
         "app-server",
         "--listen",
         expect.stringMatching(/^ws:\/\/127\.0\.0\.1:\d+$/),
@@ -263,7 +280,7 @@ describe("ensureCodexAppServer", () => {
   });
 
   it("returns null PID when PowerShell hidden spawn fails on Windows", async () => {
-    socketEvents = ["error", "open"];
+    socketEvents = ["error"];
     probeCommandMock.mockImplementation((candidates: string[]) => {
       if (candidates.includes("codex.cmd")) {
         return { command: "codex.cmd", version: "1.0.0" };
@@ -305,7 +322,7 @@ describe("ensureCodexAppServer", () => {
   });
 
   it("uses PowerShell hidden spawn on Windows for codex.cmd and records the listening PID", async () => {
-    socketEvents = ["error", "open", "open"];
+    socketEvents = ["error"];
     const quotedRoot = fs.mkdtempSync(
       path.join(tmpDir, "repo %name%'s hidden spawn-"),
     );
@@ -408,7 +425,7 @@ describe("ensureCodexAppServer", () => {
   });
 
   it("cleans up stale tap-spawn wrappers before launching a new Windows process", async () => {
-    socketEvents = ["error", "open", "open"];
+    socketEvents = ["error"];
     probeCommandMock.mockImplementation((candidates: string[]) => {
       if (candidates.includes("codex.cmd")) {
         return { command: "codex.cmd", version: "1.0.0" };

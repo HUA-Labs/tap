@@ -148,6 +148,17 @@ var init_termination = __esm({
 import * as fs6 from "fs";
 import * as path5 from "path";
 import * as crypto2 from "crypto";
+function trimAddress(value) {
+  return value.trim();
+}
+function canonicalizeAgentId(value) {
+  return trimAddress(value).replace(/-/g, "_").toLowerCase();
+}
+function isOwnMessageAddress(sender, agentId, agentName) {
+  const normalizedSender = trimAddress(sender);
+  if (!normalizedSender) return false;
+  return canonicalizeAgentId(normalizedSender) === canonicalizeAgentId(agentId) || normalizedSender.toLowerCase() === trimAddress(agentName).toLowerCase();
+}
 function parseInboxFilename(filename) {
   const base = path5.basename(filename, ".md");
   const match = base.match(/^(\d{8})-([^-]+)-([^-]+)-(.+)$/);
@@ -381,7 +392,7 @@ function getHeadlessEnvConfig() {
     qualityFloor: process.env.TAP_QUALITY_FLOOR ?? "high"
   };
 }
-function scanInboxForReviews(commsDir, stateDir, generation, agentName) {
+function scanInboxForReviews(commsDir, stateDir, generation, agentName, agentId = agentName) {
   const inboxDir = path5.join(commsDir, "inbox");
   if (!fs6.existsSync(inboxDir)) return [];
   const files = fs6.readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
@@ -395,6 +406,7 @@ function scanInboxForReviews(commsDir, stateDir, generation, agentName) {
     if (to !== agentName.toLowerCase() && to !== "\uC804\uCCB4" && to !== "all" && to !== "") {
       continue;
     }
+    if (isOwnMessageAddress(request.sender, agentId, agentName)) continue;
     if (isStaleReviewRequest(request, commsDir, agentName)) continue;
     if (isAlreadyProcessed(stateDir, filePath)) continue;
     requests.push(request);
@@ -496,7 +508,8 @@ function createHeadlessLoop(options) {
       options.commsDir,
       options.stateDir,
       options.generation,
-      options.agentName
+      options.agentName,
+      options.agentId
     );
     if (requests.length === 0) {
       writeStateFile();
@@ -1056,12 +1069,14 @@ function maybeStartHeadlessLoop(repoRoot, commsDir, stateDir) {
   if (process.env.TAP_HEADLESS !== "true") return;
   Promise.resolve().then(() => (init_headless_loop(), headless_loop_exports)).then(({ createHeadlessLoop: createHeadlessLoop2 }) => {
     const agentName = process.env.TAP_AGENT_NAME ?? process.env.CODEX_TAP_AGENT_NAME ?? "reviewer";
+    const agentId = process.env.TAP_AGENT_ID ?? process.env.TAP_BRIDGE_INSTANCE_ID ?? agentName;
     const generation = process.env.TAP_REVIEW_GENERATION ?? "gen11";
     const resolvedStateDir = stateDir ?? path7.join(repoRoot, ".tap-comms");
     const loop = createHeadlessLoop2({
       commsDir,
       stateDir: resolvedStateDir,
       repoRoot,
+      agentId,
       agentName,
       generation,
       pollIntervalMs: 3e3

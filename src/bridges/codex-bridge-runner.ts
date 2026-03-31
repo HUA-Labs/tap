@@ -42,6 +42,10 @@ function maybeStartHeadlessLoop(
         process.env.TAP_AGENT_NAME ??
         process.env.CODEX_TAP_AGENT_NAME ??
         "reviewer";
+      const agentId =
+        process.env.TAP_AGENT_ID ??
+        process.env.TAP_BRIDGE_INSTANCE_ID ??
+        agentName;
       const generation = process.env.TAP_REVIEW_GENERATION ?? "gen11";
       const resolvedStateDir = stateDir ?? path.join(repoRoot, ".tap-comms");
 
@@ -49,6 +53,7 @@ function maybeStartHeadlessLoop(
         commsDir,
         stateDir: resolvedStateDir,
         repoRoot,
+        agentId,
         agentName,
         generation,
         pollIntervalMs: 3_000, // Poll faster than generic bridge (5s) for review priority
