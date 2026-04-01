@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { InstanceId, BridgeState } from "../types.js";
 import { loadState } from "../state.js";
+import { loadInstanceConfig } from "../config/instance-config.js";
 
 /**
- * Resolve agent name: explicit > state.json > env.
+ * Resolve agent name: explicit > instance config > state.json > env.
  * Exported for direct testing without spawning a process.
  */
 export function resolveAgentName(
@@ -13,6 +14,16 @@ export function resolveAgentName(
   context?: { repoRoot?: string; stateDir?: string },
 ): string | null {
   if (explicit) return explicit;
+
+  // Instance config (Phase 1-2 source-of-truth)
+  if (context?.stateDir) {
+    try {
+      const instConfig = loadInstanceConfig(context.stateDir, instanceId);
+      if (instConfig?.agentName) return instConfig.agentName;
+    } catch {
+      // instance config read failed — fall through
+    }
+  }
 
   // state.json SSOT (#784 backwrite)
   try {

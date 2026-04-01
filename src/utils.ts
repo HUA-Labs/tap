@@ -231,11 +231,26 @@ export function resolveInstanceId(
   };
 }
 
+/**
+ * Reject instance names containing path-traversal sequences or separators.
+ * Prevents directory escape when the ID is interpolated into file paths.
+ */
+export function validateInstanceName(name: string): void {
+  if (/[/\\]/.test(name) || name.includes("..")) {
+    throw new Error(
+      `Invalid instance name "${name}": must not contain path separators or ".." sequences`,
+    );
+  }
+}
+
 /** Build an instance ID from runtime + optional name. */
 export function buildInstanceId(
   runtime: RuntimeName,
   name?: string,
 ): InstanceId {
+  if (name) {
+    validateInstanceName(name);
+  }
   return name ? `${runtime}-${name}` : runtime;
 }
 

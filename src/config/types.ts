@@ -37,7 +37,7 @@ export interface TapResolvedConfig {
   towerName: string | null;
 }
 
-/** Config resolution source for diagnostics. */
+/** Config resolution source for diagnostics (legacy API — backward compatible). */
 export type ConfigSource =
   | "cli-flag"
   | "env"
@@ -49,4 +49,41 @@ export type ConfigSource =
 export interface ConfigResolution {
   config: TapResolvedConfig;
   sources: Record<keyof TapResolvedConfig, ConfigSource>;
+}
+
+// ─── Tracked Config (source-aware values) ──────────────────────
+
+/**
+ * Extended config source — 7-level priority hierarchy for TrackedValue.
+ * Priority: cli(7) > env(6) > instance(5) > session(4) > local(3) > project(2) > default(1)
+ */
+export type TrackedConfigSource =
+  | "cli" // --flag (highest priority)
+  | "env" // TAP_* environment variables
+  | "instance" // .tap-comms/instances/{id}.json
+  | "session" // .tap-comms/sessions/{gen}.json
+  | "local" // tap-config.local.json (gitignored)
+  | "project" // tap-config.json (git-tracked)
+  | "default"; // hardcoded defaults (lowest priority)
+
+/** A config value with its origin tracked for diagnostics and drift detection. */
+export interface TrackedValue<T> {
+  value: T;
+  source: TrackedConfigSource;
+  /** File path this value was loaded from (null for env/cli/default sources). */
+  sourceFile: string | null;
+}
+
+/** Fully resolved config where every value carries its source. */
+export interface TapTrackedConfig {
+  repoRoot: TrackedValue<string>;
+  commsDir: TrackedValue<string>;
+  stateDir: TrackedValue<string>;
+  runtimeCommand: TrackedValue<string>;
+  appServerUrl: TrackedValue<string>;
+  towerName: TrackedValue<string | null>;
+  // Instance-specific (populated when instanceId is provided)
+  agentName: TrackedValue<string | null>;
+  port: TrackedValue<number | null>;
+  bridgeMode: TrackedValue<string | null>;
 }

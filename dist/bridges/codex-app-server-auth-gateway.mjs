@@ -223,13 +223,23 @@ function writeNotFound(response) {
   response.end("Not Found");
 }
 function rejectUpgrade(socket, statusCode) {
-  socket.write(`HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r
+  socket.write(
+    `HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r
 \r
-`);
+`
+  );
   socket.destroy();
 }
+function containsTraversal(raw) {
+  if (raw.includes("..")) return true;
+  if (/%2e/i.test(raw) && raw.replace(/%2e/gi, ".").includes("..")) return true;
+  return false;
+}
 function isUpgradePath(listenUrl, request) {
-  const requestUrl = new URL(request.url ?? "/", listenUrl.replace(/^ws/, "http"));
+  const requestUrl = new URL(
+    request.url ?? "/",
+    listenUrl.replace(/^ws/, "http")
+  );
   const listenPath = new URL(listenUrl).pathname;
   return requestUrl.pathname === (listenPath || "/");
 }
@@ -294,22 +304,31 @@ async function startGatewayServer(options) {
       closeSocket(upstream, 1011, "Client error");
     });
   });
+  const listenPath = new URL(options.listenUrl).pathname || "/";
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(
       request.url ?? "/",
       options.listenUrl.replace(/^ws/, "http")
     );
+    if (containsTraversal(request.url ?? "")) {
+      writeNotFound(response);
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === GATEWAY_READYZ_PATH) {
       await handleReadyzRequest(response, options);
       return;
     }
-    if (isUpgradePath(options.listenUrl, request)) {
+    if (requestUrl.pathname === listenPath) {
       writeUpgradeRequired(response);
       return;
     }
     writeNotFound(response);
   });
   server.on("upgrade", (request, socket, head) => {
+    if (containsTraversal(request.url ?? "")) {
+      rejectUpgrade(socket, 400);
+      return;
+    }
     if (!isUpgradePath(options.listenUrl, request)) {
       rejectUpgrade(socket, 404);
       return;

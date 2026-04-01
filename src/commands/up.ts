@@ -25,6 +25,20 @@ type UpResultData = Record<string, unknown> & {
   snapshot: DashboardSnapshot;
 };
 
+function summarizeLifecycle(snapshot: DashboardSnapshot): string {
+  const ready = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "ready",
+  ).length;
+  const initializing = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "initializing",
+  ).length;
+  const degraded = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "degraded-no-thread",
+  ).length;
+
+  return `${ready} ready, ${initializing} initializing, ${degraded} degraded`;
+}
+
 export async function upCommand(args: string[]): Promise<CommandResult> {
   if (args.includes("--help") || args.includes("-h")) {
     log(UP_HELP);
@@ -76,7 +90,7 @@ export async function upCommand(args: string[]): Promise<CommandResult> {
     ok: true,
     command: "up",
     code: "TAP_UP_OK",
-    message: `tap up: ${activeBridges} bridge(s) running`,
+    message: `tap up: ${activeBridges} bridge(s) running (${summarizeLifecycle(snapshot)})`,
     warnings: result.warnings,
     data: {
       ...(result.data as Record<string, unknown>),

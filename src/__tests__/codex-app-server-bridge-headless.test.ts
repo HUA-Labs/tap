@@ -7,7 +7,7 @@ import {
   buildOptions,
   maybeBootstrapHeadlessTurn,
   waitForTurnCompletion,
-} from "../../../../scripts/codex-app-server-bridge.js";
+} from "../../scripts/codex-app-server-bridge.js";
 
 describe("codex app-server bridge headless cold-start", () => {
   const createdDirs: string[] = [];

@@ -228,13 +228,13 @@ export function buildManagedMcpServerSpec(
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
 
-  // Prefer bun for .ts source files; for compiled .mjs, node works too
+  // M201: bundled .mjs uses node; .ts source requires bun
   const isBundled = sourcePath.endsWith(".mjs");
   const isEphemeralSource = isEphemeralPath(sourcePath);
-  let command: string | null = bunCommand;
+  let command: string | null = null;
   let args: string[] = [toForwardSlashPath(sourcePath)];
 
-  // Ephemeral source path (npx cache) → always use stable launcher, even with bun
+  // Ephemeral source path (npx cache) → always use stable launcher
   // This prevents persisting _npx cache paths in .mcp.json / config.toml
   if (isEphemeralSource && isBundled) {
     command = "npx";
@@ -242,28 +242,22 @@ export function buildManagedMcpServerSpec(
     warnings.push(
       "Detected npx cache path. Using `npx @hua-labs/tap serve` as stable MCP launcher.",
     );
-  } else if (!command && isBundled) {
-    // No bun, bundled .mjs — check node path stability
-    const isEphemeralNode = isEphemeralPath(process.execPath);
-
-    if (isEphemeralNode) {
-      // fnm multishell node → use bare `node` (resolved from PATH at runtime)
-      command = "node";
-      warnings.push(
-        "Detected ephemeral node path. Using `node` from PATH for MCP config stability.",
-      );
-    } else {
-      command = toForwardSlashPath(process.execPath);
-    }
-
-    warnings.push(
-      "bun not found; using node to run the compiled MCP server. Install bun for better performance.",
+  } else if (isBundled) {
+    // Bundled .mjs — always use node (M201: bun dependency removed)
+    const nodeProbe = probeCommand(
+      process.platform === "win32" ? ["node", "node.exe"] : ["node"],
     );
+    command = nodeProbe.command ?? "node";
+  } else {
+    // .ts source — requires bun for direct execution
+    command = bunCommand;
   }
 
   if (!command) {
     issues.push(
-      "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh",
+      isBundled
+        ? "node is required to run the compiled MCP server (.mjs). Ensure node is in PATH."
+        : "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh",
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }

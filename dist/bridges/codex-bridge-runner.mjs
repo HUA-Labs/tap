@@ -1157,7 +1157,21 @@ async function main() {
   );
   const instanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
   const envStateDir = process.env.TAP_STATE_DIR;
-  const stateDir = envStateDir ? envStateDir : instanceId ? path7.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`) : void 0;
+  let stateDir;
+  if (envStateDir) {
+    stateDir = envStateDir;
+  } else if (instanceId) {
+    const resolved2 = path7.resolve(
+      path7.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
+    );
+    const expectedBase = path7.resolve(repoRoot, ".tmp") + path7.sep;
+    if (!resolved2.startsWith(expectedBase)) {
+      throw new Error(
+        `Path traversal blocked: runtime state dir escapes .tmp/ directory`
+      );
+    }
+    stateDir = resolved2;
+  }
   const preResolved = process.env.TAP_RESOLVED_NODE;
   const resolved = preResolved ? {
     command: preResolved,

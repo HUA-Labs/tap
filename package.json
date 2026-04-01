@@ -1,6 +1,6 @@
 {
   "name": "@hua-labs/tap",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Zero-dependency CLI for cross-model AI agent communication setup",
   "bin": {
     "tap": "bin/tap.mjs",
@@ -18,11 +18,11 @@
   },
   "files": [
     "dist",
-    "bin",
-    "README.md"
+    "bin"
   ],
   "scripts": {
     "build": "tsup",
+    "prepack": "pnpm run build",
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
     "type-check": "tsc --noEmit",
@@ -31,6 +31,9 @@
   },
   "dependencies": {
     "ws": "^8.19.0"
+  },
+  "optionalDependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

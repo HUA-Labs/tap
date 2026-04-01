@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -13,6 +13,7 @@ import {
   startBridge,
   getBridgeRuntimeStateDir,
   findNextAvailableAppServerPort,
+  transitionBridgeLifecycle,
 } from "../engine/bridge.js";
 import type { BridgeState, TapState } from "../types.js";
 
@@ -200,6 +201,41 @@ describe("runtime state dir", () => {
   });
 });
 
+describe("persisted bridge lifecycle", () => {
+  it("increments restart count without resetting since for the same state", () => {
+    const first = transitionBridgeLifecycle(
+      null,
+      "initializing",
+      "bridge start",
+      {
+        at: "2026-04-01T00:00:00.000Z",
+      },
+    );
+    const sameState = transitionBridgeLifecycle(
+      first,
+      "initializing",
+      "runtime heartbeat",
+      {
+        at: "2026-04-01T00:01:00.000Z",
+      },
+    );
+    const restarted = transitionBridgeLifecycle(
+      sameState,
+      "initializing",
+      "bridge restart",
+      {
+        at: "2026-04-01T00:02:00.000Z",
+        incrementRestart: true,
+      },
+    );
+
+    expect(sameState.since).toBe("2026-04-01T00:00:00.000Z");
+    expect(sameState.lastTransitionAt).toBe("2026-04-01T00:00:00.000Z");
+    expect(restarted.restartCount).toBe(1);
+    expect(restarted.since).toBe("2026-04-01T00:00:00.000Z");
+  });
+});
+
 describe("findNextAvailableAppServerPort", () => {
   it("skips ports already occupied on loopback", async () => {
     const server = net.createServer();
@@ -380,6 +416,153 @@ describe("startBridge agent name requirement", () => {
         delete process.env.TAP_COLD_START_WARMUP;
       } else {
         process.env.TAP_COLD_START_WARMUP = originalWarmup;
+      }
+    }
+  });
+
+  it("cleans stale same-instance heartbeats before spawning", async () => {
+    const heartbeatsPath = path.join(tmpDir, "heartbeats.json");
+    fs.writeFileSync(
+      heartbeatsPath,
+      JSON.stringify(
+        {
+          codex_worker: {
+            id: "codex_worker",
+            agent: "솔",
+            timestamp: "2026-04-01T00:00:00.000Z",
+            lastActivity: "2026-04-01T00:00:00.000Z",
+            status: "active",
+            source: "mcp-direct",
+            instanceId: "codex-worker",
+            connectHash: "instance:codex-worker",
+          },
+          stale_bridge: {
+            id: "stale_bridge",
+            agent: "솔",
+            timestamp: "2026-04-01T00:00:00.000Z",
+            lastActivity: "2026-04-01T00:00:00.000Z",
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex-worker",
+            bridgePid: 999999,
+            connectHash: "instance:codex-worker",
+          },
+          other_agent: {
+            id: "other_agent",
+            agent: "결",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "mcp-direct",
+            connectHash: "session:other_agent",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const bridgeScript = path.join(tmpDir, "hold-open.js");
+    fs.writeFileSync(
+      bridgeScript,
+      "setInterval(() => {}, 1000);\n",
+      "utf-8",
+    );
+
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    let pid: number | null = null;
+    try {
+      const result = await startBridge({
+        instanceId: "codex-worker",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "솔",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      const store = JSON.parse(
+        fs.readFileSync(heartbeatsPath, "utf-8"),
+      ) as Record<string, unknown>;
+      expect(store.codex_worker).toBeUndefined();
+      expect(store.stale_bridge).toBeUndefined();
+      expect(store.other_agent).toBeDefined();
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex-worker");
+    }
+  });
+
+  it("warns when stale heartbeat cleanup is skipped because the store is locked", async () => {
+    const heartbeatsPath = path.join(tmpDir, "heartbeats.json");
+    const lockPath = path.join(tmpDir, ".heartbeats.lock");
+    fs.writeFileSync(heartbeatsPath, "{}", "utf-8");
+    fs.writeFileSync(lockPath, "someone-else", "utf-8");
+
+    const bridgeScript = path.join(tmpDir, "hold-open.js");
+    fs.writeFileSync(
+      bridgeScript,
+      "setInterval(() => {}, 1000);\n",
+      "utf-8",
+    );
+
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let pid: number | null = null;
+    try {
+      const result = await startBridge({
+        instanceId: "codex-worker",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "솔",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "heartbeat cleanup skipped for codex-worker: heartbeat store busy",
+        ),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex-worker");
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+        /* already removed */
       }
     }
   });

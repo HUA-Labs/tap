@@ -1,29 +1,33 @@
-// src/commands/init.ts
-import * as fs6 from "fs";
-import * as path6 from "path";
-import { spawnSync } from "child_process";
-
-// src/state.ts
-import * as fs3 from "fs";
-import * as path3 from "path";
-import * as crypto from "crypto";
-
-// src/config/resolve.ts
-import * as fs2 from "fs";
-import * as path2 from "path";
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/utils.ts
 import * as fs from "fs";
 import * as path from "path";
-var VALID_RUNTIMES = ["claude", "codex", "gemini"];
 function isValidRuntime(name) {
   return VALID_RUNTIMES.includes(name);
 }
 function detectPlatform() {
   return process.platform;
 }
-var _noGitWarned = false;
-var _loggedWarnings = /* @__PURE__ */ new Set();
 function _setNoGitWarned() {
   _noGitWarned = true;
 }
@@ -97,7 +101,6 @@ function parseArgs(args) {
   }
   return { positional, flags };
 }
-var _jsonMode = false;
 function setJsonMode(enabled) {
   _jsonMode = enabled;
 }
@@ -156,7 +159,17 @@ function resolveInstanceId(identifier, state) {
     message: `Instance not found: ${identifier}`
   };
 }
+function validateInstanceName(name) {
+  if (/[/\\]/.test(name) || name.includes("..")) {
+    throw new Error(
+      `Invalid instance name "${name}": must not contain path separators or ".." sequences`
+    );
+  }
+}
 function buildInstanceId(runtime, name) {
+  if (name) {
+    validateInstanceName(name);
+  }
   return name ? `${runtime}-${name}` : runtime;
 }
 function findPortConflict(state, port, excludeInstanceId) {
@@ -165,13 +178,21 @@ function findPortConflict(state, port, excludeInstanceId) {
   }
   return null;
 }
+var VALID_RUNTIMES, _noGitWarned, _loggedWarnings, _jsonMode;
+var init_utils = __esm({
+  "src/utils.ts"() {
+    "use strict";
+    init_config();
+    VALID_RUNTIMES = ["claude", "codex", "gemini"];
+    _noGitWarned = false;
+    _loggedWarnings = /* @__PURE__ */ new Set();
+    _jsonMode = false;
+  }
+});
 
 // src/config/resolve.ts
-var SHARED_CONFIG_FILE = "tap-config.json";
-var LOCAL_CONFIG_FILE = "tap-config.local.json";
-var LEGACY_CONFIG_FILE = ".tap-config";
-var DEFAULT_RUNTIME_COMMAND = "node";
-var DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
+import * as fs2 from "fs";
+import * as path2 from "path";
 function findRepoRoot2(startDir = process.cwd()) {
   let dir = path2.resolve(startDir);
   while (true) {
@@ -344,19 +365,430 @@ function normalizeTapPath(input) {
   }
   return trimmed;
 }
+var SHARED_CONFIG_FILE, LOCAL_CONFIG_FILE, LEGACY_CONFIG_FILE, DEFAULT_RUNTIME_COMMAND, DEFAULT_APP_SERVER_URL;
+var init_resolve = __esm({
+  "src/config/resolve.ts"() {
+    "use strict";
+    init_utils();
+    SHARED_CONFIG_FILE = "tap-config.json";
+    LOCAL_CONFIG_FILE = "tap-config.local.json";
+    LEGACY_CONFIG_FILE = ".tap-config";
+    DEFAULT_RUNTIME_COMMAND = "node";
+    DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
+  }
+});
+
+// src/permissions/presets.ts
+function createPermissionFromRole(role) {
+  const preset = ROLE_PRESETS[role];
+  return {
+    ...preset,
+    allowedTools: [...preset.allowedTools],
+    deniedTools: [...preset.deniedTools],
+    allowedPaths: [...preset.allowedPaths]
+  };
+}
+var ROLE_PRESETS;
+var init_presets = __esm({
+  "src/permissions/presets.ts"() {
+    "use strict";
+    ROLE_PRESETS = {
+      tower: {
+        role: "tower",
+        mode: "full-access",
+        allowedTools: ["*"],
+        deniedTools: [],
+        allowedPaths: ["**"],
+        escalateTo: null
+      },
+      implementer: {
+        role: "implementer",
+        mode: "workspace-write",
+        allowedTools: [
+          "Read",
+          "Edit",
+          "Write",
+          "Bash",
+          "Grep",
+          "Glob",
+          "mcp__tap__*"
+        ],
+        deniedTools: ["Bash(git push --force:*)", "Bash(git reset --hard:*)"],
+        allowedPaths: ["packages/**", "apps/**", "docs/**"],
+        escalateTo: "tower"
+      },
+      reviewer: {
+        role: "reviewer",
+        mode: "readonly",
+        allowedTools: [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash(grep:*)",
+          "Bash(git diff:*)",
+          "mcp__tap__*"
+        ],
+        deniedTools: ["Edit", "Write", "Bash(rm:*)"],
+        allowedPaths: ["hua-comms/reviews/**"],
+        escalateTo: "tower"
+      },
+      custom: {
+        role: "custom",
+        mode: "prompt",
+        allowedTools: [],
+        deniedTools: [],
+        allowedPaths: [],
+        escalateTo: "tower"
+      }
+    };
+  }
+});
+
+// src/config/instance-config.ts
+var instance_config_exports = {};
+__export(instance_config_exports, {
+  createInstanceConfig: () => createInstanceConfig,
+  deleteInstanceConfig: () => deleteInstanceConfig,
+  listInstanceConfigs: () => listInstanceConfigs,
+  loadInstanceConfig: () => loadInstanceConfig,
+  saveInstanceConfig: () => saveInstanceConfig,
+  updateInstanceConfig: () => updateInstanceConfig
+});
+import * as fs3 from "fs";
+import * as path3 from "path";
+function instancesDir(stateDir) {
+  return path3.join(stateDir, "instances");
+}
+function instanceConfigPath(stateDir, instanceId) {
+  if (instanceId.includes("/") || instanceId.includes("\\") || instanceId.includes("..")) {
+    throw new Error(
+      `Invalid instanceId "${instanceId}": must not contain path separators or ".." sequences`
+    );
+  }
+  return path3.join(instancesDir(stateDir), `${instanceId}.json`);
+}
+function loadInstanceConfig(stateDir, instanceId) {
+  const filePath = instanceConfigPath(stateDir, instanceId);
+  if (!fs3.existsSync(filePath)) return null;
+  try {
+    const raw = fs3.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.permission) {
+      parsed.permission = createPermissionFromRole("custom");
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function saveInstanceConfig(stateDir, config) {
+  const dir = instancesDir(stateDir);
+  fs3.mkdirSync(dir, { recursive: true });
+  const filePath = instanceConfigPath(stateDir, config.instanceId);
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  fs3.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs3.renameSync(tmp, filePath);
+  return filePath;
+}
+function listInstanceConfigs(stateDir) {
+  const dir = instancesDir(stateDir);
+  if (!fs3.existsSync(dir)) return [];
+  const files = fs3.readdirSync(dir).filter((f) => f.endsWith(".json"));
+  const configs = [];
+  for (const file of files) {
+    try {
+      const raw = fs3.readFileSync(path3.join(dir, file), "utf-8");
+      configs.push(JSON.parse(raw));
+    } catch {
+    }
+  }
+  return configs;
+}
+function deleteInstanceConfig(stateDir, instanceId) {
+  const filePath = instanceConfigPath(stateDir, instanceId);
+  if (!fs3.existsSync(filePath)) return false;
+  fs3.unlinkSync(filePath);
+  return true;
+}
+function createInstanceConfig(opts) {
+  const parts = opts.instanceId.split("-");
+  if (parts.length > 1) {
+    validateInstanceName(parts.slice(1).join("-"));
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const config = {
+    schemaVersion: INSTANCE_CONFIG_SCHEMA_VERSION,
+    instanceId: opts.instanceId,
+    runtime: opts.runtime,
+    agentName: opts.agentName,
+    agentId: opts.agentId,
+    port: opts.port,
+    appServerUrl: opts.appServerUrl,
+    permission: createPermissionFromRole(opts.role ?? "custom"),
+    // Top-level overrides consumed by resolveTrackedConfig
+    commsDir: opts.commsDir,
+    stateDir: opts.stateDir,
+    mcpEnv: {
+      TAP_COMMS_DIR: opts.commsDir,
+      TAP_STATE_DIR: opts.stateDir,
+      TAP_REPO_ROOT: opts.repoRoot,
+      TAP_AGENT_NAME: opts.agentName ?? "<set-per-session>"
+    },
+    configHash: "",
+    lastSyncedToRuntime: null,
+    runtimeConfigHash: "",
+    createdAt: now,
+    updatedAt: now
+  };
+  config.configHash = computeInstanceConfigHash(config);
+  return config;
+}
+function updateInstanceConfig(existing, updates) {
+  const updated = {
+    ...existing,
+    ...updates,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  if (updates.agentName !== void 0) {
+    updated.mcpEnv = {
+      ...updated.mcpEnv,
+      TAP_AGENT_NAME: updates.agentName ?? "<set-per-session>"
+    };
+  }
+  updated.configHash = computeInstanceConfigHash(updated);
+  return updated;
+}
+function computeInstanceConfigHash(config) {
+  const hashInput = {
+    instanceId: config.instanceId,
+    runtime: config.runtime,
+    agentName: config.agentName,
+    agentId: config.agentId,
+    port: config.port,
+    appServerUrl: config.appServerUrl,
+    mcpEnv: config.mcpEnv,
+    permission: config.permission
+  };
+  const serialized = JSON.stringify(hashInput, Object.keys(hashInput).sort());
+  let hash = 2166136261;
+  for (let i = 0; i < serialized.length; i++) {
+    hash ^= serialized.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+var INSTANCE_CONFIG_SCHEMA_VERSION;
+var init_instance_config = __esm({
+  "src/config/instance-config.ts"() {
+    "use strict";
+    init_utils();
+    init_presets();
+    INSTANCE_CONFIG_SCHEMA_VERSION = 1;
+  }
+});
+
+// src/config/drift-detector.ts
+var drift_detector_exports = {};
+__export(drift_detector_exports, {
+  checkAllDrift: () => checkAllDrift,
+  checkInstanceDrift: () => checkInstanceDrift,
+  computeFileHash: () => computeFileHash
+});
+import * as fs4 from "fs";
+import * as crypto from "crypto";
+function computeFileHash(filePath) {
+  if (!fs4.existsSync(filePath)) return "";
+  const content = fs4.readFileSync(filePath, "utf-8");
+  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+function checkInstanceDrift(stateDir, instanceId, state) {
+  const checks = [];
+  const instConfig = loadInstanceConfig(stateDir, instanceId);
+  const stateInstance = state?.instances[instanceId] ?? null;
+  if (!instConfig) {
+    if (stateInstance?.installed) {
+      if (!stateInstance.configSourceFile) {
+        return { instanceId, status: "ok", checks };
+      }
+      checks.push({
+        name: "instance config exists",
+        source: "instance-config",
+        target: "state-json",
+        status: "missing",
+        details: `Instance "${instanceId}" is in state.json but has no instance config file. Run "tap add ${instanceId} --force" to recreate.`,
+        autoFixable: false
+        // Cannot generate config from state alone
+      });
+      return { instanceId, status: "missing", checks };
+    }
+    return { instanceId, status: "ok", checks };
+  }
+  if (!stateInstance) {
+    checks.push({
+      name: "instance registered",
+      source: "instance-config",
+      target: "state-json",
+      status: "missing",
+      details: `Instance config exists for "${instanceId}" but not registered in state.json`,
+      autoFixable: false
+    });
+    return { instanceId, status: "orphaned", checks };
+  }
+  const fieldMismatches = [];
+  if (instConfig.agentName !== stateInstance.agentName) {
+    fieldMismatches.push(
+      `agentName: instance="${instConfig.agentName}" vs state="${stateInstance.agentName}"`
+    );
+  }
+  if (instConfig.port !== stateInstance.port) {
+    fieldMismatches.push(
+      `port: instance=${instConfig.port} vs state=${stateInstance.port}`
+    );
+  }
+  if (fieldMismatches.length > 0) {
+    checks.push({
+      name: "state consistency",
+      source: "instance-config",
+      target: "state-json",
+      status: "drifted",
+      details: fieldMismatches.join("; "),
+      autoFixable: true
+    });
+  } else {
+    checks.push({
+      name: "state consistency",
+      source: "instance-config",
+      target: "state-json",
+      status: "ok",
+      details: null,
+      autoFixable: false
+    });
+  }
+  const stateHash = stateInstance.configHash ?? "";
+  if (!stateHash) {
+    checks.push({
+      name: "config hash baseline",
+      source: "instance-config",
+      target: "state-json",
+      status: "drifted",
+      details: `configHash not baselined for "${instanceId}" \u2014 needs backfill`,
+      autoFixable: true
+    });
+  } else if (instConfig.configHash !== stateHash) {
+    checks.push({
+      name: "config hash",
+      source: "instance-config",
+      target: "state-json",
+      status: "drifted",
+      details: `instance hash="${instConfig.configHash}" vs state hash="${stateHash}"`,
+      autoFixable: true
+    });
+  } else {
+    checks.push({
+      name: "config hash",
+      source: "instance-config",
+      target: "state-json",
+      status: "ok",
+      details: null,
+      autoFixable: false
+    });
+  }
+  if (stateInstance.configPath && fs4.existsSync(stateInstance.configPath)) {
+    const currentRuntimeHash = computeFileHash(stateInstance.configPath);
+    const lastSyncedHash = instConfig.runtimeConfigHash || "";
+    if (!lastSyncedHash) {
+      checks.push({
+        name: "runtime config baseline",
+        source: "instance-config",
+        target: "runtime-config",
+        status: "drifted",
+        details: `runtimeConfigHash not baselined for "${instanceId}" \u2014 needs backfill`,
+        autoFixable: true
+      });
+    } else if (currentRuntimeHash !== lastSyncedHash) {
+      checks.push({
+        name: "runtime config",
+        source: "instance-config",
+        target: "runtime-config",
+        status: "drifted",
+        details: `${stateInstance.configPath} has changed since last sync (hash: ${currentRuntimeHash.slice(0, 8)} vs synced: ${lastSyncedHash.slice(0, 8)})`,
+        autoFixable: true
+      });
+    } else {
+      checks.push({
+        name: "runtime config",
+        source: "instance-config",
+        target: "runtime-config",
+        status: "ok",
+        details: null,
+        autoFixable: false
+      });
+    }
+  }
+  const hasDrift = checks.some((c) => c.status !== "ok");
+  return {
+    instanceId,
+    status: hasDrift ? "drifted" : "ok",
+    checks
+  };
+}
+function checkAllDrift(stateDir, state) {
+  const results = [];
+  const checkedIds = /* @__PURE__ */ new Set();
+  if (state) {
+    for (const instanceId of Object.keys(state.instances)) {
+      checkedIds.add(instanceId);
+      results.push(checkInstanceDrift(stateDir, instanceId, state));
+    }
+  }
+  const instancesDir2 = `${stateDir}/instances`;
+  if (fs4.existsSync(instancesDir2)) {
+    for (const file of fs4.readdirSync(instancesDir2)) {
+      if (!file.endsWith(".json")) continue;
+      const id = file.replace(/\.json$/, "");
+      if (!checkedIds.has(id)) {
+        results.push(checkInstanceDrift(stateDir, id, state));
+      }
+    }
+  }
+  return results;
+}
+var init_drift_detector = __esm({
+  "src/config/drift-detector.ts"() {
+    "use strict";
+    init_instance_config();
+  }
+});
+
+// src/config/index.ts
+var init_config = __esm({
+  "src/config/index.ts"() {
+    "use strict";
+    init_resolve();
+  }
+});
+
+// src/commands/init.ts
+import * as fs8 from "fs";
+import * as path7 from "path";
+import { spawnSync } from "child_process";
 
 // src/state.ts
+init_config();
+import * as fs5 from "fs";
+import * as path4 from "path";
+import * as crypto2 from "crypto";
 var STATE_FILE = "state.json";
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 function getStateDir(repoRoot) {
   const { config } = resolveConfig({}, repoRoot);
   return config.stateDir;
 }
 function getStatePath(repoRoot) {
-  return path3.join(getStateDir(repoRoot), STATE_FILE);
+  return path4.join(getStateDir(repoRoot), STATE_FILE);
 }
 function stateExists(repoRoot) {
-  return fs3.existsSync(getStatePath(repoRoot));
+  return fs5.existsSync(getStatePath(repoRoot));
 }
 function migrateStateV1toV2(v1) {
   const instances = {};
@@ -382,25 +814,46 @@ function migrateStateV1toV2(v1) {
     instances
   };
 }
+function migrateStateV2toV3(v2) {
+  const instances = {};
+  for (const [id, inst] of Object.entries(v2.instances)) {
+    instances[id] = {
+      ...inst,
+      configHash: inst.configHash ?? "",
+      configSourceFile: inst.configSourceFile ?? ""
+    };
+  }
+  return {
+    ...v2,
+    schemaVersion: SCHEMA_VERSION,
+    instances
+  };
+}
 function loadState(repoRoot) {
   const statePath = getStatePath(repoRoot);
-  if (!fs3.existsSync(statePath)) return null;
-  const raw = fs3.readFileSync(statePath, "utf-8");
+  if (!fs5.existsSync(statePath)) return null;
+  const raw = fs5.readFileSync(statePath, "utf-8");
   const parsed = JSON.parse(raw);
   if (parsed.schemaVersion === 1 || parsed.runtimes) {
-    const migrated = migrateStateV1toV2(parsed);
-    saveState(repoRoot, migrated);
-    return migrated;
+    const v2 = migrateStateV1toV2(parsed);
+    const v3 = migrateStateV2toV3(v2);
+    saveState(repoRoot, v3);
+    return v3;
+  }
+  if (parsed.schemaVersion === 2) {
+    const v3 = migrateStateV2toV3(parsed);
+    saveState(repoRoot, v3);
+    return v3;
   }
   return parsed;
 }
 function saveState(repoRoot, state) {
   const stateDir = getStateDir(repoRoot);
-  fs3.mkdirSync(stateDir, { recursive: true });
+  fs5.mkdirSync(stateDir, { recursive: true });
   const statePath = getStatePath(repoRoot);
   const tmp = `${statePath}.tmp.${process.pid}`;
-  fs3.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
-  fs3.renameSync(tmp, statePath);
+  fs5.writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
+  fs5.renameSync(tmp, statePath);
 }
 function createInitialState(commsDir, repoRoot, packageVersion) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -408,8 +861,8 @@ function createInitialState(commsDir, repoRoot, packageVersion) {
     schemaVersion: SCHEMA_VERSION,
     createdAt: now,
     updatedAt: now,
-    commsDir: path3.resolve(commsDir),
-    repoRoot: path3.resolve(repoRoot),
+    commsDir: path4.resolve(commsDir),
+    repoRoot: path4.resolve(repoRoot),
     packageVersion,
     instances: {}
   };
@@ -438,33 +891,36 @@ function getInstalledInstances(state) {
   );
 }
 function ensureBackupDir(stateDir, instanceId) {
-  const backupDir = path3.join(stateDir, "backups", instanceId);
-  fs3.mkdirSync(backupDir, { recursive: true });
+  const backupDir = path4.join(stateDir, "backups", instanceId);
+  fs5.mkdirSync(backupDir, { recursive: true });
   return backupDir;
 }
 function backupFile(filePath, backupDir) {
-  const basename3 = path3.basename(filePath);
+  const basename3 = path4.basename(filePath);
   const hash = fileHash(filePath);
-  const backupPath = path3.join(backupDir, `${basename3}.${hash}.bak`);
-  fs3.copyFileSync(filePath, backupPath);
+  const backupPath = path4.join(backupDir, `${basename3}.${hash}.bak`);
+  fs5.copyFileSync(filePath, backupPath);
   return backupPath;
 }
 function fileHash(filePath) {
-  if (!fs3.existsSync(filePath)) return "";
-  const content = fs3.readFileSync(filePath);
-  return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+  if (!fs5.existsSync(filePath)) return "";
+  const content = fs5.readFileSync(filePath);
+  return crypto2.createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
+// src/commands/init.ts
+init_utils();
+
 // src/version.ts
-import * as fs4 from "fs";
-import * as path4 from "path";
+import * as fs6 from "fs";
+import * as path5 from "path";
 import { fileURLToPath } from "url";
 var FALLBACK_VERSION = "0.0.0";
 function resolvePackageVersion(metaUrl = import.meta.url) {
-  const moduleDir = path4.dirname(fileURLToPath(metaUrl));
-  const packageJsonPath = path4.join(moduleDir, "..", "package.json");
+  const moduleDir = path5.dirname(fileURLToPath(metaUrl));
+  const packageJsonPath = path5.join(moduleDir, "..", "package.json");
   try {
-    const parsed = JSON.parse(fs4.readFileSync(packageJsonPath, "utf-8"));
+    const parsed = JSON.parse(fs6.readFileSync(packageJsonPath, "utf-8"));
     if (typeof parsed.version === "string" && parsed.version.trim()) {
       return parsed.version;
     }
@@ -475,8 +931,9 @@ function resolvePackageVersion(metaUrl = import.meta.url) {
 var version = resolvePackageVersion();
 
 // src/permissions.ts
-import * as fs5 from "fs";
-import * as path5 from "path";
+init_utils();
+import * as fs7 from "fs";
+import * as path6 from "path";
 import * as os from "os";
 
 // src/toml.ts
@@ -606,13 +1063,13 @@ var CLAUDE_DENY_RULES = [
 ];
 function applyClaudePermissions(repoRoot, mode) {
   const warnings = [];
-  const claudeDir = path5.join(repoRoot, ".claude");
-  const settingsPath = path5.join(claudeDir, "settings.local.json");
-  fs5.mkdirSync(claudeDir, { recursive: true });
+  const claudeDir = path6.join(repoRoot, ".claude");
+  const settingsPath = path6.join(claudeDir, "settings.local.json");
+  fs7.mkdirSync(claudeDir, { recursive: true });
   let settings = {};
-  if (fs5.existsSync(settingsPath)) {
+  if (fs7.existsSync(settingsPath)) {
     try {
-      settings = JSON.parse(fs5.readFileSync(settingsPath, "utf-8"));
+      settings = JSON.parse(fs7.readFileSync(settingsPath, "utf-8"));
     } catch {
       warnings.push(
         ".claude/settings.local.json was invalid JSON. Starting fresh."
@@ -626,8 +1083,8 @@ function applyClaudePermissions(repoRoot, mode) {
     const cleaned = existingDeny.filter((r) => !tapRuleSet.has(r));
     settings.deny = cleaned;
     const tmp2 = `${settingsPath}.tmp.${process.pid}`;
-    fs5.writeFileSync(tmp2, JSON.stringify(settings, null, 2) + "\n", "utf-8");
-    fs5.renameSync(tmp2, settingsPath);
+    fs7.writeFileSync(tmp2, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+    fs7.renameSync(tmp2, settingsPath);
     logWarn("Claude: full mode \u2014 tap deny rules removed. Use with caution.");
     warnings.push("Full permission mode: tap deny rules removed.");
     return { applied: true, warnings };
@@ -635,18 +1092,18 @@ function applyClaudePermissions(repoRoot, mode) {
   const newDeny = [.../* @__PURE__ */ new Set([...existingDeny, ...CLAUDE_DENY_RULES])];
   settings.deny = newDeny;
   const tmp = `${settingsPath}.tmp.${process.pid}`;
-  fs5.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", "utf-8");
-  fs5.renameSync(tmp, settingsPath);
+  fs7.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+  fs7.renameSync(tmp, settingsPath);
   logSuccess(
     `Claude: ${CLAUDE_DENY_RULES.length} deny rules applied to .claude/settings.local.json`
   );
   return { applied: true, warnings };
 }
 function findCodexConfigPath() {
-  return path5.join(os.homedir(), ".codex", "config.toml");
+  return path6.join(os.homedir(), ".codex", "config.toml");
 }
 function canonicalizeTrustPath(targetPath) {
-  let resolved = path5.resolve(targetPath).replace(/\//g, "\\");
+  let resolved = path6.resolve(targetPath).replace(/\//g, "\\");
   const driveRoot = /^[A-Za-z]:\\$/;
   if (!driveRoot.test(resolved)) {
     resolved = resolved.replace(/\\+$/g, "");
@@ -656,10 +1113,10 @@ function canonicalizeTrustPath(targetPath) {
 function applyCodexPermissions(repoRoot, commsDir, mode) {
   const warnings = [];
   const configPath = findCodexConfigPath();
-  fs5.mkdirSync(path5.dirname(configPath), { recursive: true });
+  fs7.mkdirSync(path6.dirname(configPath), { recursive: true });
   let content = "";
-  if (fs5.existsSync(configPath)) {
-    content = fs5.readFileSync(configPath, "utf-8");
+  if (fs7.existsSync(configPath)) {
+    content = fs7.readFileSync(configPath, "utf-8");
   }
   const trustTargets = getCodexWritableRoots(repoRoot, commsDir);
   if (mode === "full") {
@@ -721,8 +1178,8 @@ function applyCodexPermissions(repoRoot, commsDir, mode) {
     );
   }
   const tmp = `${configPath}.tmp.${process.pid}`;
-  fs5.writeFileSync(tmp, content, "utf-8");
-  fs5.renameSync(tmp, configPath);
+  fs7.writeFileSync(tmp, content, "utf-8");
+  fs7.renameSync(tmp, configPath);
   const modeLabel = mode === "full" ? "danger-full-access" : "workspace-write, network=full";
   logSuccess(
     `Codex: sandbox=${modeLabel}, ${trustTargets.length} path(s) trusted`
@@ -731,12 +1188,12 @@ function applyCodexPermissions(repoRoot, commsDir, mode) {
 }
 function getCodexWritableRoots(repoRoot, commsDir) {
   const roots = [repoRoot, commsDir];
-  const parent = path5.dirname(repoRoot);
+  const parent = path6.dirname(repoRoot);
   for (let i = 1; i <= 4; i++) {
-    const wtPath = path5.join(parent, `hua-wt-${i}`);
-    if (fs5.existsSync(wtPath)) roots.push(wtPath);
+    const wtPath = path6.join(parent, `hua-wt-${i}`);
+    if (fs7.existsSync(wtPath)) roots.push(wtPath);
   }
-  return [...new Set(roots.map((r) => path5.resolve(r)))];
+  return [...new Set(roots.map((r) => path6.resolve(r)))];
 }
 function buildPermissionSummary(mode, repoRoot, commsDir) {
   const trustedPaths = getCodexWritableRoots(repoRoot, commsDir);
@@ -756,6 +1213,7 @@ function buildPermissionSummary(mode, repoRoot, commsDir) {
 }
 
 // src/commands/init.ts
+init_config();
 var COMMS_DIRS = [
   "inbox",
   "reviews",
@@ -823,9 +1281,9 @@ async function initCommand(args) {
   const commsRepoIdx = args.indexOf("--comms-repo");
   const commsRepoUrl = commsRepoIdx !== -1 && args[commsRepoIdx + 1] ? args[commsRepoIdx + 1] : void 0;
   if (commsRepoUrl) {
-    if (fs6.existsSync(commsDir) && fs6.readdirSync(commsDir).length > 0) {
-      const gitDir = path6.join(commsDir, ".git");
-      if (fs6.existsSync(gitDir)) {
+    if (fs8.existsSync(commsDir) && fs8.readdirSync(commsDir).length > 0) {
+      const gitDir = path7.join(commsDir, ".git");
+      if (fs8.existsSync(gitDir)) {
         log(`Comms directory exists: ${commsDir}`);
         logSuccess("Comms directory is already a git repo \u2014 linking only");
       } else {
@@ -877,7 +1335,7 @@ async function initCommand(args) {
       sharedConfig.commsRepoUrl = commsRepoUrl;
       configChanged = true;
     }
-    const commsDirRelative = path6.relative(repoRoot, commsDir);
+    const commsDirRelative = path7.relative(repoRoot, commsDir);
     if (commsDirRelative && commsDirRelative !== "tap-comms") {
       sharedConfig.commsDir = commsDirRelative;
       configChanged = true;
@@ -889,13 +1347,13 @@ async function initCommand(args) {
   }
   log(`Comms directory: ${commsDir}`);
   for (const dir of COMMS_DIRS) {
-    const dirPath = path6.join(commsDir, dir);
-    fs6.mkdirSync(dirPath, { recursive: true });
+    const dirPath = path7.join(commsDir, dir);
+    fs8.mkdirSync(dirPath, { recursive: true });
     logSuccess(`Created ${dir}/`);
   }
-  const gitignorePath = path6.join(commsDir, ".gitignore");
-  if (!fs6.existsSync(gitignorePath)) {
-    fs6.writeFileSync(
+  const gitignorePath = path7.join(commsDir, ".gitignore");
+  if (!fs8.existsSync(gitignorePath)) {
+    fs8.writeFileSync(
       gitignorePath,
       ["tap.db", ".lock", "*.tmp.*", ".DS_Store"].join("\n") + "\n",
       "utf-8"
@@ -904,12 +1362,12 @@ async function initCommand(args) {
   }
   const { config } = resolveConfig({}, repoRoot);
   const stateDir = config.stateDir;
-  fs6.mkdirSync(path6.join(stateDir, "pids"), { recursive: true });
-  fs6.mkdirSync(path6.join(stateDir, "logs"), { recursive: true });
-  fs6.mkdirSync(path6.join(stateDir, "backups"), { recursive: true });
-  const stateDirRel = path6.relative(repoRoot, stateDir);
+  fs8.mkdirSync(path7.join(stateDir, "pids"), { recursive: true });
+  fs8.mkdirSync(path7.join(stateDir, "logs"), { recursive: true });
+  fs8.mkdirSync(path7.join(stateDir, "backups"), { recursive: true });
+  const stateDirRel = path7.relative(repoRoot, stateDir);
   logSuccess(`Created ${stateDirRel}/ state directory`);
-  const repoGitignore = path6.join(repoRoot, ".gitignore");
+  const repoGitignore = path7.join(repoRoot, ".gitignore");
   const gitignoreEntries = [
     { entry: stateDirRel.replace(/\\/g, "/") + "/", label: "tap-comms state" },
     {
@@ -917,11 +1375,11 @@ async function initCommand(args) {
       label: "tap-comms local config (machine-specific)"
     }
   ];
-  if (fs6.existsSync(repoGitignore)) {
-    const content = fs6.readFileSync(repoGitignore, "utf-8");
+  if (fs8.existsSync(repoGitignore)) {
+    const content = fs8.readFileSync(repoGitignore, "utf-8");
     for (const { entry, label } of gitignoreEntries) {
       if (!content.includes(entry)) {
-        fs6.appendFileSync(repoGitignore, `
+        fs8.appendFileSync(repoGitignore, `
 # ${label}
 ${entry}
 `);
@@ -960,15 +1418,18 @@ ${entry}
   };
 }
 
+// src/commands/add.ts
+init_utils();
+
 // src/adapters/claude.ts
-import * as fs8 from "fs";
-import * as path8 from "path";
+import * as fs10 from "fs";
+import * as path9 from "path";
 import { execSync } from "child_process";
 
 // src/adapters/common.ts
-import * as fs7 from "fs";
+import * as fs9 from "fs";
 import * as os2 from "os";
-import * as path7 from "path";
+import * as path8 from "path";
 import { spawnSync as spawnSync2 } from "child_process";
 import { fileURLToPath as fileURLToPath2 } from "url";
 function probeCommand(candidates) {
@@ -986,7 +1447,7 @@ function probeCommand(candidates) {
   return { command: null, version: null };
 }
 function resolveCommandPath(command) {
-  if (path7.isAbsolute(command)) return command;
+  if (path8.isAbsolute(command)) return command;
   const whichCmd = process.platform === "win32" ? "where.exe" : "which";
   try {
     const result = spawnSync2(whichCmd, [command], {
@@ -997,19 +1458,19 @@ function resolveCommandPath(command) {
     const lines = result.stdout.trim().split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
     if (process.platform === "win32") {
-      const candidateExt = path7.extname(command).toLowerCase();
+      const candidateExt = path8.extname(command).toLowerCase();
       if (candidateExt) {
         const extMatch = lines.find(
-          (l) => path7.extname(l).toLowerCase() === candidateExt && fs7.existsSync(l)
+          (l) => path8.extname(l).toLowerCase() === candidateExt && fs9.existsSync(l)
         );
         if (extMatch) return extMatch;
       }
       const executableMatch = lines.find(
-        (l) => /\.(cmd|exe|ps1)$/i.test(l) && fs7.existsSync(l)
+        (l) => /\.(cmd|exe|ps1)$/i.test(l) && fs9.existsSync(l)
       );
       if (executableMatch) return executableMatch;
     }
-    const firstValid = lines.find((l) => fs7.existsSync(l));
+    const firstValid = lines.find((l) => fs9.existsSync(l));
     return firstValid ?? null;
   } catch {
     return null;
@@ -1019,17 +1480,17 @@ function getHomeDir() {
   return os2.homedir();
 }
 function toForwardSlashPath(filePath) {
-  return path7.resolve(filePath).replace(/\\/g, "/");
+  return path8.resolve(filePath).replace(/\\/g, "/");
 }
 function canWriteOrCreate(filePath) {
   try {
-    if (fs7.existsSync(filePath)) {
-      fs7.accessSync(filePath, fs7.constants.W_OK);
+    if (fs9.existsSync(filePath)) {
+      fs9.accessSync(filePath, fs9.constants.W_OK);
       return true;
     }
-    const parent = path7.dirname(filePath);
-    fs7.mkdirSync(parent, { recursive: true });
-    fs7.accessSync(parent, fs7.constants.W_OK);
+    const parent = path8.dirname(filePath);
+    fs9.mkdirSync(parent, { recursive: true });
+    fs9.accessSync(parent, fs9.constants.W_OK);
     return true;
   } catch {
     return false;
@@ -1041,14 +1502,14 @@ function isEphemeralPath(p) {
 }
 function findLocalTapCommsSource(ctx) {
   const candidates = [
-    path7.join(
+    path8.join(
       ctx.repoRoot,
       "packages",
       "tap-plugin",
       "channels",
       "tap-comms.ts"
     ),
-    path7.join(
+    path8.join(
       ctx.repoRoot,
       "node_modules",
       "@hua-labs",
@@ -1058,19 +1519,19 @@ function findLocalTapCommsSource(ctx) {
     )
   ];
   for (const candidate of candidates) {
-    if (fs7.existsSync(candidate)) return candidate;
+    if (fs9.existsSync(candidate)) return candidate;
   }
   return null;
 }
 function findBundledTapCommsSource(metaUrl = import.meta.url) {
-  const moduleDir = path7.dirname(fileURLToPath2(metaUrl));
+  const moduleDir = path8.dirname(fileURLToPath2(metaUrl));
   const candidates = [
-    path7.join(moduleDir, "mcp-server.mjs"),
-    path7.join(moduleDir, "..", "mcp-server.mjs"),
-    path7.join(moduleDir, "..", "mcp-server.ts")
+    path8.join(moduleDir, "mcp-server.mjs"),
+    path8.join(moduleDir, "..", "mcp-server.mjs"),
+    path8.join(moduleDir, "..", "mcp-server.ts")
   ];
   for (const candidate of candidates) {
-    if (fs7.existsSync(candidate)) return candidate;
+    if (fs9.existsSync(candidate)) return candidate;
   }
   return null;
 }
@@ -1079,15 +1540,15 @@ function findTapCommsServerEntry(ctx, metaUrl = import.meta.url) {
 }
 function findPreferredBunCommand() {
   const home = getHomeDir();
-  const candidates = process.platform === "win32" ? [path7.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path7.join(home, ".bun", "bin", "bun"), "bun"];
+  const candidates = process.platform === "win32" ? [path8.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path8.join(home, ".bun", "bin", "bun"), "bun"];
   for (const candidate of candidates) {
-    if (path7.isAbsolute(candidate) && !fs7.existsSync(candidate)) continue;
+    if (path8.isAbsolute(candidate) && !fs9.existsSync(candidate)) continue;
     const result = spawnSync2(candidate, ["--version"], {
       encoding: "utf-8",
       shell: process.platform === "win32"
     });
     if (result.status === 0) {
-      return path7.isAbsolute(candidate) ? toForwardSlashPath(candidate) : candidate;
+      return path8.isAbsolute(candidate) ? toForwardSlashPath(candidate) : candidate;
     }
   }
   return null;
@@ -1114,7 +1575,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   const isBundled = sourcePath.endsWith(".mjs");
   const isEphemeralSource = isEphemeralPath(sourcePath);
-  let command = bunCommand;
+  let command = null;
   let args = [toForwardSlashPath(sourcePath)];
   if (isEphemeralSource && isBundled) {
     command = "npx";
@@ -1122,23 +1583,17 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     warnings.push(
       "Detected npx cache path. Using `npx @hua-labs/tap serve` as stable MCP launcher."
     );
-  } else if (!command && isBundled) {
-    const isEphemeralNode = isEphemeralPath(process.execPath);
-    if (isEphemeralNode) {
-      command = "node";
-      warnings.push(
-        "Detected ephemeral node path. Using `node` from PATH for MCP config stability."
-      );
-    } else {
-      command = toForwardSlashPath(process.execPath);
-    }
-    warnings.push(
-      "bun not found; using node to run the compiled MCP server. Install bun for better performance."
+  } else if (isBundled) {
+    const nodeProbe = probeCommand(
+      process.platform === "win32" ? ["node", "node.exe"] : ["node"]
     );
+    command = nodeProbe.command ?? "node";
+  } else {
+    command = bunCommand;
   }
   if (!command) {
     issues.push(
-      "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh"
+      isBundled ? "node is required to run the compiled MCP server (.mjs). Ensure node is in PATH." : "bun is required to run the repo-local tap MCP server (.ts source). Install bun: https://bun.sh"
     );
     return { command: null, args: [], env, sourcePath, warnings, issues };
   }
@@ -1156,7 +1611,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
 var MCP_SERVER_KEY = "tap";
 var OLD_MCP_SERVER_KEY = "tap-comms";
 function findMcpJsonPath(ctx) {
-  return path8.join(ctx.repoRoot, ".mcp.json");
+  return path9.join(ctx.repoRoot, ".mcp.json");
 }
 function findClaudeCommand() {
   try {
@@ -1182,11 +1637,11 @@ var claudeAdapter = {
     const warnings = [];
     const issues = [];
     const configPath = findMcpJsonPath(ctx);
-    const configExists = fs8.existsSync(configPath);
+    const configExists = fs10.existsSync(configPath);
     const runtimeCommand = findClaudeCommand();
     const canWrite = configExists ? (() => {
       try {
-        fs8.accessSync(configPath, fs8.constants.W_OK);
+        fs10.accessSync(configPath, fs10.constants.W_OK);
         return true;
       } catch {
         return false;
@@ -1200,7 +1655,7 @@ var claudeAdapter = {
     const managed = buildManagedMcpServerSpec(ctx);
     warnings.push(...managed.warnings);
     issues.push(...managed.issues);
-    if (!fs8.existsSync(ctx.commsDir)) {
+    if (!fs10.existsSync(ctx.commsDir)) {
       issues.push(
         `Comms directory not found: ${ctx.commsDir}. Run "init" first.`
       );
@@ -1224,7 +1679,7 @@ var claudeAdapter = {
     const operations = [];
     const ownedArtifacts = [];
     if (probe.configExists) {
-      const raw = fs8.readFileSync(configPath, "utf-8");
+      const raw = fs10.readFileSync(configPath, "utf-8");
       try {
         const config = JSON.parse(raw);
         if (config.mcpServers?.[MCP_SERVER_KEY]) {
@@ -1288,9 +1743,9 @@ var claudeAdapter = {
       try {
         if (op.type === "set" || op.type === "merge") {
           let config = {};
-          if (fs8.existsSync(op.path)) {
+          if (fs10.existsSync(op.path)) {
             backupFile(op.path, plan.backupDir);
-            const raw = fs8.readFileSync(op.path, "utf-8");
+            const raw = fs10.readFileSync(op.path, "utf-8");
             try {
               config = JSON.parse(raw);
             } catch {
@@ -1307,12 +1762,12 @@ var claudeAdapter = {
             setNestedKey(config, op.key, op.value);
           }
           const tmp = `${op.path}.tmp.${process.pid}`;
-          fs8.writeFileSync(
+          fs10.writeFileSync(
             tmp,
             JSON.stringify(config, null, 2) + "\n",
             "utf-8"
           );
-          fs8.renameSync(tmp, op.path);
+          fs10.renameSync(tmp, op.path);
           changedFiles.push(op.path);
           appliedOps++;
         }
@@ -1341,12 +1796,12 @@ var claudeAdapter = {
     if (configPath) {
       checks.push({
         name: "Config file exists",
-        passed: fs8.existsSync(configPath),
-        message: fs8.existsSync(configPath) ? void 0 : `${configPath} not found`
+        passed: fs10.existsSync(configPath),
+        message: fs10.existsSync(configPath) ? void 0 : `${configPath} not found`
       });
-      if (fs8.existsSync(configPath)) {
+      if (fs10.existsSync(configPath)) {
         try {
-          const raw = fs8.readFileSync(configPath, "utf-8");
+          const raw = fs10.readFileSync(configPath, "utf-8");
           const config = JSON.parse(raw);
           checks.push({ name: "Config is valid JSON", passed: true });
           const entry = config.mcpServers?.[MCP_SERVER_KEY];
@@ -1374,8 +1829,8 @@ var claudeAdapter = {
     }
     checks.push({
       name: "Comms directory exists",
-      passed: fs8.existsSync(ctx.commsDir),
-      message: fs8.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
+      passed: fs10.existsSync(ctx.commsDir),
+      message: fs10.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
     });
     const cmd = findClaudeCommand();
     checks.push({
@@ -1408,35 +1863,35 @@ function setNestedKey(obj, keyPath, value) {
   current[keys[keys.length - 1]] = value;
 }
 function normalizeTapCommsDir(value) {
-  return typeof value === "string" ? path8.resolve(value).replace(/\\/g, "/") : "";
+  return typeof value === "string" ? path9.resolve(value).replace(/\\/g, "/") : "";
 }
 
 // src/adapters/codex.ts
-import * as fs10 from "fs";
-import * as path10 from "path";
+import * as fs12 from "fs";
+import * as path11 from "path";
 import { fileURLToPath as fileURLToPath3 } from "url";
 
 // src/artifact-backups.ts
-import * as crypto2 from "crypto";
-import * as fs9 from "fs";
-import * as path9 from "path";
+import * as crypto3 from "crypto";
+import * as fs11 from "fs";
+import * as path10 from "path";
 function selectorHash(selector) {
-  return crypto2.createHash("sha256").update(selector).digest("hex").slice(0, 12);
+  return crypto3.createHash("sha256").update(selector).digest("hex").slice(0, 12);
 }
 function artifactBackupPath(backupDir, kind, selector) {
   const safeKind = kind.replace(/[^a-z-]/gi, "-");
-  return path9.join(backupDir, `${safeKind}-${selectorHash(selector)}.json`);
+  return path10.join(backupDir, `${safeKind}-${selectorHash(selector)}.json`);
 }
 function writeArtifactBackup(backupPath, payload) {
-  fs9.mkdirSync(path9.dirname(backupPath), { recursive: true });
+  fs11.mkdirSync(path10.dirname(backupPath), { recursive: true });
   const tmp = `${backupPath}.tmp.${process.pid}`;
-  fs9.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
-  fs9.renameSync(tmp, backupPath);
+  fs11.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+  fs11.renameSync(tmp, backupPath);
 }
 function readArtifactBackup(backupPath) {
-  if (!fs9.existsSync(backupPath)) return null;
+  if (!fs11.existsSync(backupPath)) return null;
   try {
-    const raw = fs9.readFileSync(backupPath, "utf-8");
+    const raw = fs11.readFileSync(backupPath, "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;
@@ -1450,10 +1905,10 @@ var SESSION_NEUTRAL_AGENT_NAME = "<set-per-session>";
 var OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
 var OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
 function findCodexConfigPath2() {
-  return path10.join(getHomeDir(), ".codex", "config.toml");
+  return path11.join(getHomeDir(), ".codex", "config.toml");
 }
 function canonicalizeTrustPath2(targetPath) {
-  let resolved = path10.resolve(targetPath).replace(/\//g, "\\");
+  let resolved = path11.resolve(targetPath).replace(/\//g, "\\");
   const driveRoot = /^[A-Za-z]:\\$/;
   if (!driveRoot.test(resolved)) {
     resolved = resolved.replace(/\\+$/g, "");
@@ -1465,7 +1920,7 @@ function trustSelector(targetPath) {
 }
 function getTrustTargets(ctx) {
   const targets = [ctx.repoRoot, process.cwd()];
-  return [...new Set(targets.map((value) => path10.resolve(value)))];
+  return [...new Set(targets.map((value) => path11.resolve(value)))];
 }
 function buildManagedArtifacts(configPath, ctx) {
   const artifacts = [
@@ -1482,14 +1937,14 @@ function buildManagedArtifacts(configPath, ctx) {
   return artifacts;
 }
 function readConfigOrEmpty(configPath) {
-  if (!fs10.existsSync(configPath)) return "";
-  return fs10.readFileSync(configPath, "utf-8");
+  if (!fs12.existsSync(configPath)) return "";
+  return fs12.readFileSync(configPath, "utf-8");
 }
 function writeTomlFile(filePath, content) {
-  fs10.mkdirSync(path10.dirname(filePath), { recursive: true });
+  fs12.mkdirSync(path11.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
-  fs10.writeFileSync(tmp, content, "utf-8");
-  fs10.renameSync(tmp, filePath);
+  fs12.writeFileSync(tmp, content, "utf-8");
+  fs12.renameSync(tmp, filePath);
 }
 function buildSessionNeutralCodexSpec(ctx) {
   const managed = buildManagedMcpServerSpec(ctx);
@@ -1515,8 +1970,8 @@ function verifyManagedToml(content, ctx, configPath) {
   const envTable = extractTomlTable(content, ENV_SELECTOR);
   checks.push({
     name: "Codex config exists",
-    passed: fs10.existsSync(configPath),
-    message: fs10.existsSync(configPath) ? void 0 : `${configPath} not found`
+    passed: fs12.existsSync(configPath),
+    message: fs12.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
     name: "tap MCP table present",
@@ -1547,6 +2002,14 @@ function verifyManagedToml(content, ctx, configPath) {
       message: "Managed tap command/args do not match expected values"
     });
   }
+  if (mainTable) {
+    const mainValues = parseTomlAssignments(mainTable);
+    checks.push({
+      name: "approval_mode is auto",
+      passed: mainValues.approval_mode === "auto",
+      message: mainValues.approval_mode ? `approval_mode is "${mainValues.approval_mode}", expected "auto"` : 'approval_mode missing, expected "auto"'
+    });
+  }
   if (envTable) {
     const envValues = parseTomlAssignments(envTable);
     checks.push({
@@ -1568,7 +2031,7 @@ var codexAdapter = {
     const warnings = [];
     const issues = [];
     const configPath = findCodexConfigPath2();
-    const configExists = fs10.existsSync(configPath);
+    const configExists = fs12.existsSync(configPath);
     const runtimeProbe = probeCommand(
       ctx.platform === "win32" ? ["codex", "codex.cmd"] : ["codex"]
     );
@@ -1577,7 +2040,7 @@ var codexAdapter = {
         "Codex CLI not found in PATH. Config can still be written, but runtime verification will be limited."
       );
     }
-    if (!fs10.existsSync(ctx.commsDir)) {
+    if (!fs12.existsSync(ctx.commsDir)) {
       issues.push(
         `Comms directory not found: ${ctx.commsDir}. Run "init" first.`
       );
@@ -1658,7 +2121,7 @@ var codexAdapter = {
       };
     }
     const existingContent = readConfigOrEmpty(configPath);
-    if (fs10.existsSync(configPath) && existingContent) {
+    if (fs12.existsSync(configPath) && existingContent) {
       backupFile(configPath, plan.backupDir);
     }
     const artifactsWithBackups = plan.ownedArtifacts.map((artifact) => {
@@ -1690,7 +2153,8 @@ var codexAdapter = {
         MCP_SELECTOR,
         {
           command: managed.command,
-          args: managed.args
+          args: managed.args,
+          approval_mode: "auto"
         },
         extractTomlTable(existingContent, MCP_SELECTOR)
       )
@@ -1741,8 +2205,8 @@ var codexAdapter = {
     const checks = verifyManagedToml(content, ctx, configPath);
     checks.push({
       name: "Comms directory exists",
-      passed: fs10.existsSync(ctx.commsDir),
-      message: fs10.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
+      passed: fs12.existsSync(ctx.commsDir),
+      message: fs12.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
     });
     checks.push({
       name: "Codex CLI found",
@@ -1765,12 +2229,12 @@ var codexAdapter = {
     return "app-server";
   },
   resolveBridgeScript(ctx) {
-    const distDir = path10.dirname(fileURLToPath3(import.meta.url));
+    const distDir = path11.dirname(fileURLToPath3(import.meta.url));
     const candidates = [
       // 1. Relative to bundled CLI (npm install / npx)
-      path10.join(distDir, "bridges", "codex-bridge-runner.mjs"),
+      path11.join(distDir, "bridges", "codex-bridge-runner.mjs"),
       // 2. Monorepo development — dist inside repo
-      path10.join(
+      path11.join(
         ctx.repoRoot,
         "packages",
         "tap-comms",
@@ -1779,7 +2243,7 @@ var codexAdapter = {
         "codex-bridge-runner.mjs"
       ),
       // 3. Source file — dev mode with strip-types
-      path10.join(
+      path11.join(
         ctx.repoRoot,
         "packages",
         "tap-comms",
@@ -1789,31 +2253,47 @@ var codexAdapter = {
       )
     ];
     for (const candidate of candidates) {
-      if (fs10.existsSync(candidate)) return candidate;
+      if (fs12.existsSync(candidate)) return candidate;
     }
     return null;
   }
 };
+function patchCodexApprovalMode() {
+  const configPath = findCodexConfigPath2();
+  if (!fs12.existsSync(configPath)) return null;
+  const content = fs12.readFileSync(configPath, "utf-8");
+  const tapTable = extractTomlTable(content, MCP_SELECTOR);
+  if (!tapTable) return null;
+  const values = parseTomlAssignments(tapTable);
+  if (values.approval_mode === "auto") return null;
+  const patched = replaceTomlTable(
+    content,
+    MCP_SELECTOR,
+    renderTomlTable(MCP_SELECTOR, { approval_mode: "auto" }, tapTable)
+  );
+  writeTomlFile(configPath, patched);
+  return configPath;
+}
 
 // src/adapters/gemini.ts
-import * as fs11 from "fs";
-import * as path11 from "path";
+import * as fs13 from "fs";
+import * as path12 from "path";
 var GEMINI_SELECTOR = "mcpServers.tap";
 var OLD_GEMINI_SELECTOR = "mcpServers.tap-comms";
 function candidateConfigPaths(ctx) {
   const home = getHomeDir();
   return [
-    path11.join(ctx.repoRoot, ".gemini", "settings.json"),
-    path11.join(home, ".gemini", "settings.json"),
-    path11.join(home, ".gemini", "antigravity", "mcp_config.json")
+    path12.join(ctx.repoRoot, ".gemini", "settings.json"),
+    path12.join(home, ".gemini", "settings.json"),
+    path12.join(home, ".gemini", "antigravity", "mcp_config.json")
   ];
 }
 function chooseGeminiConfigPath(ctx) {
   const [workspaceConfig, homeConfig, antigravityConfig] = candidateConfigPaths(ctx);
-  if (fs11.existsSync(workspaceConfig)) return workspaceConfig;
-  if (fs11.existsSync(homeConfig)) return homeConfig;
-  if (fs11.existsSync(antigravityConfig)) {
-    const raw = fs11.readFileSync(antigravityConfig, "utf-8").trim();
+  if (fs13.existsSync(workspaceConfig)) return workspaceConfig;
+  if (fs13.existsSync(homeConfig)) return homeConfig;
+  if (fs13.existsSync(antigravityConfig)) {
+    const raw = fs13.readFileSync(antigravityConfig, "utf-8").trim();
     if (raw) {
       try {
         JSON.parse(raw);
@@ -1825,8 +2305,8 @@ function chooseGeminiConfigPath(ctx) {
   return workspaceConfig;
 }
 function readJsonFile(filePath) {
-  if (!fs11.existsSync(filePath)) return {};
-  const raw = fs11.readFileSync(filePath, "utf-8").trim();
+  if (!fs13.existsSync(filePath)) return {};
+  const raw = fs13.readFileSync(filePath, "utf-8").trim();
   if (!raw) return {};
   return JSON.parse(raw);
 }
@@ -1857,8 +2337,8 @@ function verifyGeminiConfig(config, configPath, ctx) {
   const entry = readNestedKey(config, GEMINI_SELECTOR);
   checks.push({
     name: "Gemini config exists",
-    passed: fs11.existsSync(configPath),
-    message: fs11.existsSync(configPath) ? void 0 : `${configPath} not found`
+    passed: fs13.existsSync(configPath),
+    message: fs13.existsSync(configPath) ? void 0 : `${configPath} not found`
   });
   checks.push({
     name: "tap entry present",
@@ -1867,8 +2347,8 @@ function verifyGeminiConfig(config, configPath, ctx) {
   });
   checks.push({
     name: "Comms directory exists",
-    passed: fs11.existsSync(ctx.commsDir),
-    message: fs11.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
+    passed: fs13.existsSync(ctx.commsDir),
+    message: fs13.existsSync(ctx.commsDir) ? void 0 : `${ctx.commsDir} not found`
   });
   if (entry?.env && typeof entry.env === "object") {
     checks.push({
@@ -1885,7 +2365,7 @@ var geminiAdapter = {
     const warnings = [];
     const issues = [];
     const configPath = chooseGeminiConfigPath(ctx);
-    const configExists = fs11.existsSync(configPath);
+    const configExists = fs13.existsSync(configPath);
     const runtimeProbe = probeCommand(
       ctx.platform === "win32" ? ["gemini", "gemini.cmd"] : ["gemini"]
     );
@@ -1894,7 +2374,7 @@ var geminiAdapter = {
         "Gemini CLI not found in PATH. Config can still be written, but runtime verification will be limited."
       );
     }
-    if (!fs11.existsSync(ctx.commsDir)) {
+    if (!fs13.existsSync(ctx.commsDir)) {
       issues.push(
         `Comms directory not found: ${ctx.commsDir}. Run "init" first.`
       );
@@ -1973,8 +2453,8 @@ var geminiAdapter = {
     }
     let config = {};
     let previousValue = void 0;
-    if (fs11.existsSync(configPath)) {
-      if (fs11.readFileSync(configPath, "utf-8").trim()) {
+    if (fs13.existsSync(configPath)) {
+      if (fs13.readFileSync(configPath, "utf-8").trim()) {
         backupFile(configPath, plan.backupDir);
       }
       try {
@@ -2011,10 +2491,10 @@ var geminiAdapter = {
       args: managed.args,
       env: managed.env
     });
-    fs11.mkdirSync(path11.dirname(configPath), { recursive: true });
+    fs13.mkdirSync(path12.dirname(configPath), { recursive: true });
     const tmp = `${configPath}.tmp.${process.pid}`;
-    fs11.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
-    fs11.renameSync(tmp, configPath);
+    fs13.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    fs13.renameSync(tmp, configPath);
     changedFiles.push(configPath);
     return {
       success: true,
@@ -2085,57 +2565,83 @@ function getAdapter(runtime) {
 }
 
 // src/engine/bridge-paths.ts
-import * as path12 from "path";
+import * as path13 from "path";
+function assertPathContained(resolved, stateDir, subDir) {
+  const expectedDir = path13.resolve(stateDir, subDir) + path13.sep;
+  const normalizedResolved = path13.resolve(resolved);
+  if (!normalizedResolved.startsWith(expectedDir)) {
+    throw new Error(
+      `Path traversal blocked: resolved path escapes "${subDir}/" directory`
+    );
+  }
+  return normalizedResolved;
+}
 function appServerLogFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `app-server-${instanceId}.log`);
+  return assertPathContained(
+    path13.join(stateDir, "logs", `app-server-${instanceId}.log`),
+    stateDir,
+    "logs"
+  );
 }
 function appServerGatewayLogFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `app-server-gateway-${instanceId}.log`);
+  return assertPathContained(
+    path13.join(stateDir, "logs", `app-server-gateway-${instanceId}.log`),
+    stateDir,
+    "logs"
+  );
 }
 function appServerGatewayTokenFilePath(stateDir, instanceId) {
-  return path12.join(
+  return assertPathContained(
+    path13.join(stateDir, "secrets", `app-server-gateway-${instanceId}.token`),
     stateDir,
-    "secrets",
-    `app-server-gateway-${instanceId}.token`
+    "secrets"
   );
 }
 function stderrLogFilePath(logPath) {
   return `${logPath}.stderr`;
 }
 function pidFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "pids", `bridge-${instanceId}.json`);
+  return assertPathContained(
+    path13.join(stateDir, "pids", `bridge-${instanceId}.json`),
+    stateDir,
+    "pids"
+  );
 }
 function logFilePath(stateDir, instanceId) {
-  return path12.join(stateDir, "logs", `bridge-${instanceId}.log`);
+  return assertPathContained(
+    path13.join(stateDir, "logs", `bridge-${instanceId}.log`),
+    stateDir,
+    "logs"
+  );
 }
 function runtimeHeartbeatFilePath(runtimeStateDir) {
-  return path12.join(runtimeStateDir, "heartbeat.json");
+  return path13.join(runtimeStateDir, "heartbeat.json");
 }
 function runtimeThreadStateFilePath(runtimeStateDir) {
-  return path12.join(runtimeStateDir, "thread.json");
+  return path13.join(runtimeStateDir, "thread.json");
 }
 
 // src/engine/bridge-file-io.ts
-import * as fs12 from "fs";
-import * as path13 from "path";
+import * as fs14 from "fs";
+import * as path14 from "path";
 var APP_SERVER_AUTH_FILE_MODE = 384;
 function writeProtectedTextFile(filePath, content) {
-  fs12.mkdirSync(path13.dirname(filePath), { recursive: true });
+  fs14.mkdirSync(path14.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
-  fs12.writeFileSync(tmp, content, {
+  fs14.writeFileSync(tmp, content, {
     encoding: "utf-8",
     mode: APP_SERVER_AUTH_FILE_MODE
   });
-  fs12.chmodSync(tmp, APP_SERVER_AUTH_FILE_MODE);
-  fs12.renameSync(tmp, filePath);
-  fs12.chmodSync(filePath, APP_SERVER_AUTH_FILE_MODE);
+  fs14.chmodSync(tmp, APP_SERVER_AUTH_FILE_MODE);
+  fs14.renameSync(tmp, filePath);
+  fs14.chmodSync(filePath, APP_SERVER_AUTH_FILE_MODE);
 }
 function removeFileIfExists(filePath) {
-  if (!filePath || !fs12.existsSync(filePath)) {
+  if (!filePath || !fs14.existsSync(filePath)) {
     return;
   }
   try {
-    fs12.unlinkSync(filePath);
+    fs14.unlinkSync(filePath);
   } catch {
   }
 }
@@ -2154,14 +2660,14 @@ function getWebSocketCtor() {
   return typeof candidate === "function" ? candidate : null;
 }
 function delay(ms) {
-  return new Promise((resolve14) => setTimeout(resolve14, ms));
+  return new Promise((resolve15) => setTimeout(resolve15, ms));
 }
 function isLoopbackHost(hostname) {
   return hostname === "127.0.0.1" || hostname === "localhost";
 }
 async function allocateLoopbackPort(hostname) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve14, reject) => {
+  return await new Promise((resolve15, reject) => {
     const server = net.createServer();
     server.unref();
     server.once("error", reject);
@@ -2179,19 +2685,19 @@ async function allocateLoopbackPort(hostname) {
           reject(error);
           return;
         }
-        resolve14(port);
+        resolve15(port);
       });
     });
   });
 }
 async function isTcpPortAvailable(hostname, port) {
   const bindHost = hostname === "localhost" ? "127.0.0.1" : hostname;
-  return await new Promise((resolve14) => {
+  return await new Promise((resolve15) => {
     const server = net.createServer();
     server.unref();
-    server.once("error", () => resolve14(false));
+    server.once("error", () => resolve15(false));
     server.listen(port, bindHost, () => {
-      server.close((error) => resolve14(!error));
+      server.close((error) => resolve15(!error));
     });
   });
 }
@@ -2243,8 +2749,8 @@ async function findNextAvailableAppServerPort(state, baseUrl, basePort = 4501, e
 }
 
 // src/engine/bridge-codex-command.ts
-import * as fs13 from "fs";
-import * as path14 from "path";
+import * as fs15 from "fs";
+import * as path15 from "path";
 import { fileURLToPath as fileURLToPath4 } from "url";
 function resolveCodexCommand(platform) {
   const candidates = platform === "win32" ? ["codex.cmd", "codex.exe", "codex", "codex.ps1"] : ["codex"];
@@ -2259,20 +2765,18 @@ function resolveCodexCommand(platform) {
 function unwrapNpmCmdShim(cmdPath) {
   let content;
   try {
-    content = fs13.readFileSync(cmdPath, "utf-8");
+    content = fs15.readFileSync(cmdPath, "utf-8");
   } catch {
     return null;
   }
-  const match = content.match(
-    /"%_prog%"\s+"(%dp0%\\[^"]+)"\s+%\*/
-  );
+  const match = content.match(/"%_prog%"\s+"(%dp0%\\[^"]+)"\s+%\*/);
   if (!match) return null;
-  const dp0 = path14.dirname(cmdPath);
+  const dp0 = path15.dirname(cmdPath);
   const scriptRelative = match[1].replace(/%dp0%\\/g, "");
-  const scriptPath = path14.resolve(dp0, scriptRelative);
-  if (!fs13.existsSync(scriptPath)) return null;
-  const localNode = path14.join(dp0, "node.exe");
-  const nodeCommand = fs13.existsSync(localNode) ? localNode : probeCommand(["node.exe", "node"]).command ?? "node";
+  const scriptPath = path15.resolve(dp0, scriptRelative);
+  if (!fs15.existsSync(scriptPath)) return null;
+  const localNode = path15.join(dp0, "node.exe");
+  const nodeCommand = fs15.existsSync(localNode) ? localNode : probeCommand(["node.exe", "node"]).command ?? "node";
   return `${nodeCommand}\0${scriptPath}`;
 }
 function splitResolvedCommand(resolved) {
@@ -2286,14 +2790,16 @@ function resolvePowerShellCommand() {
   return probeCommand(["pwsh", "powershell", "powershell.exe"]).command ?? "powershell";
 }
 function resolveAuthGatewayScript(repoRoot) {
-  const moduleDir = path14.dirname(fileURLToPath4(import.meta.url));
+  const moduleDir = path15.dirname(fileURLToPath4(import.meta.url));
+  const resolvedModuleDir = path15.resolve(moduleDir);
+  const resolvedRepoRoot = path15.resolve(repoRoot);
   const candidates = [
     // Bundled: dist/bridges/ sibling (npm install / built package)
-    path14.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
+    path15.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
     // Source: src/bridges/ sibling (monorepo dev with ts runner)
-    path14.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
+    path15.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
     // Monorepo dist fallback
-    path14.join(
+    path15.join(
       repoRoot,
       "packages",
       "tap-comms",
@@ -2301,7 +2807,7 @@ function resolveAuthGatewayScript(repoRoot) {
       "bridges",
       "codex-app-server-auth-gateway.mjs"
     ),
-    path14.join(
+    path15.join(
       repoRoot,
       "packages",
       "tap-comms",
@@ -2311,17 +2817,21 @@ function resolveAuthGatewayScript(repoRoot) {
     )
   ];
   for (const candidate of candidates) {
-    if (fs13.existsSync(candidate)) {
-      return candidate;
+    const resolved = path15.resolve(candidate);
+    if (!resolved.startsWith(resolvedModuleDir + path15.sep) && !resolved.startsWith(resolvedRepoRoot + path15.sep)) {
+      continue;
+    }
+    if (fs15.existsSync(resolved)) {
+      return resolved;
     }
   }
   return null;
 }
 
 // src/engine/bridge-windows-spawn.ts
-import * as fs14 from "fs";
+import * as fs16 from "fs";
 import * as os3 from "os";
-import * as path15 from "path";
+import * as path16 from "path";
 import { randomBytes } from "crypto";
 import { spawnSync as spawnSync3 } from "child_process";
 var WINDOWS_SPAWN_WRAPPER_PREFIX = "tap-spawn-";
@@ -2329,7 +2839,7 @@ var WINDOWS_SPAWN_WRAPPER_STALE_MS = 60 * 60 * 1e3;
 function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
   let entries;
   try {
-    entries = fs14.readdirSync(os3.tmpdir());
+    entries = fs16.readdirSync(os3.tmpdir());
   } catch {
     return;
   }
@@ -2337,13 +2847,13 @@ function cleanupStaleWindowsSpawnWrappers(now = Date.now()) {
     if (!entry.startsWith(WINDOWS_SPAWN_WRAPPER_PREFIX) || !/\.(cmd|ps1)$/i.test(entry)) {
       continue;
     }
-    const wrapperPath = path15.join(os3.tmpdir(), entry);
+    const wrapperPath = path16.join(os3.tmpdir(), entry);
     try {
-      const stats = fs14.statSync(wrapperPath);
+      const stats = fs16.statSync(wrapperPath);
       if (now - stats.mtimeMs < WINDOWS_SPAWN_WRAPPER_STALE_MS) {
         continue;
       }
-      fs14.unlinkSync(wrapperPath);
+      fs16.unlinkSync(wrapperPath);
     } catch {
     }
   }
@@ -2378,11 +2888,11 @@ function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = pro
   const stderrLogPath = stderrLogFilePath(logPath);
   const powerShellCommand = resolvePowerShellCommand();
   cleanupStaleWindowsSpawnWrappers();
-  const wrapperPath = path15.join(
+  const wrapperPath = path16.join(
     os3.tmpdir(),
     `${WINDOWS_SPAWN_WRAPPER_PREFIX}${randomBytes(4).toString("hex")}.ps1`
   );
-  fs14.writeFileSync(
+  fs16.writeFileSync(
     wrapperPath,
     buildWindowsDetachedWrapperScript(
       command,
@@ -2468,7 +2978,7 @@ function findListeningProcessId(url, platform) {
 }
 
 // src/engine/bridge-unix-spawn.ts
-import * as fs15 from "fs";
+import * as fs17 from "fs";
 import { spawn, spawnSync as spawnSync4 } from "child_process";
 var DEFAULT_UNIX_PLATFORM = process.platform === "darwin" ? "darwin" : "linux";
 function resolveUnixSpawnCommand(command, args, platform) {
@@ -2515,8 +3025,8 @@ function startUnixDetachedProcess(command, args, repoRoot, logPath, env = proces
   let logFd = null;
   let stderrFd = null;
   try {
-    logFd = fs15.openSync(logPath, "a");
-    stderrFd = fs15.openSync(stderrPath, "a");
+    logFd = fs17.openSync(logPath, "a");
+    stderrFd = fs17.openSync(stderrPath, "a");
     const launch = resolveUnixSpawnCommand(command, args, platform);
     const child = spawn(launch.command, launch.args, {
       cwd: repoRoot,
@@ -2529,10 +3039,10 @@ function startUnixDetachedProcess(command, args, repoRoot, logPath, env = proces
     return child.pid ?? null;
   } finally {
     if (logFd != null) {
-      fs15.closeSync(logFd);
+      fs17.closeSync(logFd);
     }
     if (stderrFd != null) {
-      fs15.closeSync(stderrFd);
+      fs17.closeSync(stderrFd);
     }
   }
 }
@@ -2638,10 +3148,18 @@ async function stopManagedAppServer(appServer, platform) {
 }
 
 // src/engine/bridge-config.ts
-import * as fs16 from "fs";
-import * as path16 from "path";
+import * as fs18 from "fs";
+import * as path17 from "path";
+init_instance_config();
 function resolveAgentName(instanceId, explicit, context) {
   if (explicit) return explicit;
+  if (context?.stateDir) {
+    try {
+      const instConfig = loadInstanceConfig(context.stateDir, instanceId);
+      if (instConfig?.agentName) return instConfig.agentName;
+    } catch {
+    }
+  }
   try {
     const repoRoot = context?.repoRoot ?? context?.stateDir?.replace(/[\\/].tap-comms$/, "") ?? process.cwd();
     const state = loadState(repoRoot);
@@ -2660,13 +3178,13 @@ function inferRestartMode(bridgeState, flags, savedMode) {
 }
 function cleanupHeadlessDispatch(inboxDir, agentName) {
   const removed = [];
-  if (!fs16.existsSync(inboxDir)) return removed;
+  if (!fs18.existsSync(inboxDir)) return removed;
   const normalizedAgent = agentName.replace(/-/g, "_");
   const marker = `-headless-${normalizedAgent}-review-`;
   try {
-    for (const file of fs16.readdirSync(inboxDir)) {
+    for (const file of fs18.readdirSync(inboxDir)) {
       if (file.includes(marker)) {
-        fs16.unlinkSync(path16.join(inboxDir, file));
+        fs18.unlinkSync(path17.join(inboxDir, file));
         removed.push(file);
       }
     }
@@ -2676,19 +3194,31 @@ function cleanupHeadlessDispatch(inboxDir, agentName) {
 }
 
 // src/engine/bridge-state.ts
-import * as fs17 from "fs";
+import * as fs19 from "fs";
+function transitionBridgeLifecycle(previous, nextState, reason, options) {
+  const at = options?.at ?? (/* @__PURE__ */ new Date()).toISOString();
+  const changed = previous?.state !== nextState;
+  return {
+    state: nextState,
+    since: changed || !previous?.since ? at : previous.since,
+    updatedAt: at,
+    lastTransitionAt: changed || !previous?.lastTransitionAt ? at : previous.lastTransitionAt,
+    lastTransitionReason: changed || previous?.lastTransitionReason == null ? reason : previous.lastTransitionReason,
+    restartCount: (previous?.restartCount ?? 0) + (options?.incrementRestart ? 1 : 0)
+  };
+}
 function loadRuntimeBridgeHeartbeat(bridgeState) {
   const runtimeStateDir = bridgeState?.runtimeStateDir;
   if (!runtimeStateDir) {
     return null;
   }
   const heartbeatPath = runtimeHeartbeatFilePath(runtimeStateDir);
-  if (!fs17.existsSync(heartbeatPath)) {
+  if (!fs19.existsSync(heartbeatPath)) {
     return null;
   }
   try {
     return JSON.parse(
-      fs17.readFileSync(heartbeatPath, "utf-8")
+      fs19.readFileSync(heartbeatPath, "utf-8")
     );
   } catch {
     return null;
@@ -2700,12 +3230,12 @@ function loadRuntimeBridgeThreadState(bridgeState) {
     return null;
   }
   const threadPath = runtimeThreadStateFilePath(runtimeStateDir);
-  if (!fs17.existsSync(threadPath)) {
+  if (!fs19.existsSync(threadPath)) {
     return null;
   }
   try {
     const parsed = JSON.parse(
-      fs17.readFileSync(threadPath, "utf-8")
+      fs19.readFileSync(threadPath, "utf-8")
     );
     return parsed.threadId ? parsed : null;
   } catch {
@@ -2714,9 +3244,9 @@ function loadRuntimeBridgeThreadState(bridgeState) {
 }
 function loadBridgeState(stateDir, instanceId) {
   const pidPath = pidFilePath(stateDir, instanceId);
-  if (!fs17.existsSync(pidPath)) return null;
+  if (!fs19.existsSync(pidPath)) return null;
   try {
-    const raw = fs17.readFileSync(pidPath, "utf-8");
+    const raw = fs19.readFileSync(pidPath, "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;
@@ -2732,8 +3262,8 @@ function saveBridgeState(stateDir, instanceId, state) {
 }
 function clearBridgeState(stateDir, instanceId) {
   const pidPath = pidFilePath(stateDir, instanceId);
-  if (fs17.existsSync(pidPath)) {
-    fs17.unlinkSync(pidPath);
+  if (fs19.existsSync(pidPath)) {
+    fs19.unlinkSync(pidPath);
   }
 }
 function isBridgeRunning(stateDir, instanceId) {
@@ -2743,7 +3273,7 @@ function isBridgeRunning(stateDir, instanceId) {
 }
 
 // src/engine/bridge-observability.ts
-import * as fs18 from "fs";
+import * as fs20 from "fs";
 function loadRuntimeHeartbeatTimestamp(runtimeStateDir) {
   const heartbeat = loadRuntimeBridgeHeartbeat({ runtimeStateDir });
   return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
@@ -2795,14 +3325,249 @@ function isTurnStuck(stateDir, instanceId, thresholdSeconds = 300) {
   return info?.stuck ?? false;
 }
 function rotateLog(logPath) {
-  if (!fs18.existsSync(logPath)) return;
+  if (!fs20.existsSync(logPath)) return;
   try {
-    const stats = fs18.statSync(logPath);
+    const stats = fs20.statSync(logPath);
     if (stats.size === 0) return;
     const prevPath = `${logPath}.prev`;
-    fs18.renameSync(logPath, prevPath);
+    fs20.renameSync(logPath, prevPath);
   } catch {
   }
+}
+
+// src/engine/server-lifecycle.ts
+function lifecycleMeta(persistedLifecycle) {
+  return {
+    lastTransitionAt: persistedLifecycle?.lastTransitionAt ?? null,
+    lastTransitionReason: persistedLifecycle?.lastTransitionReason ?? null,
+    restartCount: persistedLifecycle?.restartCount ?? 0
+  };
+}
+function resolveBridgeLifecycleSnapshot(stateDir, instanceId, fallbackBridgeState, persistedLifecycle) {
+  const persistedBridgeState = loadBridgeState(stateDir, instanceId) ?? fallbackBridgeState ?? null;
+  const bridgeStatus = getBridgeStatus(stateDir, instanceId);
+  const bridgeState = bridgeStatus === "running" ? loadBridgeState(stateDir, instanceId) ?? persistedBridgeState : persistedBridgeState;
+  return deriveBridgeLifecycleState({
+    bridgeStatus,
+    bridgeState,
+    runtimeHeartbeat: loadRuntimeBridgeHeartbeat(bridgeState),
+    savedThread: loadRuntimeBridgeThreadState(bridgeState),
+    persistedLifecycle
+  });
+}
+function deriveBridgeLifecycleState(options) {
+  const runtimeHeartbeat = options.runtimeHeartbeat ?? null;
+  const savedThread = options.savedThread ?? null;
+  const meta = lifecycleMeta(
+    options.persistedLifecycle ?? options.bridgeState?.lifecycle ?? null
+  );
+  if (options.bridgeStatus === "stopped") {
+    return {
+      presence: "stopped",
+      status: "stopped",
+      summary: "stopped",
+      ...meta,
+      threadId: null,
+      threadCwd: null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
+      activeTurnId: null,
+      connected: null,
+      initialized: null,
+      appServerHealthy: options.bridgeState?.appServer?.healthy ?? null
+    };
+  }
+  if (options.bridgeStatus === "stale") {
+    return {
+      presence: "bridge-stale",
+      status: "bridge-stale",
+      summary: "bridge-stale",
+      ...meta,
+      threadId: runtimeHeartbeat?.threadId ?? null,
+      threadCwd: runtimeHeartbeat?.threadCwd ?? null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
+      activeTurnId: runtimeHeartbeat?.activeTurnId ?? null,
+      connected: runtimeHeartbeat?.connected ?? null,
+      initialized: runtimeHeartbeat?.initialized ?? null,
+      appServerHealthy: options.bridgeState?.appServer?.healthy ?? null
+    };
+  }
+  const appServerHealthy = options.bridgeState?.appServer?.healthy ?? null;
+  const threadId = runtimeHeartbeat?.threadId ?? null;
+  const threadCwd = runtimeHeartbeat?.threadCwd ?? null;
+  const connected = runtimeHeartbeat?.connected ?? null;
+  const initialized = runtimeHeartbeat?.initialized ?? null;
+  if (!runtimeHeartbeat) {
+    return {
+      presence: "bridge-live",
+      status: "initializing",
+      summary: "bridge-live, initializing",
+      ...meta,
+      threadId: null,
+      threadCwd: null,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
+      activeTurnId: null,
+      connected: null,
+      initialized: null,
+      appServerHealthy
+    };
+  }
+  if (initialized === false) {
+    return {
+      presence: "bridge-live",
+      status: "initializing",
+      summary: "bridge-live, initializing",
+      ...meta,
+      threadId,
+      threadCwd,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
+      activeTurnId: runtimeHeartbeat.activeTurnId ?? null,
+      connected,
+      initialized,
+      appServerHealthy
+    };
+  }
+  if (threadId && connected !== false) {
+    return {
+      presence: "bridge-live",
+      status: "ready",
+      summary: "bridge-live, ready",
+      ...meta,
+      threadId,
+      threadCwd,
+      savedThreadId: savedThread?.threadId ?? null,
+      savedThreadCwd: savedThread?.cwd ?? null,
+      activeTurnId: runtimeHeartbeat.activeTurnId ?? null,
+      connected,
+      initialized,
+      appServerHealthy
+    };
+  }
+  const degradedReason = savedThread?.threadId ? "saved thread only" : connected === false ? "disconnected" : "no active thread";
+  return {
+    presence: "bridge-live",
+    status: "degraded-no-thread",
+    summary: `bridge-live, degraded-no-thread (${degradedReason})`,
+    ...meta,
+    threadId,
+    threadCwd,
+    savedThreadId: savedThread?.threadId ?? null,
+    savedThreadCwd: savedThread?.cwd ?? null,
+    activeTurnId: runtimeHeartbeat.activeTurnId ?? null,
+    connected,
+    initialized,
+    appServerHealthy
+  };
+}
+
+// src/engine/codex-session-state.ts
+import * as fs21 from "fs";
+import * as path18 from "path";
+function readLastDispatchAt(runtimeStateDir) {
+  if (!runtimeStateDir) return null;
+  const filePath = path18.join(runtimeStateDir, "last-dispatch.json");
+  if (!fs21.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(
+      fs21.readFileSync(filePath, "utf-8")
+    );
+    return typeof parsed.dispatchedAt === "string" ? parsed.dispatchedAt : null;
+  } catch {
+    return null;
+  }
+}
+function formatIdleSummary(idleSince) {
+  if (!idleSince) return "idle";
+  return `idle since ${idleSince}`;
+}
+function deriveCodexSessionState(options) {
+  const runtimeHeartbeat = options.runtimeHeartbeat ?? null;
+  if (!runtimeHeartbeat) {
+    return {
+      status: "initializing",
+      turnState: null,
+      summary: "initializing",
+      activeTurnId: null,
+      lastTurnAt: null,
+      lastDispatchAt: null,
+      idleSince: null,
+      connected: null,
+      initialized: null
+    };
+  }
+  const turnState = runtimeHeartbeat.turnState ?? null;
+  const activeTurnId = runtimeHeartbeat.activeTurnId ?? null;
+  const lastTurnAt = runtimeHeartbeat.lastTurnAt ?? null;
+  const lastDispatchAt = runtimeHeartbeat.lastDispatchAt ?? readLastDispatchAt(options.runtimeStateDir) ?? null;
+  const idleSince = runtimeHeartbeat.idleSince ?? null;
+  const connected = runtimeHeartbeat.connected ?? null;
+  const initialized = runtimeHeartbeat.initialized ?? null;
+  if (initialized === false) {
+    return {
+      status: "initializing",
+      turnState,
+      summary: "initializing",
+      activeTurnId,
+      lastTurnAt,
+      lastDispatchAt,
+      idleSince,
+      connected,
+      initialized
+    };
+  }
+  if (turnState === "active" || activeTurnId) {
+    return {
+      status: "active",
+      turnState: "active",
+      summary: activeTurnId ? `active turn ${activeTurnId}` : "active",
+      activeTurnId,
+      lastTurnAt,
+      lastDispatchAt,
+      idleSince: null,
+      connected,
+      initialized
+    };
+  }
+  if (turnState === "waiting-approval") {
+    return {
+      status: "waiting-approval",
+      turnState,
+      summary: `waiting-approval (${formatIdleSummary(idleSince)})`,
+      activeTurnId,
+      lastTurnAt,
+      lastDispatchAt,
+      idleSince,
+      connected,
+      initialized
+    };
+  }
+  if (turnState === "disconnected" || connected === false) {
+    return {
+      status: "disconnected",
+      turnState: "disconnected",
+      summary: "disconnected",
+      activeTurnId,
+      lastTurnAt,
+      lastDispatchAt,
+      idleSince: null,
+      connected,
+      initialized
+    };
+  }
+  return {
+    status: "idle",
+    turnState: turnState === "idle" ? turnState : "idle",
+    summary: formatIdleSummary(idleSince),
+    activeTurnId,
+    lastTurnAt,
+    lastDispatchAt,
+    idleSince,
+    connected,
+    initialized
+  };
 }
 
 // src/engine/bridge-app-server-health.ts
@@ -2816,7 +3581,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
   if (!WebSocket) {
     return false;
   }
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     let settled = false;
     let socket = null;
     const finish = (healthy) => {
@@ -2829,7 +3594,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
         socket?.close();
       } catch {
       }
-      resolve14(healthy);
+      resolve15(healthy);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
@@ -2901,21 +3666,21 @@ async function checkTcpPortListening(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_
     return false;
   }
   if (!port || !Number.isFinite(port)) return false;
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     const socket = net2.createConnection({ host: hostname, port });
     const timer = setTimeout(() => {
       socket.destroy();
-      resolve14(false);
+      resolve15(false);
     }, timeoutMs);
     socket.once("connect", () => {
       clearTimeout(timer);
       socket.destroy();
-      resolve14(true);
+      resolve15(true);
     });
     socket.once("error", () => {
       clearTimeout(timer);
       socket.destroy();
-      resolve14(false);
+      resolve15(false);
     });
   });
 }
@@ -2954,19 +3719,19 @@ function markAppServerHealthy(appServer) {
 }
 
 // src/engine/bridge-app-server-auth.ts
-import * as fs20 from "fs";
-import * as path18 from "path";
+import * as fs23 from "fs";
+import * as path20 from "path";
 import { randomBytes as randomBytes2 } from "crypto";
 
 // src/runtime/resolve-node.ts
-import * as fs19 from "fs";
-import * as path17 from "path";
+import * as fs22 from "fs";
+import * as path19 from "path";
 import { execSync as execSync3 } from "child_process";
 function readNodeVersion(repoRoot) {
-  const nvFile = path17.join(repoRoot, ".node-version");
-  if (!fs19.existsSync(nvFile)) return null;
+  const nvFile = path19.join(repoRoot, ".node-version");
+  if (!fs22.existsSync(nvFile)) return null;
   try {
-    const raw = fs19.readFileSync(nvFile, "utf-8").trim();
+    const raw = fs22.readFileSync(nvFile, "utf-8").trim();
     return raw.length > 0 ? raw.replace(/^v/, "") : null;
   } catch {
     return null;
@@ -2976,16 +3741,16 @@ function fnmCandidateDirs() {
   if (process.platform === "win32") {
     return [
       process.env.FNM_DIR,
-      process.env.APPDATA ? path17.join(process.env.APPDATA, "fnm") : null,
-      process.env.LOCALAPPDATA ? path17.join(process.env.LOCALAPPDATA, "fnm") : null,
-      process.env.USERPROFILE ? path17.join(process.env.USERPROFILE, "scoop", "persist", "fnm") : null
+      process.env.APPDATA ? path19.join(process.env.APPDATA, "fnm") : null,
+      process.env.LOCALAPPDATA ? path19.join(process.env.LOCALAPPDATA, "fnm") : null,
+      process.env.USERPROFILE ? path19.join(process.env.USERPROFILE, "scoop", "persist", "fnm") : null
     ].filter(Boolean);
   }
   return [
     process.env.FNM_DIR,
-    process.env.HOME ? path17.join(process.env.HOME, ".local", "share", "fnm") : null,
-    process.env.HOME ? path17.join(process.env.HOME, ".fnm") : null,
-    process.env.XDG_DATA_HOME ? path17.join(process.env.XDG_DATA_HOME, "fnm") : null
+    process.env.HOME ? path19.join(process.env.HOME, ".local", "share", "fnm") : null,
+    process.env.HOME ? path19.join(process.env.HOME, ".fnm") : null,
+    process.env.XDG_DATA_HOME ? path19.join(process.env.XDG_DATA_HOME, "fnm") : null
   ].filter(Boolean);
 }
 function nodeExecutableName() {
@@ -2995,14 +3760,14 @@ function probeFnmNode(desiredVersion) {
   const dirs = fnmCandidateDirs();
   const exe = nodeExecutableName();
   for (const baseDir of dirs) {
-    const candidate = path17.join(
+    const candidate = path19.join(
       baseDir,
       "node-versions",
       `v${desiredVersion}`,
       "installation",
       exe
     );
-    if (!fs19.existsSync(candidate)) continue;
+    if (!fs22.existsSync(candidate)) continue;
     try {
       const v = execSync3(`"${candidate}" --version`, {
         encoding: "utf-8",
@@ -3043,12 +3808,12 @@ function checkStripTypesSupport(command) {
 }
 function findTsxFallback(repoRoot) {
   const candidates = [
-    path17.join(repoRoot, "node_modules", ".bin", "tsx.exe"),
-    path17.join(repoRoot, "node_modules", ".bin", "tsx.CMD"),
-    path17.join(repoRoot, "node_modules", ".bin", "tsx")
+    path19.join(repoRoot, "node_modules", ".bin", "tsx.exe"),
+    path19.join(repoRoot, "node_modules", ".bin", "tsx.CMD"),
+    path19.join(repoRoot, "node_modules", ".bin", "tsx")
   ];
   for (const c of candidates) {
-    if (fs19.existsSync(c)) return c;
+    if (fs22.existsSync(c)) return c;
   }
   return null;
 }
@@ -3057,7 +3822,7 @@ function getFnmBinDir(repoRoot) {
   if (!desiredVersion) return null;
   const nodePath = probeFnmNode(desiredVersion);
   if (!nodePath) return null;
-  return path17.dirname(nodePath);
+  return path19.dirname(nodePath);
 }
 function resolveNodeRuntime(configCommand, repoRoot) {
   if (configCommand === "bun" || configCommand.endsWith("bun.exe")) {
@@ -3113,7 +3878,7 @@ function buildRuntimeEnv(repoRoot, baseEnv = process.env) {
   const currentPath = baseEnv[pathKey] ?? baseEnv.PATH ?? "";
   return {
     ...baseEnv,
-    [pathKey]: `${fnmBin}${path17.delimiter}${currentPath}`
+    [pathKey]: `${fnmBin}${path19.delimiter}${currentPath}`
   };
 }
 
@@ -3122,7 +3887,7 @@ function buildProtectedAppServerUrl(publicUrl, _token) {
   return publicUrl;
 }
 function readGatewayTokenFromPath(tokenPath) {
-  return fs20.readFileSync(tokenPath, "utf8").trim();
+  return fs23.readFileSync(tokenPath, "utf8").trim();
 }
 function readGatewayToken(auth) {
   if (!auth) {
@@ -3132,14 +3897,14 @@ function readGatewayToken(auth) {
   if (legacyToken?.trim()) {
     return legacyToken.trim();
   }
-  if (!auth.tokenPath || !fs20.existsSync(auth.tokenPath)) {
+  if (!auth.tokenPath || !fs23.existsSync(auth.tokenPath)) {
     return null;
   }
   const fileToken = readGatewayTokenFromPath(auth.tokenPath);
   return fileToken || null;
 }
 function materializeGatewayTokenFile(stateDir, instanceId, publicUrl, auth) {
-  if (auth.tokenPath && fs20.existsSync(auth.tokenPath)) {
+  if (auth.tokenPath && fs23.existsSync(auth.tokenPath)) {
     return auth;
   }
   const token = readGatewayToken(auth);
@@ -3177,7 +3942,7 @@ async function createManagedAppServerAuth(options) {
     options.stateDir,
     options.instanceId
   );
-  fs20.mkdirSync(path18.dirname(gatewayLogPath), { recursive: true });
+  fs23.mkdirSync(path20.dirname(gatewayLogPath), { recursive: true });
   rotateLog(gatewayLogPath);
   const runtime = resolveNodeRuntime(process.execPath, options.repoRoot);
   const gatewayArgs = [];
@@ -3252,20 +4017,20 @@ function canReuseManagedAppServer(appServer) {
 }
 
 // src/engine/bridge-app-server-lifecycle.ts
-import * as fs21 from "fs";
-import * as path19 from "path";
+import * as fs24 from "fs";
+import * as path21 from "path";
 var DEFAULT_APP_SERVER_URL3 = "ws://127.0.0.1:4501";
 var APP_SERVER_START_TIMEOUT_MS = 2e4;
 var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
 function isAppServerUsedByOtherBridge(stateDir, excludeInstanceId, appServer) {
-  const pidDir = path19.join(stateDir, "pids");
-  if (!fs21.existsSync(pidDir)) return false;
-  for (const name of fs21.readdirSync(pidDir)) {
+  const pidDir = path21.join(stateDir, "pids");
+  if (!fs24.existsSync(pidDir)) return false;
+  for (const name of fs24.readdirSync(pidDir)) {
     if (!name.startsWith("bridge-") || !name.endsWith(".json")) continue;
     const otherId = name.slice("bridge-".length, -".json".length);
     if (otherId === excludeInstanceId) continue;
     try {
-      const raw = fs21.readFileSync(path19.join(pidDir, name), "utf-8");
+      const raw = fs24.readFileSync(path21.join(pidDir, name), "utf-8");
       const state = JSON.parse(raw);
       if (state.appServer?.url === appServer.url && state.appServer?.pid === appServer.pid && isProcessAlive(state.pid)) {
         return true;
@@ -3277,16 +4042,16 @@ function isAppServerUsedByOtherBridge(stateDir, excludeInstanceId, appServer) {
   return false;
 }
 function findReusableManagedAppServer(stateDir, publicUrl) {
-  const pidDir = path19.join(stateDir, "pids");
-  if (!fs21.existsSync(pidDir)) {
+  const pidDir = path21.join(stateDir, "pids");
+  if (!fs24.existsSync(pidDir)) {
     return null;
   }
-  for (const name of fs21.readdirSync(pidDir)) {
+  for (const name of fs24.readdirSync(pidDir)) {
     if (!name.startsWith("bridge-") || !name.endsWith(".json")) {
       continue;
     }
     try {
-      const raw = fs21.readFileSync(path19.join(pidDir, name), "utf-8");
+      const raw = fs24.readFileSync(path21.join(pidDir, name), "utf-8");
       const parsed = JSON.parse(raw);
       if (parsed.appServer?.url !== publicUrl) {
         continue;
@@ -3358,7 +4123,7 @@ Start the app-server manually:
     );
   }
   const logPath = appServerLogFilePath(options.stateDir, options.instanceId);
-  fs21.mkdirSync(path19.dirname(logPath), { recursive: true });
+  fs24.mkdirSync(path21.dirname(logPath), { recursive: true });
   rotateLog(logPath);
   if (options.noAuth) {
     const manualCommand2 = formatCodexAppServerCommand("codex", effectiveUrl);
@@ -3553,10 +4318,82 @@ function formatCodexAppServerCommand(command, url) {
 }
 
 // src/engine/bridge-startup.ts
-import * as fs22 from "fs";
-import * as path20 from "path";
+import * as fs25 from "fs";
+import * as path22 from "path";
 function getBridgeRuntimeStateDir(repoRoot, instanceId) {
-  return path20.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`);
+  const resolved = path22.resolve(
+    path22.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
+  );
+  const expectedBase = path22.resolve(repoRoot, ".tmp") + path22.sep;
+  if (!resolved.startsWith(expectedBase)) {
+    throw new Error(
+      `Path traversal blocked: runtime state dir escapes .tmp/ directory`
+    );
+  }
+  return resolved;
+}
+var STALE_DIRECT_HEARTBEAT_MS = 5 * 60 * 1e3;
+function warnHeartbeatCleanup(instanceId, message) {
+  console.warn(
+    `[tap] heartbeat cleanup skipped for ${instanceId}: ${message}`
+  );
+}
+function getHeartbeatActivityMs(record) {
+  const timestamp = new Date(record.lastActivity ?? record.timestamp ?? 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+function isSameInstanceHeartbeat(key, heartbeat, instanceId) {
+  if (heartbeat.instanceId === instanceId) return true;
+  if (heartbeat.connectHash === `instance:${instanceId}`) return true;
+  return key === instanceId || key.replace(/_/g, "-") === instanceId || key.replace(/-/g, "_") === instanceId;
+}
+function cleanupStaleSameInstanceHeartbeats(commsDir, instanceId) {
+  const heartbeatsPath = path22.join(commsDir, "heartbeats.json");
+  if (!fs25.existsSync(heartbeatsPath)) return;
+  const lockPath = path22.join(commsDir, ".heartbeats.lock");
+  try {
+    fs25.writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+  } catch {
+    warnHeartbeatCleanup(instanceId, "heartbeat store busy");
+    return;
+  }
+  try {
+    let store = {};
+    try {
+      store = JSON.parse(
+        fs25.readFileSync(heartbeatsPath, "utf-8")
+      );
+    } catch {
+      warnHeartbeatCleanup(instanceId, "heartbeat store unreadable");
+      return;
+    }
+    let changed = false;
+    for (const [key, heartbeat] of Object.entries(store)) {
+      if (!isSameInstanceHeartbeat(key, heartbeat, instanceId)) continue;
+      const status = heartbeat.status ?? "active";
+      const isDeadBridge = heartbeat.source === "bridge-dispatch" && heartbeat.bridgePid != null && !isProcessAlive(heartbeat.bridgePid);
+      const activityMs = getHeartbeatActivityMs(heartbeat);
+      const isStaleDirect = heartbeat.source !== "bridge-dispatch" && activityMs != null && Date.now() - activityMs > STALE_DIRECT_HEARTBEAT_MS;
+      if (status === "signing-off" || isDeadBridge || isStaleDirect) {
+        delete store[key];
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    const tmpPath = `${heartbeatsPath}.tmp.${process.pid}`;
+    fs25.writeFileSync(tmpPath, JSON.stringify(store, null, 2), "utf-8");
+    fs25.renameSync(tmpPath, heartbeatsPath);
+  } catch (error) {
+    warnHeartbeatCleanup(
+      instanceId,
+      error instanceof Error ? error.message : String(error)
+    );
+  } finally {
+    try {
+      fs25.unlinkSync(lockPath);
+    } catch {
+    }
+  }
 }
 async function startBridge(options) {
   const {
@@ -3584,12 +4421,14 @@ async function startBridge(options) {
     );
   }
   const previousBridgeState = loadBridgeState(stateDir, instanceId);
+  const previousLifecycle = options.previousLifecycle ?? previousBridgeState?.lifecycle ?? null;
   const previousAppServer = previousBridgeState?.appServer ?? null;
   clearBridgeState(stateDir, instanceId);
+  cleanupStaleSameInstanceHeartbeats(commsDir, instanceId);
   const logPath = logFilePath(stateDir, instanceId);
-  fs22.mkdirSync(path20.dirname(logPath), { recursive: true });
+  fs25.mkdirSync(path22.dirname(logPath), { recursive: true });
   rotateLog(logPath);
-  const repoRoot = options.repoRoot ?? path20.resolve(stateDir, "..");
+  const repoRoot = options.repoRoot ?? path22.resolve(stateDir, "..");
   const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
   const resolved = resolveNodeRuntime(
     options.runtimeCommand ?? "node",
@@ -3600,6 +4439,7 @@ async function startBridge(options) {
   const effectiveAppServerUrl = resolveAppServerUrl(options.appServerUrl, port);
   let appServer = null;
   let bridgeAppServerUrl = effectiveAppServerUrl;
+  const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   if (runtime === "codex" && options.manageAppServer) {
     appServer = await ensureCodexAppServer({
       instanceId,
@@ -3677,9 +4517,18 @@ async function startBridge(options) {
     const state = {
       pid: bridgePid,
       statePath: pidFilePath(stateDir, instanceId),
-      lastHeartbeat: (/* @__PURE__ */ new Date()).toISOString(),
+      lastHeartbeat: startedAt,
       appServer,
-      runtimeStateDir
+      runtimeStateDir,
+      lifecycle: transitionBridgeLifecycle(
+        previousLifecycle,
+        "initializing",
+        previousLifecycle ? "bridge restart" : "bridge start",
+        {
+          at: startedAt,
+          incrementRestart: previousLifecycle != null
+        }
+      )
     };
     saveBridgeState(stateDir, instanceId, state);
     return state;
@@ -3699,55 +4548,82 @@ async function startBridge(options) {
 }
 
 // src/engine/bridge-orchestrator.ts
-import * as fs23 from "fs";
-import * as path21 from "path";
+import * as fs26 from "fs";
+import * as path23 from "path";
 async function stopBridge(options) {
   const { instanceId, stateDir, platform } = options;
   const state = loadBridgeState(stateDir, instanceId);
   if (!state) {
-    return false;
+    return {
+      stopped: false,
+      lifecycle: null
+    };
   }
+  const currentLifecycle = state.lifecycle ?? null;
   if (!isProcessAlive(state.pid)) {
     clearBridgeState(stateDir, instanceId);
-    return false;
+    return {
+      stopped: false,
+      lifecycle: transitionBridgeLifecycle(
+        currentLifecycle,
+        "crashed",
+        "bridge pid not alive"
+      )
+    };
   }
+  state.lifecycle = transitionBridgeLifecycle(
+    currentLifecycle,
+    "stopping",
+    "bridge stop requested"
+  );
+  saveBridgeState(stateDir, instanceId, state);
   try {
     await terminateProcess(state.pid, platform);
   } catch {
   }
   clearBridgeState(stateDir, instanceId);
-  return true;
+  return {
+    stopped: true,
+    lifecycle: transitionBridgeLifecycle(
+      state.lifecycle ?? currentLifecycle,
+      "stopped",
+      "bridge stopped"
+    )
+  };
 }
 async function restartBridge(options) {
   const { instanceId, stateDir, platform } = options;
   const drainTimeout = (options.drainTimeoutSeconds ?? 30) * 1e3;
   const repoRoot = options.repoRoot ?? stateDir.replace(/[\\/].tap-comms$/, "");
   const runtimeStateDir = getBridgeRuntimeStateDir(repoRoot, instanceId);
-  const heartbeatPath = path21.join(runtimeStateDir, "heartbeat.json");
-  if (fs23.existsSync(heartbeatPath)) {
+  const heartbeatPath = path23.join(runtimeStateDir, "heartbeat.json");
+  if (fs26.existsSync(heartbeatPath)) {
     const startWait = Date.now();
     while (Date.now() - startWait < drainTimeout) {
       try {
-        const hb = JSON.parse(fs23.readFileSync(heartbeatPath, "utf-8"));
+        const hb = JSON.parse(fs26.readFileSync(heartbeatPath, "utf-8"));
         if (!hb.activeTurnId) break;
       } catch {
         break;
       }
-      await new Promise((resolve14) => setTimeout(resolve14, 1e3));
+      await new Promise((resolve15) => setTimeout(resolve15, 1e3));
     }
   }
   if (options.headless?.enabled && options.commsDir) {
     const agentName = options.agentName ?? instanceId;
-    cleanupHeadlessDispatch(path21.join(options.commsDir, "inbox"), agentName);
+    cleanupHeadlessDispatch(path23.join(options.commsDir, "inbox"), agentName);
   }
-  await stopBridge({ instanceId, stateDir, platform });
+  const stopResult = await stopBridge({ instanceId, stateDir, platform });
   return startBridge({
     ...options,
-    processExistingMessages: true
+    processExistingMessages: true,
+    previousLifecycle: stopResult.lifecycle ?? options.previousLifecycle ?? null
   });
 }
 
 // src/commands/add.ts
+init_config();
+init_instance_config();
 var ADD_HELP = `
 Usage:
   tap add <claude|codex|gemini> [options]
@@ -3900,6 +4776,22 @@ async function addCommand(args) {
         agentName: resolvedAgentName
       });
       saveState(repoRoot, updatedState);
+      const { config: cfg } = resolveConfig({}, repoRoot);
+      try {
+        const {
+          loadInstanceConfig: loadInstCfg,
+          updateInstanceConfig: updateInstCfg,
+          saveInstanceConfig: saveInstCfg
+        } = await Promise.resolve().then(() => (init_instance_config(), instance_config_exports));
+        const existing = loadInstCfg(cfg.stateDir, instanceId);
+        if (existing) {
+          const updated = updateInstCfg(existing, {
+            agentName: resolvedAgentName
+          });
+          saveInstCfg(cfg.stateDir, updated);
+        }
+      } catch {
+      }
       return {
         ok: true,
         command: "add",
@@ -4027,6 +4919,7 @@ async function addCommand(args) {
       "Verification had failures. Runtime may need manual configuration."
     );
   }
+  const { config: resolvedCfg } = resolveConfig({}, repoRoot);
   let bridge = null;
   let effectivePort = port;
   if (mode === "app-server") {
@@ -4035,9 +4928,8 @@ async function addCommand(args) {
       logWarn("Bridge script not found. Bridge not started.");
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
-      const { config: resolvedCfg } = resolveConfig({}, repoRoot);
       if (effectivePort == null && runtime === "codex") {
-        const currentState = loadState(repoRoot);
+        const currentState = loadState(repoRoot) ?? state;
         effectivePort = await findNextAvailableAppServerPort(
           currentState,
           resolvedCfg.appServerUrl,
@@ -4072,6 +4964,41 @@ async function addCommand(args) {
       }
     }
   }
+  let effectiveAppServerUrl = resolvedCfg.appServerUrl;
+  if (effectivePort != null) {
+    try {
+      const parsed = new URL(resolvedCfg.appServerUrl);
+      parsed.port = String(effectivePort);
+      effectiveAppServerUrl = parsed.toString().replace(/\/$/, "");
+    } catch {
+    }
+  }
+  const permRole = roleArg === "reviewer" ? "reviewer" : headlessFlag ? "implementer" : void 0;
+  const instConfig = createInstanceConfig({
+    instanceId,
+    runtime,
+    agentName: resolvedAgentName,
+    agentId: null,
+    port: effectivePort,
+    appServerUrl: effectiveAppServerUrl,
+    commsDir: ctx.commsDir,
+    stateDir: ctx.stateDir,
+    repoRoot,
+    role: permRole
+  });
+  if (probe.configPath) {
+    try {
+      const { computeFileHash: computeFileHash2 } = await Promise.resolve().then(() => (init_drift_detector(), drift_detector_exports));
+      const runtimeHash = computeFileHash2(probe.configPath);
+      if (runtimeHash) {
+        instConfig.runtimeConfigHash = runtimeHash;
+        instConfig.lastSyncedToRuntime = (/* @__PURE__ */ new Date()).toISOString();
+      }
+    } catch {
+    }
+  }
+  const instConfigPath = saveInstanceConfig(ctx.stateDir, instConfig);
+  logSuccess(`Instance config: ${instConfigPath}`);
   const instanceState = {
     instanceId,
     runtime,
@@ -4089,6 +5016,8 @@ async function addCommand(args) {
     manageAppServer: runtime === "codex",
     noAuth: false,
     headless,
+    configHash: instConfig.configHash,
+    configSourceFile: instConfigPath,
     warnings: Array.from(/* @__PURE__ */ new Set([...result.warnings, ...verify.warnings]))
   };
   const newState = updateInstanceState(state, instanceId, instanceState);
@@ -4123,6 +5052,8 @@ async function addCommand(args) {
 }
 
 // src/commands/status.ts
+init_config();
+init_utils();
 var STATUS_HELP = `
 Usage:
   tap status
@@ -4134,30 +5065,71 @@ Examples:
   npx @hua-labs/tap status
 `.trim();
 function resolveStatus(inst, stateDir) {
-  if (!inst.installed) return "not installed";
+  if (!inst.installed) {
+    return {
+      status: "not installed",
+      lifecycle: null,
+      session: null
+    };
+  }
   switch (inst.bridgeMode) {
     case "native-push":
     case "polling":
-      return inst.lastVerifiedAt ? "active" : "configured";
-    case "app-server":
-      if (inst.bridge && isBridgeRunning(stateDir, inst.instanceId)) {
-        return "active";
-      }
+      return {
+        status: inst.lastVerifiedAt ? "active" : "configured",
+        lifecycle: null,
+        session: null
+      };
+    case "app-server": {
       if (inst.bridge) {
-        inst.bridge = null;
+        const lifecycle = resolveBridgeLifecycleSnapshot(
+          stateDir,
+          inst.instanceId,
+          inst.bridge
+        );
+        if (lifecycle.status === "bridge-stale") {
+          inst.bridge = null;
+          return {
+            status: inst.lastVerifiedAt ? "configured" : "installed",
+            lifecycle,
+            session: null
+          };
+        }
+        const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(inst.bridge);
+        return {
+          status: "active",
+          lifecycle,
+          session: deriveCodexSessionState({
+            runtimeHeartbeat,
+            runtimeStateDir: inst.bridge.runtimeStateDir ?? null
+          })
+        };
       }
-      return inst.lastVerifiedAt ? "configured" : "installed";
+      return {
+        status: inst.lastVerifiedAt ? "configured" : "installed",
+        lifecycle: deriveBridgeLifecycleState({
+          bridgeStatus: "stopped"
+        }),
+        session: deriveCodexSessionState({ runtimeHeartbeat: null })
+      };
+    }
     default:
-      return "installed";
+      return {
+        status: "installed",
+        lifecycle: null,
+        session: null
+      };
   }
 }
-function instanceStatusLine(inst, status) {
+function instanceStatusLine(inst, status, lifecycle, session) {
   const bridgeInfo = inst.bridge ? ` (pid: ${inst.bridge.pid})` : "";
+  const lifecycleStr = lifecycle?.status ?? "-";
+  const sessionStr = session?.status ?? "-";
   const mode = inst.bridgeMode;
   const portStr = inst.port ? ` port:${inst.port}` : "";
   const restart = inst.restartRequired ? " [restart required]" : "";
   const warns = inst.warnings.length > 0 ? ` [${inst.warnings.length} warning(s)]` : "";
-  return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
+  return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${lifecycleStr.padEnd(20)} ${sessionStr.padEnd(18)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
 }
 async function statusCommand(args) {
   if (args.includes("--help") || args.includes("-h")) {
@@ -4201,16 +5173,16 @@ async function statusCommand(args) {
   } else {
     log("");
     log(
-      `${"Instance".padEnd(20)} ${"Runtime".padEnd(8)} ${"Status".padEnd(14)} ${"Bridge Mode".padEnd(14)} Details`
+      `${"Instance".padEnd(20)} ${"Runtime".padEnd(8)} ${"Status".padEnd(14)} ${"Lifecycle".padEnd(20)} ${"Session".padEnd(18)} ${"Bridge Mode".padEnd(14)} Details`
     );
     log(
-      `${"\u2500".repeat(20)} ${"\u2500".repeat(8)} ${"\u2500".repeat(14)} ${"\u2500".repeat(14)} ${"\u2500".repeat(20)}`
+      `${"\u2500".repeat(20)} ${"\u2500".repeat(8)} ${"\u2500".repeat(14)} ${"\u2500".repeat(20)} ${"\u2500".repeat(18)} ${"\u2500".repeat(14)} ${"\u2500".repeat(20)}`
     );
     for (const id of installed) {
       const inst = state.instances[id];
       if (inst) {
-        const status = resolveStatus(inst, stateDir);
-        log(instanceStatusLine(inst, status));
+        const { status, lifecycle, session } = resolveStatus(inst, stateDir);
+        log(instanceStatusLine(inst, status, lifecycle, session));
         if (inst.warnings.length > 0) {
           for (const w of inst.warnings) {
             logWarn(`  ${w}`);
@@ -4218,6 +5190,8 @@ async function statusCommand(args) {
         }
         instances[id] = {
           status,
+          lifecycle,
+          session,
           runtime: inst.runtime,
           bridgeMode: inst.bridgeMode,
           bridge: inst.bridge,
@@ -4249,8 +5223,11 @@ async function statusCommand(args) {
   };
 }
 
+// src/commands/remove.ts
+init_utils();
+
 // src/engine/rollback.ts
-import * as fs24 from "fs";
+import * as fs27 from "fs";
 async function rollbackRuntime(_instanceId, runtimeState) {
   const errors = [];
   const restoredFiles = [];
@@ -4279,7 +5256,7 @@ async function rollbackRuntime(_instanceId, runtimeState) {
   };
 }
 function rollbackArtifact(artifact) {
-  if (!fs24.existsSync(artifact.path)) {
+  if (!fs27.existsSync(artifact.path)) {
     return { restored: false, error: `File not found: ${artifact.path}` };
   }
   switch (artifact.kind) {
@@ -4297,7 +5274,7 @@ function rollbackArtifact(artifact) {
   }
 }
 function rollbackJsonPath(artifact) {
-  const raw = fs24.readFileSync(artifact.path, "utf-8");
+  const raw = fs27.readFileSync(artifact.path, "utf-8");
   let config;
   try {
     config = JSON.parse(raw);
@@ -4323,18 +5300,18 @@ function rollbackJsonPath(artifact) {
     cleanEmptyParents(config, artifact.selector);
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs24.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  fs24.renameSync(tmp, artifact.path);
+  fs27.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs27.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackTomlTable(artifact) {
-  const content = fs24.readFileSync(artifact.path, "utf-8");
+  const content = fs27.readFileSync(artifact.path, "utf-8");
   const backup = artifact.backupPath ? readArtifactBackup(artifact.backupPath) : null;
   if (backup?.kind === "toml-table" && backup.selector === artifact.selector) {
     const nextContent = backup.existed ? replaceTomlTable(content, artifact.selector, backup.content ?? "") : removeTomlTable(content, artifact.selector);
     const tmp2 = `${artifact.path}.tmp.${process.pid}`;
-    fs24.writeFileSync(tmp2, nextContent, "utf-8");
-    fs24.renameSync(tmp2, artifact.path);
+    fs27.writeFileSync(tmp2, nextContent, "utf-8");
+    fs27.renameSync(tmp2, artifact.path);
     return { restored: true };
   }
   if (!extractTomlTable(content, artifact.selector)) {
@@ -4344,13 +5321,13 @@ function rollbackTomlTable(artifact) {
     };
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs24.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
-  fs24.renameSync(tmp, artifact.path);
+  fs27.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
+  fs27.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackFile(artifact) {
-  if (fs24.existsSync(artifact.path)) {
-    fs24.unlinkSync(artifact.path);
+  if (fs27.existsSync(artifact.path)) {
+    fs27.unlinkSync(artifact.path);
     return { restored: true };
   }
   return { restored: false, error: `File not found: ${artifact.path}` };
@@ -4475,12 +5452,12 @@ async function removeCommand(args) {
   logHeader(`@hua-labs/tap remove ${instanceId}`);
   if (instance.bridge) {
     const ctx = createAdapterContext(state.commsDir, repoRoot);
-    const stopped = await stopBridge({
+    const stopResult = await stopBridge({
       instanceId,
       stateDir: ctx.stateDir,
       platform: ctx.platform
     });
-    if (stopped) {
+    if (stopResult.stopped) {
       logSuccess(`Bridge for ${instanceId} stopped`);
     } else {
       log(`No running bridge for ${instanceId}`);
@@ -4522,118 +5499,21 @@ async function removeCommand(args) {
 }
 
 // src/commands/bridge.ts
-import { existsSync as existsSync21, readFileSync as readFileSync17, renameSync as renameSync11, writeFileSync as writeFileSync12 } from "fs";
-import * as path22 from "path";
+init_utils();
+
+// src/commands/bridge-start.ts
+import * as path26 from "path";
+init_instance_config();
+init_config();
+init_utils();
+
+// src/commands/bridge-helpers.ts
+import * as path24 from "path";
 function formatAge(seconds) {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m ago`;
 }
-var BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1e3;
-var BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1e3;
-var BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1e3;
-function loadBridgeHeartbeatStore(commsDir) {
-  const heartbeatsPath = path22.join(commsDir, "heartbeats.json");
-  if (!existsSync21(heartbeatsPath)) return {};
-  try {
-    return JSON.parse(readFileSync17(heartbeatsPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-function saveBridgeHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = path22.join(commsDir, "heartbeats.json");
-  const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
-  writeFileSync12(tmp, JSON.stringify(store, null, 2), "utf-8");
-  renameSync11(tmp, heartbeatsPath);
-}
-function parseBridgeHeartbeatAgeMs(record, now) {
-  const raw = record.lastActivity ?? record.timestamp;
-  if (!raw) return Number.POSITIVE_INFINITY;
-  const parsed = new Date(raw).getTime();
-  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
-  return Math.max(0, now - parsed);
-}
-function resolveBridgeHeartbeatInstanceId(state, heartbeatId) {
-  if (state.instances[heartbeatId]) return heartbeatId;
-  const hyphenated = heartbeatId.replace(/_/g, "-");
-  if (state.instances[hyphenated]) return hyphenated;
-  const underscored = heartbeatId.replace(/-/g, "_");
-  if (state.instances[underscored]) return underscored;
-  return null;
-}
-function pruneStaleHeartbeatsForBridgeUp(state, stateDir, commsDir) {
-  const store = loadBridgeHeartbeatStore(commsDir);
-  if (store === null) {
-    return {
-      removed: 0,
-      warning: "Auto-clean skipped \u2014 heartbeats.json unreadable"
-    };
-  }
-  const now = Date.now();
-  let removed = 0;
-  for (const [heartbeatId, heartbeat] of Object.entries(store)) {
-    const ageMs = parseBridgeHeartbeatAgeMs(heartbeat, now);
-    const instanceId = resolveBridgeHeartbeatInstanceId(state, heartbeatId);
-    const instance = instanceId ? state.instances[instanceId] : null;
-    const bridgeBacked = instance?.bridgeMode === "app-server";
-    const bridgeRunning = bridgeBacked && instanceId ? getBridgeStatus(stateDir, instanceId) === "running" : false;
-    const status = heartbeat.status ?? "active";
-    const staleByStatus = status === "signing-off" && ageMs >= BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS;
-    const staleByDeadBridge = bridgeBacked && !bridgeRunning && ageMs >= BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS;
-    const staleByAge = !bridgeRunning && ageMs >= BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS;
-    if (staleByStatus || staleByDeadBridge || staleByAge) {
-      delete store[heartbeatId];
-      removed += 1;
-    }
-  }
-  if (removed > 0) {
-    saveBridgeHeartbeatStore(commsDir, store);
-  }
-  return { removed };
-}
-var BRIDGE_HELP = `
-Usage:
-  tap bridge <subcommand> [instance] [options]
-
-Subcommands:
-  start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
-  start --all       Start all registered app-server instances
-  stop  <instance>  Stop bridge for an instance
-  stop              Stop all running bridges
-  status            Show bridge status for all instances
-  status <instance> Show bridge status for a specific instance
-  tui <instance>    Show the safe Codex TUI attach command for a running bridge
-  watch             Monitor bridges and auto-restart stuck/stale ones
-
-Options:
-  --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
-                                   Overrides the stored name from 'tap add' when needed
-  --all                            Start all registered app-server instances
-  --busy-mode <steer|wait>         How to handle active turns (default: steer)
-  --poll-seconds <n>               Inbox poll interval (default: 5)
-  --reconnect-seconds <n>          Reconnect delay after disconnect (default: 5)
-  --message-lookback-minutes <n>   Process messages from last N minutes (default: 10)
-  --thread-id <id>                 Resume specific thread
-  --ephemeral                      Use ephemeral thread (no persistence)
-  --process-existing-messages      Process all existing inbox messages
-  --no-server                      Skip app-server auto-start and connect only
-  --no-auth                        Skip auth gateway (app-server listens directly, localhost only)
-
-Port Assignment:
-  Ports are auto-assigned from 4501 on first bridge start if not set via --port
-  during 'tap add'. Auto-assigned ports are saved to state for future starts.
-
-Examples:
-  npx @hua-labs/tap bridge start codex --agent-name myAgent
-  npx @hua-labs/tap bridge start --all
-  npx @hua-labs/tap bridge start codex --agent-name myAgent --no-server
-  npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer --busy-mode steer
-  npx @hua-labs/tap bridge stop codex
-  npx @hua-labs/tap bridge stop
-  npx @hua-labs/tap bridge status
-  npx @hua-labs/tap bridge tui codex
-`.trim();
 function formatAppServerState(appServer) {
   const ownership = appServer.managed ? "managed" : "external";
   const pid = appServer.pid != null ? ` pid:${appServer.pid}` : "";
@@ -4674,13 +5554,23 @@ function formatThreadSummary(threadId, cwd) {
   return cwd ? `${threadId} (${cwd})` : threadId;
 }
 function normalizeComparablePath(value) {
-  return path22.resolve(value).replace(/\\/g, "/").toLowerCase();
+  return path24.resolve(value).replace(/\\/g, "/").toLowerCase();
 }
 function sameOptionalPath(left, right) {
   if (!left || !right) {
     return left === right;
   }
   return normalizeComparablePath(left) === normalizeComparablePath(right);
+}
+function resolveRecoveredAgentName(instanceId, explicitAgentName, repoRoot, stateDir) {
+  return resolveAgentName(instanceId, explicitAgentName, { repoRoot, stateDir }) ?? void 0;
+}
+function formatLifecycleTransition(lifecycle) {
+  if (!lifecycle?.lastTransitionAt) {
+    return null;
+  }
+  const reason = lifecycle.lastTransitionReason ? ` (${lifecycle.lastTransitionReason})` : "";
+  return `${lifecycle.lastTransitionAt}${reason}, restarts=${lifecycle.restartCount}`;
 }
 function getSharedAppServerUsers(state, stateDir, currentInstanceId, appServerUrl) {
   const shared = [];
@@ -4734,6 +5624,75 @@ function transferManagedAppServerOwnership(state, stateDir, recipientId, appServ
   };
   return true;
 }
+
+// src/commands/bridge-heartbeat.ts
+import { existsSync as existsSync25, readFileSync as readFileSync21, renameSync as renameSync13, writeFileSync as writeFileSync14 } from "fs";
+import * as path25 from "path";
+var BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1e3;
+var BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1e3;
+var BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1e3;
+function loadBridgeHeartbeatStore(commsDir) {
+  const heartbeatsPath = path25.join(commsDir, "heartbeats.json");
+  if (!existsSync25(heartbeatsPath)) return {};
+  try {
+    return JSON.parse(readFileSync21(heartbeatsPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function saveBridgeHeartbeatStore(commsDir, store) {
+  const heartbeatsPath = path25.join(commsDir, "heartbeats.json");
+  const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
+  writeFileSync14(tmp, JSON.stringify(store, null, 2), "utf-8");
+  renameSync13(tmp, heartbeatsPath);
+}
+function parseBridgeHeartbeatAgeMs(record, now) {
+  const raw = record.lastActivity ?? record.timestamp;
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(raw).getTime();
+  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
+  return Math.max(0, now - parsed);
+}
+function resolveBridgeHeartbeatInstanceId(state, heartbeatId) {
+  if (state.instances[heartbeatId]) return heartbeatId;
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]) return hyphenated;
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]) return underscored;
+  return null;
+}
+function pruneStaleHeartbeatsForBridgeUp(state, stateDir, commsDir) {
+  const store = loadBridgeHeartbeatStore(commsDir);
+  if (store === null) {
+    return {
+      removed: 0,
+      warning: "Auto-clean skipped \u2014 heartbeats.json unreadable"
+    };
+  }
+  const now = Date.now();
+  let removed = 0;
+  for (const [heartbeatId, heartbeat] of Object.entries(store)) {
+    const ageMs = parseBridgeHeartbeatAgeMs(heartbeat, now);
+    const instanceId = resolveBridgeHeartbeatInstanceId(state, heartbeatId);
+    const instance = instanceId ? state.instances[instanceId] : null;
+    const bridgeBacked = instance?.bridgeMode === "app-server";
+    const bridgeRunning = bridgeBacked && instanceId ? getBridgeStatus(stateDir, instanceId) === "running" : false;
+    const status = heartbeat.status ?? "active";
+    const staleByStatus = status === "signing-off" && ageMs >= BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS;
+    const staleByDeadBridge = bridgeBacked && !bridgeRunning && ageMs >= BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS;
+    const staleByAge = !bridgeRunning && ageMs >= BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS;
+    if (staleByStatus || staleByDeadBridge || staleByAge) {
+      delete store[heartbeatId];
+      removed += 1;
+    }
+  }
+  if (removed > 0) {
+    saveBridgeHeartbeatStore(commsDir, store);
+  }
+  return { removed };
+}
+
+// src/commands/bridge-start.ts
 async function bridgeStart(identifier, agentName, flags = {}) {
   const repoRoot = findRepoRoot();
   let state = loadState(repoRoot);
@@ -4774,6 +5733,19 @@ async function bridgeStart(identifier, agentName, flags = {}) {
   }
   const adapter = getAdapter(instance.runtime);
   const mode = adapter.bridgeMode();
+  const ctx = createAdapterContext(state.commsDir, repoRoot);
+  if (instance.runtime === "codex") {
+    const patched = patchCodexApprovalMode();
+    if (patched) {
+      log(`patched approval_mode \u2192 auto in ${patched}`);
+      const instConfig = loadInstanceConfig(ctx.stateDir, instanceId);
+      if (instConfig) {
+        instConfig.runtimeConfigHash = fileHash(patched);
+        instConfig.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        saveInstanceConfig(ctx.stateDir, instConfig);
+      }
+    }
+  }
   if (mode !== "app-server") {
     return {
       ok: true,
@@ -4786,14 +5758,18 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       data: { bridgeMode: mode }
     };
   }
-  const resolvedAgentName = agentName ?? instance.agentName ?? void 0;
-  if (agentName && agentName !== instance.agentName) {
-    instance = { ...instance, agentName };
+  const resolvedAgentName = resolveRecoveredAgentName(
+    instanceId,
+    agentName,
+    repoRoot,
+    ctx.stateDir
+  );
+  if ((resolvedAgentName ?? null) !== instance.agentName) {
+    instance = { ...instance, agentName: resolvedAgentName ?? null };
     const updatedState = updateInstanceState(state, instanceId, instance);
     saveState(repoRoot, updatedState);
     state = updatedState;
   }
-  const ctx = createAdapterContext(state.commsDir, repoRoot);
   const bridgeScript = adapter.resolveBridgeScript?.(ctx);
   if (!bridgeScript) {
     return {
@@ -4961,7 +5937,8 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         messageLookbackMinutes,
         threadId,
         ephemeral,
-        processExistingMessages
+        processExistingMessages,
+        previousLifecycle: instance.bridgeLifecycle ?? instance.bridge?.lifecycle ?? null
       });
     } finally {
       if (previousWarmup === void 0) {
@@ -4971,7 +5948,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       }
     }
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
-    log(`Log: ${path22.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
+    log(`Log: ${path26.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
     if (bridge.appServer) {
       log(`App server:   ${formatAppServerState(bridge.appServer)}`);
       if (bridge.appServer.logPath) {
@@ -4990,7 +5967,13 @@ async function bridgeStart(identifier, agentName, flags = {}) {
         log(`TUI connect:  ${bridge.appServer.url}`);
       }
     }
-    const updated = { ...instance, bridge, manageAppServer, noAuth };
+    const updated = {
+      ...instance,
+      bridge,
+      bridgeLifecycle: bridge.lifecycle ?? instance.bridgeLifecycle ?? null,
+      manageAppServer,
+      noAuth
+    };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
     return {
@@ -5078,14 +6061,19 @@ async function bridgeStartAll(flags = {}) {
   const failed = [];
   for (const instanceId of appServerInstances) {
     const inst = state.instances[instanceId];
-    const storedName = inst?.agentName ?? void 0;
+    const storedName = resolveRecoveredAgentName(
+      instanceId,
+      inst?.agentName ?? void 0,
+      repoRoot,
+      ctx.stateDir
+    );
     if (!storedName) {
       const msg = `${instanceId}: skipped \u2014 no stored agent-name. Set it first: tap bridge start ${instanceId} --agent-name <name>`;
       log(msg);
       warnings.push(msg);
       continue;
     }
-    const stateDir = path22.join(repoRoot, ".tap-comms");
+    const stateDir = path26.join(repoRoot, ".tap-comms");
     const currentBridgeState = loadBridgeState(stateDir, instanceId);
     const { manageAppServer, noAuth } = inferRestartMode(
       currentBridgeState,
@@ -5125,6 +6113,9 @@ async function bridgeStartAll(flags = {}) {
     data: { started, failed, prunedHeartbeats }
   };
 }
+
+// src/commands/bridge-stop.ts
+init_utils();
 async function bridgeStopOne(identifier) {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
@@ -5159,14 +6150,14 @@ async function bridgeStopOne(identifier) {
   );
   const appServer = bridgeState?.appServer ?? null;
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
-  const stopped = await stopBridge({
+  const stopResult = await stopBridge({
     instanceId,
     stateDir: ctx.stateDir,
     platform: ctx.platform
   });
   let appServerStopped = false;
   let appServerTransferredTo = null;
-  if (stopped) {
+  if (stopResult.stopped) {
     logSuccess(`Bridge for ${instanceId} stopped`);
   } else {
     log(`No running bridge for ${instanceId}`);
@@ -5210,11 +6201,15 @@ async function bridgeStopOne(identifier) {
     }
   }
   if (instance) {
-    const updated = { ...instance, bridge: null };
+    const updated = {
+      ...instance,
+      bridge: null,
+      bridgeLifecycle: stopResult.lifecycle ?? instance.bridgeLifecycle ?? null
+    };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
   }
-  if (stopped) {
+  if (stopResult.stopped) {
     return {
       ok: true,
       command: "bridge",
@@ -5273,18 +6268,22 @@ async function bridgeStopAll() {
         appServer
       );
     }
-    const didStop = await stopBridge({
+    const stopResult = await stopBridge({
       instanceId,
       stateDir: ctx.stateDir,
       platform: ctx.platform
     });
-    if (didStop) {
+    if (stopResult.stopped) {
       logSuccess(`Stopped bridge for ${instanceId}`);
       stopped.push(instanceId);
     }
     const instance = state.instances[instanceId];
-    if (instance?.bridge) {
-      state.instances[instanceId] = { ...instance, bridge: null };
+    if (instance?.bridge || stopResult.lifecycle) {
+      state.instances[instanceId] = {
+        ...instance,
+        bridge: null,
+        bridgeLifecycle: stopResult.lifecycle ?? instance.bridgeLifecycle ?? null
+      };
       stateChanged = true;
     }
   }
@@ -5320,9 +6319,13 @@ async function bridgeStopAll() {
     data: { stopped, stoppedAppServers }
   };
 }
+
+// src/commands/bridge-watch.ts
+init_config();
+init_utils();
 async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
   const repoRoot = findRepoRoot();
-  const state = loadState(repoRoot);
+  let state = loadState(repoRoot);
   if (!state) {
     return {
       ok: false,
@@ -5342,19 +6345,50 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
   );
   const restarted = [];
   const cleaned = [];
+  const initializing = [];
+  const degraded = [];
   const healthy = [];
   const warnings = [];
+  let stateChanged = false;
   for (const instanceId of instanceIds) {
     const inst = state.instances[instanceId];
     if (!inst?.installed || inst.bridgeMode !== "app-server") continue;
     const status = getBridgeStatus(stateDir, instanceId);
     if (status === "stale") {
       log(`${instanceId}: stale (process dead) \u2014 cleaning up`);
+      state.instances[instanceId] = {
+        ...inst,
+        bridge: null,
+        bridgeLifecycle: transitionBridgeLifecycle(
+          inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null,
+          "crashed",
+          "bridge pid not alive"
+        )
+      };
+      stateChanged = true;
       cleaned.push(instanceId);
       continue;
     }
     if (status === "stopped") {
       log(`${instanceId}: stopped`);
+      continue;
+    }
+    const lifecycle = resolveBridgeLifecycleSnapshot(
+      stateDir,
+      instanceId,
+      inst.bridge,
+      inst.bridgeLifecycle ?? null
+    );
+    if (lifecycle.status === "initializing") {
+      initializing.push(instanceId);
+      log(`${instanceId}: initializing`);
+      continue;
+    }
+    if (lifecycle.status === "degraded-no-thread") {
+      degraded.push(instanceId);
+      log(
+        `${instanceId}: degraded-no-thread${lifecycle.savedThreadId ? ` (saved thread ${lifecycle.savedThreadId})` : ""}`
+      );
       continue;
     }
     if (isTurnStuck(stateDir, instanceId, stuckThresholdSeconds)) {
@@ -5380,6 +6414,12 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
       const previousWarmup = process.env.TAP_COLD_START_WARMUP;
       process.env.TAP_COLD_START_WARMUP = "true";
       try {
+        const recoveredAgentName = resolveRecoveredAgentName(
+          instanceId,
+          void 0,
+          repoRoot,
+          ctx.stateDir
+        );
         const newBridgeState = await restartBridge({
           instanceId,
           runtime: inst.runtime,
@@ -5387,7 +6427,7 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
           commsDir: ctx.commsDir,
           bridgeScript,
           platform: ctx.platform,
-          agentName: inst.agentName ?? void 0,
+          agentName: recoveredAgentName,
           runtimeCommand: resolvedCfg.runtimeCommand,
           appServerUrl: resolvedCfg.appServerUrl,
           repoRoot,
@@ -5395,15 +6435,22 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
           headless: inst.headless,
           drainTimeoutSeconds: 30,
           manageAppServer,
-          noAuth
+          noAuth,
+          previousLifecycle: inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null
         });
-        const updatedInst = { ...inst, bridge: newBridgeState };
+        const updatedInst = {
+          ...inst,
+          agentName: recoveredAgentName ?? inst.agentName ?? null,
+          bridge: newBridgeState,
+          bridgeLifecycle: newBridgeState.lifecycle ?? inst.bridgeLifecycle ?? null
+        };
         const updatedState = updateInstanceState(
           state,
           instanceId,
           updatedInst
         );
         saveState(repoRoot, updatedState);
+        state = updatedState;
         restarted.push(instanceId);
         logSuccess(`${instanceId}: restarted`);
       } catch (err) {
@@ -5425,19 +6472,29 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
   const message = [
     restarted.length > 0 ? `Restarted: ${restarted.join(", ")}` : null,
     cleaned.length > 0 ? `Cleaned stale: ${cleaned.join(", ")}` : null,
+    initializing.length > 0 ? `Initializing: ${initializing.join(", ")}` : null,
+    degraded.length > 0 ? `Degraded: ${degraded.join(", ")}` : null,
     healthy.length > 0 ? `Healthy: ${healthy.join(", ")}` : null
   ].filter(Boolean).join(". ") || "No app-server bridges found";
   log("");
   log(message);
+  if (stateChanged) {
+    saveState(repoRoot, state);
+  }
   return {
     ok: true,
     command: "bridge",
     code: restarted.length > 0 ? "TAP_BRIDGE_WATCH_RESTARTED" : "TAP_BRIDGE_WATCH_OK",
     message,
     warnings,
-    data: { restarted, cleaned, healthy }
+    data: { restarted, cleaned, initializing, degraded, healthy }
   };
 }
+
+// src/commands/bridge-status.ts
+import * as path27 from "path";
+init_config();
+init_utils();
 function bridgeStatusAll() {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
@@ -5457,11 +6514,12 @@ function bridgeStatusAll() {
   const bridges = {};
   logHeader("@hua-labs/tap bridge status");
   log(
-    `${"Instance".padEnd(20)} ${"Runtime".padEnd(8)} ${"Status".padEnd(10)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Last Heartbeat"}`
+    `${"Instance".padEnd(20)} ${"Runtime".padEnd(8)} ${"Status".padEnd(10)} ${"Lifecycle".padEnd(20)} ${"Session".padEnd(18)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Last Heartbeat"}`
   );
   log(
-    `${"\u2500".repeat(20)} ${"\u2500".repeat(8)} ${"\u2500".repeat(10)} ${"\u2500".repeat(8)} ${"\u2500".repeat(6)} ${"\u2500".repeat(20)}`
+    `${"\u2500".repeat(20)} ${"\u2500".repeat(8)} ${"\u2500".repeat(10)} ${"\u2500".repeat(20)} ${"\u2500".repeat(18)} ${"\u2500".repeat(8)} ${"\u2500".repeat(6)} ${"\u2500".repeat(20)}`
   );
+  let stateChanged = false;
   for (const instanceId of instanceIds) {
     const inst = state.instances[instanceId];
     if (!inst?.installed) continue;
@@ -5471,6 +6529,8 @@ function bridgeStatusAll() {
       );
       bridges[instanceId] = {
         status: "n/a",
+        lifecycle: null,
+        session: null,
         runtime: inst.runtime,
         pid: null,
         port: inst.port,
@@ -5484,18 +6544,40 @@ function bridgeStatusAll() {
       continue;
     }
     const status = getBridgeStatus(stateDir, instanceId);
-    const bridgeState = loadBridgeState(stateDir, instanceId);
+    const bridgeState = loadBridgeState(stateDir, instanceId) ?? inst.bridge;
     const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
     const savedThread = loadRuntimeBridgeThreadState(bridgeState);
+    const lifecycle = deriveBridgeLifecycleState({
+      bridgeStatus: status,
+      bridgeState,
+      runtimeHeartbeat,
+      savedThread,
+      persistedLifecycle: inst.bridgeLifecycle ?? bridgeState?.lifecycle ?? null
+    });
+    const session = status === "running" ? deriveCodexSessionState({
+      runtimeHeartbeat,
+      runtimeStateDir: bridgeState?.runtimeStateDir ?? null
+    }) : null;
     const age = getHeartbeatAge(stateDir, instanceId);
+    if (lifecycle.status === "bridge-stale" && inst.bridge) {
+      state.instances[instanceId] = {
+        ...inst,
+        bridge: null,
+        bridgeLifecycle: transitionBridgeLifecycle(
+          inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null,
+          "crashed",
+          "bridge pid not alive"
+        )
+      };
+      stateChanged = true;
+    }
     const pid = bridgeState?.pid ?? null;
     const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
     const pidStr = pid ? String(pid) : "-";
     const portStr = inst.port ? String(inst.port) : "-";
     const ageStr = age !== null ? formatAge(age) : "-";
-    const statusColor = status === "running" ? "running" : status === "stale" ? "stale!" : "stopped";
     log(
-      `${instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${statusColor.padEnd(10)} ${pidStr.padEnd(8)} ${portStr.padEnd(6)} ${ageStr}`
+      `${instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(10)} ${lifecycle.status.padEnd(20)} ${(session?.status ?? "-").padEnd(18)} ${pidStr.padEnd(8)} ${portStr.padEnd(6)} ${ageStr}`
     );
     if (bridgeState?.appServer) {
       log(`  App server: ${formatAppServerState(bridgeState.appServer)}`);
@@ -5518,6 +6600,10 @@ function bridgeStatusAll() {
         `  Saved:      ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`
       );
     }
+    const transition = formatLifecycleTransition(lifecycle);
+    if (transition) {
+      log(`  Transition: ${transition}`);
+    }
     const turnInfo = getTurnInfo(stateDir, instanceId);
     if (turnInfo?.activeTurnId) {
       const ageStr2 = turnInfo.ageSeconds != null ? formatAge(turnInfo.ageSeconds) : "?";
@@ -5533,6 +6619,8 @@ function bridgeStatusAll() {
     }
     bridges[instanceId] = {
       status,
+      lifecycle,
+      session,
       runtime: inst.runtime,
       pid,
       port: inst.port,
@@ -5546,6 +6634,9 @@ function bridgeStatusAll() {
   }
   if (instanceIds.length === 0) {
     log("No instances installed.");
+  }
+  if (stateChanged) {
+    saveState(repoRoot, state);
   }
   log("");
   return {
@@ -5612,6 +6703,15 @@ function bridgeStatusOne(identifier) {
       warnings: [],
       data: {
         status: "n/a",
+        lifecycle: {
+          presence: "stopped",
+          status: "stopped",
+          summary: "stopped",
+          lastTransitionAt: null,
+          lastTransitionReason: null,
+          restartCount: 0
+        },
+        session: null,
         bridgeMode: inst.bridgeMode,
         pid: null,
         port: inst.port,
@@ -5627,12 +6727,25 @@ function bridgeStatusOne(identifier) {
   const { config: resolvedCfg2 } = resolveConfig({}, repoRoot);
   const stateDir = resolvedCfg2.stateDir;
   const status = getBridgeStatus(stateDir, instanceId);
-  const bridgeState = loadBridgeState(stateDir, instanceId);
+  const bridgeState = loadBridgeState(stateDir, instanceId) ?? inst.bridge;
   const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
   const savedThread = loadRuntimeBridgeThreadState(bridgeState);
   const age = getHeartbeatAge(stateDir, instanceId);
   const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
+  const lifecycle = deriveBridgeLifecycleState({
+    bridgeStatus: status,
+    bridgeState,
+    runtimeHeartbeat,
+    savedThread,
+    persistedLifecycle: inst.bridgeLifecycle ?? bridgeState?.lifecycle ?? null
+  });
+  const session = deriveCodexSessionState({
+    runtimeHeartbeat,
+    runtimeStateDir: bridgeState?.runtimeStateDir ?? null
+  });
   log(`Status:      ${status}`);
+  log(`Lifecycle:   ${lifecycle.summary}`);
+  log(`Session:     ${session.summary}`);
   if (bridgeState) {
     log(`PID:         ${bridgeState.pid}`);
     log(
@@ -5649,7 +6762,7 @@ function bridgeStatusOne(identifier) {
       );
     }
     log(
-      `Log:         ${path22.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
+      `Log:         ${path27.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
     );
     if (bridgeState.appServer) {
       log(`App server:  ${bridgeState.appServer.url}`);
@@ -5681,6 +6794,10 @@ function bridgeStatusOne(identifier) {
       }
     }
   }
+  const transition = formatLifecycleTransition(lifecycle);
+  if (transition) {
+    log(`Transition:  ${transition}`);
+  }
   log("");
   return {
     ok: true,
@@ -5692,6 +6809,23 @@ function bridgeStatusOne(identifier) {
     warnings: [],
     data: {
       status,
+      lifecycle: {
+        presence: lifecycle.presence,
+        status: lifecycle.status,
+        summary: lifecycle.summary,
+        lastTransitionAt: lifecycle.lastTransitionAt,
+        lastTransitionReason: lifecycle.lastTransitionReason,
+        restartCount: lifecycle.restartCount
+      },
+      session: {
+        status: session.status,
+        turnState: session.turnState,
+        summary: session.summary,
+        activeTurnId: session.activeTurnId,
+        idleSince: session.idleSince,
+        lastTurnAt: session.lastTurnAt,
+        lastDispatchAt: session.lastDispatchAt
+      },
       bridgeMode: inst.bridgeMode,
       pid: bridgeState?.pid ?? null,
       port: inst.port,
@@ -5704,6 +6838,10 @@ function bridgeStatusOne(identifier) {
     }
   };
 }
+
+// src/commands/bridge-tui.ts
+init_config();
+init_utils();
 function bridgeTuiOne(identifier) {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
@@ -5820,7 +6958,11 @@ function bridgeTuiOne(identifier) {
     }
   };
 }
-async function bridgeRestart(identifier, flags) {
+
+// src/commands/bridge-restart.ts
+init_config();
+init_utils();
+async function bridgeRestart(identifier, flags, explicitAgentName) {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
   if (!state) {
@@ -5893,6 +7035,12 @@ async function bridgeRestart(identifier, flags) {
   logHeader(`@hua-labs/tap bridge restart ${instanceId}`);
   log(`Drain timeout: ${drainTimeout}s`);
   try {
+    const resolvedAgentName = resolveRecoveredAgentName(
+      instanceId,
+      explicitAgentName,
+      repoRoot,
+      ctx.stateDir
+    );
     const currentBridgeState = loadBridgeState(ctx.stateDir, instanceId);
     const { manageAppServer, noAuth } = inferRestartMode(
       currentBridgeState,
@@ -5916,7 +7064,7 @@ async function bridgeRestart(identifier, flags) {
         commsDir: ctx.commsDir,
         bridgeScript,
         platform: ctx.platform,
-        agentName: inst.agentName ?? void 0,
+        agentName: resolvedAgentName,
         runtimeCommand: resolvedConfig.runtimeCommand,
         appServerUrl: resolvedConfig.appServerUrl,
         repoRoot,
@@ -5924,7 +7072,8 @@ async function bridgeRestart(identifier, flags) {
         headless: inst.headless,
         drainTimeoutSeconds: drainTimeout,
         manageAppServer,
-        noAuth
+        noAuth,
+        previousLifecycle: inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null
       });
     } finally {
       if (previousColdStartWarmup === void 0) {
@@ -5934,7 +7083,14 @@ async function bridgeRestart(identifier, flags) {
       }
     }
     logSuccess(`Bridge restarted (PID: ${bridge.pid})`);
-    const updated = { ...inst, bridge, manageAppServer, noAuth };
+    const updated = {
+      ...inst,
+      agentName: resolvedAgentName ?? inst.agentName ?? null,
+      bridge,
+      bridgeLifecycle: bridge.lifecycle ?? inst.bridgeLifecycle ?? null,
+      manageAppServer,
+      noAuth
+    };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
     return {
@@ -5960,6 +7116,50 @@ async function bridgeRestart(identifier, flags) {
     };
   }
 }
+
+// src/commands/bridge.ts
+var BRIDGE_HELP = `
+Usage:
+  tap bridge <subcommand> [instance] [options]
+
+Subcommands:
+  start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
+  start --all       Start all registered app-server instances
+  stop  <instance>  Stop bridge for an instance
+  stop              Stop all running bridges
+  status            Show bridge status for all instances
+  status <instance> Show bridge status for a specific instance
+  tui <instance>    Show the safe Codex TUI attach command for a running bridge
+  watch             Monitor bridges and auto-restart stuck/stale ones
+
+Options:
+  --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
+                                   Overrides the stored name from 'tap add' when needed
+  --all                            Start all registered app-server instances
+  --busy-mode <steer|wait>         How to handle active turns (default: steer)
+  --poll-seconds <n>               Inbox poll interval (default: 5)
+  --reconnect-seconds <n>          Reconnect delay after disconnect (default: 5)
+  --message-lookback-minutes <n>   Process messages from last N minutes (default: 10)
+  --thread-id <id>                 Resume specific thread
+  --ephemeral                      Use ephemeral thread (no persistence)
+  --process-existing-messages      Process all existing inbox messages
+  --no-server                      Skip app-server auto-start and connect only
+  --no-auth                        Skip auth gateway (app-server listens directly, localhost only)
+
+Port Assignment:
+  Ports are auto-assigned from 4501 on first bridge start if not set via --port
+  during 'tap add'. Auto-assigned ports are saved to state for future starts.
+
+Examples:
+  npx @hua-labs/tap bridge start codex --agent-name myAgent
+  npx @hua-labs/tap bridge start --all
+  npx @hua-labs/tap bridge start codex --agent-name myAgent --no-server
+  npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer --busy-mode steer
+  npx @hua-labs/tap bridge stop codex
+  npx @hua-labs/tap bridge stop
+  npx @hua-labs/tap bridge status
+  npx @hua-labs/tap bridge tui codex
+`.trim();
 async function bridgeCommand(args) {
   const { positional, flags } = parseArgs(args);
   const subcommand = positional[0];
@@ -6065,21 +7265,67 @@ async function bridgeCommand(args) {
 }
 
 // src/engine/dashboard.ts
-import * as fs25 from "fs";
-import * as path23 from "path";
+init_config();
+import * as fs28 from "fs";
+import * as path28 from "path";
 import { execSync as execSync4 } from "child_process";
-function collectAgents(commsDir) {
-  const heartbeatsPath = path23.join(commsDir, "heartbeats.json");
-  if (!fs25.existsSync(heartbeatsPath)) return [];
+function formatAgentLabel(agentIdOrName, displayName) {
+  const normalizedId = agentIdOrName.trim();
+  const normalizedName = displayName?.trim();
+  if (!normalizedId) {
+    return normalizedName ?? agentIdOrName;
+  }
+  if (!normalizedName || normalizedName === normalizedId) {
+    return normalizedId;
+  }
+  return `${normalizedName} [${normalizedId}]`;
+}
+function parseIsoAgeSeconds(value) {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return null;
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 1e3));
+}
+function resolveHeartbeatInstanceId(heartbeatId, displayName, state) {
+  if (!state) return null;
+  if (state.instances[heartbeatId]?.installed) return heartbeatId;
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]?.installed) return hyphenated;
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]?.installed) return underscored;
+  if (!displayName) return null;
+  const matches = Object.values(state.instances).filter(
+    (inst) => inst?.installed && inst.agentName === displayName
+  );
+  return matches.length === 1 ? matches[0].instanceId : null;
+}
+function collectAgents(commsDir, state, bridges) {
+  const heartbeatsPath = path28.join(commsDir, "heartbeats.json");
+  if (!fs28.existsSync(heartbeatsPath)) return [];
   try {
-    const raw = fs25.readFileSync(heartbeatsPath, "utf-8");
+    const raw = fs28.readFileSync(heartbeatsPath, "utf-8");
     const data = JSON.parse(raw);
-    return Object.entries(data).map(([name, info]) => ({
-      name: info.agent ?? name,
-      status: info.status ?? null,
-      lastActivity: info.lastActivity ?? info.timestamp ?? null,
-      joinedAt: info.joinedAt ?? null
-    }));
+    return Object.entries(data).map(([agentId, info]) => {
+      const instanceId = resolveHeartbeatInstanceId(
+        agentId,
+        info.agent ?? null,
+        state
+      );
+      const bridge = instanceId ? bridges.find((candidate) => candidate.instanceId === instanceId) ?? null : null;
+      const presence = bridge?.status === "stale" || bridge?.lifecycle?.status === "bridge-stale" ? "bridge-stale" : bridge?.status === "running" ? "bridge-live" : "mcp-only";
+      const lastActivity = info.lastActivity ?? info.timestamp ?? null;
+      const idleBasis = bridge?.session?.idleSince ?? lastActivity;
+      return {
+        name: formatAgentLabel(agentId, info.agent ?? null),
+        instanceId,
+        presence,
+        lifecycle: bridge?.lifecycle?.status ?? null,
+        status: info.status ?? null,
+        lastActivity,
+        joinedAt: info.joinedAt ?? null,
+        idleSeconds: parseIsoAgeSeconds(idleBasis)
+      };
+    });
   } catch {
     return [];
   }
@@ -6095,12 +7341,21 @@ function collectBridges(repoRoot) {
       if (inst.bridgeMode !== "app-server") continue;
       const instanceId = id;
       const status = getBridgeStatus(stateDir, instanceId);
-      const bridgeState = loadBridgeState(stateDir, instanceId);
+      const persistedBridgeState = loadBridgeState(stateDir, instanceId);
+      const bridgeState = persistedBridgeState ?? inst.bridge ?? null;
       const age = getHeartbeatAge(stateDir, instanceId);
+      const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+      const lifecycle = bridgeState != null ? resolveBridgeLifecycleSnapshot(stateDir, instanceId, bridgeState) : null;
+      const session = bridgeState != null ? deriveCodexSessionState({
+        runtimeHeartbeat,
+        runtimeStateDir: bridgeState.runtimeStateDir ?? null
+      }) : null;
       bridges.push({
         instanceId: id,
         runtime: inst.runtime,
         status,
+        lifecycle,
+        session,
         pid: bridgeState?.pid ?? null,
         port: inst.port ?? null,
         heartbeatAge: age,
@@ -6108,22 +7363,22 @@ function collectBridges(repoRoot) {
       });
     }
   }
-  const tmpDir = path23.join(repoRoot, ".tmp");
-  if (fs25.existsSync(tmpDir)) {
+  const tmpDir = path28.join(repoRoot, ".tmp");
+  if (fs28.existsSync(tmpDir)) {
     try {
-      const dirs = fs25.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
+      const dirs = fs28.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
       for (const dir of dirs) {
-        const daemonPath = path23.join(tmpDir, dir, "bridge-daemon.json");
-        if (!fs25.existsSync(daemonPath)) continue;
+        const daemonPath = path28.join(tmpDir, dir, "bridge-daemon.json");
+        if (!fs28.existsSync(daemonPath)) continue;
         try {
-          const raw = fs25.readFileSync(daemonPath, "utf-8");
+          const raw = fs28.readFileSync(daemonPath, "utf-8");
           const daemon = JSON.parse(raw);
           const alreadyCovered = bridges.some(
             (b) => b.pid === daemon.pid && b.pid !== null
           );
           if (alreadyCovered) continue;
-          const agentFile = path23.join(tmpDir, dir, "agent-name.txt");
-          const agentName = fs25.existsSync(agentFile) ? fs25.readFileSync(agentFile, "utf-8").trim() : dir;
+          const agentFile = path28.join(tmpDir, dir, "agent-name.txt");
+          const agentName = fs28.existsSync(agentFile) ? fs28.readFileSync(agentFile, "utf-8").trim() : dir;
           const running = daemon.pid ? isProcessAlive(daemon.pid) : false;
           const portMatch = daemon.appServerUrl?.match(/:(\d+)/);
           const port = portMatch ? parseInt(portMatch[1], 10) : null;
@@ -6131,6 +7386,8 @@ function collectBridges(repoRoot) {
             instanceId: agentName,
             runtime: "codex",
             status: running ? "running" : "stale",
+            lifecycle: null,
+            session: null,
             pid: daemon.pid ?? null,
             port,
             heartbeatAge: null,
@@ -6177,6 +7434,12 @@ function collectWarnings(bridges, agents) {
         message: `Bridge ${bridge.instanceId} heartbeat stale (${bridge.heartbeatAge}s ago)`
       });
     }
+    if (bridge.lifecycle?.status === "degraded-no-thread") {
+      warnings.push({
+        level: "warn",
+        message: `Bridge ${bridge.instanceId} is degraded (no active thread)`
+      });
+    }
   }
   if (bridges.length === 0) {
     warnings.push({
@@ -6198,8 +7461,9 @@ function collectDashboardSnapshot(repoRoot, commsDirOverride) {
     repoRoot
   );
   const resolved = config;
-  const agents = collectAgents(resolved.commsDir);
+  const state = loadState(resolved.repoRoot);
   const bridges = collectBridges(resolved.repoRoot);
+  const agents = collectAgents(resolved.commsDir, state, bridges);
   const prs = collectPRs();
   const warnings = collectWarnings(bridges, agents);
   return {
@@ -6214,6 +7478,7 @@ function collectDashboardSnapshot(repoRoot, commsDirOverride) {
 }
 
 // src/commands/up.ts
+init_utils();
 var UP_HELP = `
 Usage:
   tap up [bridge-start options]
@@ -6228,6 +7493,18 @@ Examples:
   npx @hua-labs/tap up --no-auth
   npx @hua-labs/tap up --busy-mode wait
 `.trim();
+function summarizeLifecycle(snapshot) {
+  const ready = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "ready"
+  ).length;
+  const initializing = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "initializing"
+  ).length;
+  const degraded = snapshot.bridges.filter(
+    (bridge) => bridge.lifecycle?.status === "degraded-no-thread"
+  ).length;
+  return `${ready} ready, ${initializing} initializing, ${degraded} degraded`;
+}
 async function upCommand(args) {
   if (args.includes("--help") || args.includes("-h")) {
     log(UP_HELP);
@@ -6276,7 +7553,7 @@ async function upCommand(args) {
     ok: true,
     command: "up",
     code: "TAP_UP_OK",
-    message: `tap up: ${activeBridges} bridge(s) running`,
+    message: `tap up: ${activeBridges} bridge(s) running (${summarizeLifecycle(snapshot)})`,
     warnings: result.warnings,
     data: {
       ...result.data,
@@ -6286,6 +7563,7 @@ async function upCommand(args) {
 }
 
 // src/commands/down.ts
+init_utils();
 var DOWN_HELP = `
 Usage:
   tap down
@@ -6335,8 +7613,10 @@ async function downCommand(args) {
 }
 
 // src/commands/serve.ts
-import * as path24 from "path";
+import * as path29 from "path";
 import { spawn as spawn2 } from "child_process";
+init_utils();
+init_config();
 var SERVE_HELP = `
 Usage:
   tap serve [options]
@@ -6369,10 +7649,10 @@ async function serveCommand(args) {
   let commsDir;
   const commsDirIdx = args.indexOf("--comms-dir");
   if (commsDirIdx !== -1 && args[commsDirIdx + 1]) {
-    commsDir = path24.resolve(normalizeTapPath(args[commsDirIdx + 1]));
+    commsDir = path29.resolve(normalizeTapPath(args[commsDirIdx + 1]));
   }
   if (!commsDir && process.env.TAP_COMMS_DIR) {
-    commsDir = path24.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
+    commsDir = path29.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
   }
   if (!commsDir) {
     const state = loadState(repoRoot);
@@ -6412,9 +7692,9 @@ async function serveCommand(args) {
       TAP_COMMS_DIR: commsDir
     }
   });
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     child.on("error", (err) => {
-      resolve14({
+      resolve15({
         ok: false,
         command: "serve",
         code: "TAP_INTERNAL_ERROR",
@@ -6424,7 +7704,7 @@ async function serveCommand(args) {
       });
     });
     child.on("exit", (code) => {
-      resolve14({
+      resolve15({
         ok: code === 0,
         command: "serve",
         code: code === 0 ? "TAP_SERVE_OK" : "TAP_INTERNAL_ERROR",
@@ -6437,8 +7717,10 @@ async function serveCommand(args) {
 }
 
 // src/commands/init-worktree.ts
-import * as fs26 from "fs";
-import * as path25 from "path";
+init_config();
+init_utils();
+import * as fs29 from "fs";
+import * as path30 from "path";
 import { execSync as execSync5 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
@@ -6475,7 +7757,7 @@ function run(cmd, opts) {
   }
 }
 function toAbsolute(p) {
-  const resolved = path25.resolve(p);
+  const resolved = path30.resolve(p);
   return resolved.replace(/\\/g, "/");
 }
 function probeBun(candidate) {
@@ -6506,18 +7788,18 @@ function findBun() {
     }
   }
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const bunHome = path25.join(
+  const bunHome = path30.join(
     home,
     ".bun",
     "bin",
     process.platform === "win32" ? "bun.exe" : "bun"
   );
-  if (fs26.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
+  if (fs29.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
   return null;
 }
 function step1CreateWorktree(opts) {
   log("Step 1/9: Creating worktree...");
-  if (fs26.existsSync(opts.worktreePath)) {
+  if (fs29.existsSync(opts.worktreePath)) {
     logWarn(`Directory already exists: ${opts.worktreePath}`);
     try {
       run("git rev-parse --git-dir", { cwd: opts.worktreePath });
@@ -6579,22 +7861,22 @@ function step2MergeMain(opts, warnings) {
 }
 function step3CopyPermissions(opts, warnings) {
   log("Step 3/9: Copying permissions...");
-  const srcSettings = path25.join(
+  const srcSettings = path30.join(
     opts.repoRoot,
     ".claude",
     "settings.local.json"
   );
-  const destDir = path25.join(opts.worktreePath, ".claude");
-  const destSettings = path25.join(destDir, "settings.local.json");
-  if (!fs26.existsSync(srcSettings)) {
+  const destDir = path30.join(opts.worktreePath, ".claude");
+  const destSettings = path30.join(destDir, "settings.local.json");
+  if (!fs29.existsSync(srcSettings)) {
     warn(
       warnings,
       "No .claude/settings.local.json found in main repo. Skipping."
     );
     return;
   }
-  fs26.mkdirSync(destDir, { recursive: true });
-  fs26.copyFileSync(srcSettings, destSettings);
+  fs29.mkdirSync(destDir, { recursive: true });
+  fs29.copyFileSync(srcSettings, destSettings);
   logSuccess("Copied settings.local.json");
   try {
     run("git update-index --skip-worktree .claude/settings.local.json", {
@@ -6619,7 +7901,7 @@ function step4GenerateMcpJson(opts, warnings) {
   const wtAbs = toAbsolute(opts.worktreePath);
   const bunAbs = toAbsolute(bunPath);
   const commsAbs = toAbsolute(opts.commsDir);
-  const channelEntry = path25.join(
+  const channelEntry = path30.join(
     wtAbs,
     "packages/tap-plugin/channels/tap-comms.ts"
   );
@@ -6636,8 +7918,8 @@ function step4GenerateMcpJson(opts, warnings) {
       }
     }
   };
-  const mcpPath = path25.join(opts.worktreePath, ".mcp.json");
-  fs26.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
+  const mcpPath = path30.join(opts.worktreePath, ".mcp.json");
+  fs29.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
   logSuccess(`.mcp.json generated (absolute paths + cwd)`);
   log(`  bun: ${bunAbs}`);
   log(`  comms: ${commsAbs}`);
@@ -6675,16 +7957,16 @@ function step6BuildEslintPlugin(opts, warnings) {
 }
 function step7VerifyComms(opts, warnings) {
   log("Step 7/9: Verifying comms directory...");
-  if (!fs26.existsSync(opts.commsDir)) {
+  if (!fs29.existsSync(opts.commsDir)) {
     warn(warnings, `Comms directory not found: ${opts.commsDir}`);
     warn(warnings, "Create it or run: npx @hua-labs/tap init");
     return;
   }
   const requiredDirs = ["inbox", "findings", "reviews", "letters"];
   for (const dir of requiredDirs) {
-    const dirPath = path25.join(opts.commsDir, dir);
-    if (!fs26.existsSync(dirPath)) {
-      fs26.mkdirSync(dirPath, { recursive: true });
+    const dirPath = path30.join(opts.commsDir, dir);
+    if (!fs29.existsSync(dirPath)) {
+      fs29.mkdirSync(dirPath, { recursive: true });
       logSuccess(`Created ${dir}/`);
     }
   }
@@ -6743,17 +8025,17 @@ async function initWorktreeCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path25.basename(path25.resolve(worktreePath));
+  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path30.basename(path30.resolve(worktreePath));
   const base = typeof flags["base"] === "string" ? flags["base"] : "origin/main";
   const mission = typeof flags["mission"] === "string" ? flags["mission"] : void 0;
   const commsDir = typeof flags["comms-dir"] === "string" ? flags["comms-dir"] : config.commsDir;
   const skipInstall = flags["skip-install"] === true;
   const opts = {
-    worktreePath: path25.resolve(worktreePath),
+    worktreePath: path30.resolve(worktreePath),
     branch,
     base,
     mission,
-    commsDir: path25.resolve(commsDir),
+    commsDir: path30.resolve(commsDir),
     skipInstall,
     repoRoot
   };
@@ -6799,6 +8081,7 @@ async function initWorktreeCommand(args) {
 }
 
 // src/commands/dashboard.ts
+init_utils();
 function formatAge2(seconds) {
   if (seconds === null) return "-";
   if (seconds < 60) return `${seconds}s ago`;
@@ -6836,14 +8119,16 @@ function renderSnapshot(snapshot) {
   if (snapshot.agents.length === 0) {
     log("  (no heartbeats)");
   } else {
+    log(
+      `  ${"Agent".padEnd(18)} ${"Presence".padEnd(18)} ${"Lifecycle".padEnd(20)} ${"Idle"}`
+    );
+    log(
+      `  ${"\u2500".repeat(18)} ${"\u2500".repeat(18)} ${"\u2500".repeat(20)} ${"\u2500".repeat(12)}`
+    );
     for (const agent of snapshot.agents) {
-      const activity = agent.lastActivity ? formatAge2(
-        Math.floor(
-          (Date.now() - new Date(agent.lastActivity).getTime()) / 1e3
-        )
-      ) : "unknown";
-      const status = agent.status ?? "unknown";
-      log(`  ${agent.name.padEnd(12)} ${status.padEnd(10)} active ${activity}`);
+      log(
+        `  ${truncate(agent.name, 18).padEnd(18)} ${agent.presence.padEnd(18)} ${String(agent.lifecycle ?? "-").padEnd(20)} ${formatAge2(agent.idleSeconds)}`
+      );
     }
   }
   log("");
@@ -6852,15 +8137,16 @@ function renderSnapshot(snapshot) {
     log("  (none)");
   } else {
     log(
-      `  ${"Instance".padEnd(20)} ${"Status".padEnd(10)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Heartbeat"}`
+      `  ${"Instance".padEnd(20)} ${"Status".padEnd(10)} ${"Lifecycle".padEnd(20)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Heartbeat"}`
     );
     log(
-      `  ${"\u2500".repeat(20)} ${"\u2500".repeat(10)} ${"\u2500".repeat(8)} ${"\u2500".repeat(6)} ${"\u2500".repeat(12)}`
+      `  ${"\u2500".repeat(20)} ${"\u2500".repeat(10)} ${"\u2500".repeat(20)} ${"\u2500".repeat(8)} ${"\u2500".repeat(6)} ${"\u2500".repeat(12)}`
     );
     for (const b of snapshot.bridges) {
       const headlessTag = b.headless ? " [H]" : "";
+      const lifecycle = b.lifecycle?.status ?? "-";
       log(
-        `  ${truncate(b.instanceId + headlessTag, 20).padEnd(20)} ${formatStatus(b.status).padEnd(10)} ${(b.pid ? String(b.pid) : "-").padEnd(8)} ${(b.port ? String(b.port) : "-").padEnd(6)} ${formatAge2(b.heartbeatAge)}`
+        `  ${truncate(b.instanceId + headlessTag, 20).padEnd(20)} ${formatStatus(b.status).padEnd(10)} ${truncate(lifecycle, 20).padEnd(20)} ${(b.pid ? String(b.pid) : "-").padEnd(8)} ${(b.port ? String(b.port) : "-").padEnd(6)} ${formatAge2(b.heartbeatAge)}`
       );
     }
   }
@@ -6974,18 +8260,21 @@ async function dashboardCommand(args) {
 
 // src/commands/doctor.ts
 import {
-  existsSync as existsSync24,
-  mkdirSync as mkdirSync13,
-  readdirSync as readdirSync6,
-  readFileSync as readFileSync19,
-  renameSync as renameSync12,
+  existsSync as existsSync28,
+  mkdirSync as mkdirSync14,
+  readdirSync as readdirSync8,
+  readFileSync as readFileSync23,
+  renameSync as renameSync14,
   statSync as statSync3,
-  unlinkSync as unlinkSync6,
-  writeFileSync as writeFileSync14
+  unlinkSync as unlinkSync8,
+  writeFileSync as writeFileSync16
 } from "fs";
 import { homedir as homedir3 } from "os";
 import { spawnSync as spawnSync6 } from "child_process";
-import { dirname as dirname15, join as join23, resolve as resolve13 } from "path";
+import { dirname as dirname15, join as join27, resolve as resolve14 } from "path";
+init_config();
+init_drift_detector();
+init_utils();
 var PASS = "pass";
 var WARN = "warn";
 var FAIL = "fail";
@@ -6999,7 +8288,7 @@ var CODEX_ENV_DRIFT_KEYS = [
 ];
 var CODEX_SESSION_NEUTRAL_NAME = "<set-per-session>";
 function normalizeComparablePath2(value) {
-  return resolve13(value).replace(/\\/g, "/").toLowerCase();
+  return resolve14(value).replace(/\\/g, "/").toLowerCase();
 }
 function samePath(left, right) {
   return normalizeComparablePath2(left) === normalizeComparablePath2(right);
@@ -7017,10 +8306,10 @@ function appendWarningMessage(message, extra) {
   return message.includes(extra) ? message : `${message}; ${extra}`;
 }
 function findCodexConfigPath3() {
-  return join23(homedir3(), ".codex", "config.toml");
+  return join27(homedir3(), ".codex", "config.toml");
 }
 function canonicalizeTrustPath3(targetPath) {
-  let resolved = resolve13(targetPath).replace(/\//g, "\\");
+  let resolved = resolve14(targetPath).replace(/\//g, "\\");
   const driveRoot = /^[A-Za-z]:\\$/;
   if (!driveRoot.test(resolved)) {
     resolved = resolved.replace(/\\+$/g, "");
@@ -7032,10 +8321,10 @@ function trustSelector2(targetPath) {
 }
 function writeTomlAtomically(filePath, content) {
   const dir = dirname15(filePath);
-  mkdirSync13(dir, { recursive: true });
+  mkdirSync14(dir, { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
-  writeFileSync14(tmp, content, "utf-8");
-  renameSync12(tmp, filePath);
+  writeFileSync16(tmp, content, "utf-8");
+  renameSync14(tmp, filePath);
 }
 function hasInstalledCodexInstance(state) {
   return state ? Object.values(state.instances).some(
@@ -7043,7 +8332,7 @@ function hasInstalledCodexInstance(state) {
   ) : false;
 }
 function getCodexTrustTargets(repoRoot) {
-  return [...new Set([repoRoot, process.cwd()].map((value) => resolve13(value)))];
+  return [...new Set([repoRoot, process.cwd()].map((value) => resolve14(value)))];
 }
 function buildSessionNeutralCodexEnv(env) {
   const neutralEnv = {
@@ -7087,7 +8376,7 @@ function repairCodexConfig(repoRoot, commsDir) {
       spec.managed.issues[0] ?? "Unable to resolve the managed tap MCP server for Codex."
     );
   }
-  const existingContent = existsSync24(spec.configPath) ? readFileSync19(spec.configPath, "utf-8") : "";
+  const existingContent = existsSync28(spec.configPath) ? readFileSync23(spec.configPath, "utf-8") : "";
   const existingTapEnvTable = extractTomlTable(
     existingContent,
     "mcp_servers.tap.env"
@@ -7121,7 +8410,8 @@ function repairCodexConfig(repoRoot, commsDir) {
       "mcp_servers.tap",
       {
         command: spec.managed.command,
-        args: spec.managed.args
+        args: spec.managed.args,
+        approval_mode: "auto"
       },
       extractTomlTable(existingContent, "mcp_servers.tap")
     )
@@ -7153,22 +8443,22 @@ function repairCodexConfig(repoRoot, commsDir) {
   return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
 }
 function countFiles(dir, ext = ".md") {
-  if (!existsSync24(dir)) return 0;
+  if (!existsSync28(dir)) return 0;
   try {
-    return readdirSync6(dir).filter((f) => f.endsWith(ext)).length;
+    return readdirSync8(dir).filter((f) => f.endsWith(ext)).length;
   } catch {
     return 0;
   }
 }
 function recentFileCount(dir, withinMs) {
-  if (!existsSync24(dir)) return 0;
+  if (!existsSync28(dir)) return 0;
   const cutoff = Date.now() - withinMs;
   let count = 0;
   try {
-    for (const f of readdirSync6(dir)) {
+    for (const f of readdirSync8(dir)) {
       if (!f.endsWith(".md")) continue;
       try {
-        if (statSync3(join23(dir, f)).mtimeMs > cutoff) count++;
+        if (statSync3(join27(dir, f)).mtimeMs > cutoff) count++;
       } catch {
       }
     }
@@ -7177,19 +8467,19 @@ function recentFileCount(dir, withinMs) {
   return count;
 }
 function loadDoctorHeartbeatStore(commsDir) {
-  const heartbeatsPath = join23(commsDir, "heartbeats.json");
-  if (!existsSync24(heartbeatsPath)) return null;
+  const heartbeatsPath = join27(commsDir, "heartbeats.json");
+  if (!existsSync28(heartbeatsPath)) return null;
   try {
-    return JSON.parse(readFileSync19(heartbeatsPath, "utf-8"));
+    return JSON.parse(readFileSync23(heartbeatsPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveDoctorHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = join23(commsDir, "heartbeats.json");
+  const heartbeatsPath = join27(commsDir, "heartbeats.json");
   const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
-  writeFileSync14(tmp, JSON.stringify(store, null, 2), "utf-8");
-  renameSync12(tmp, heartbeatsPath);
+  writeFileSync16(tmp, JSON.stringify(store, null, 2), "utf-8");
+  renameSync14(tmp, heartbeatsPath);
 }
 function parseHeartbeatAgeMs(record, now) {
   const raw = record.lastActivity ?? record.timestamp;
@@ -7198,7 +8488,7 @@ function parseHeartbeatAgeMs(record, now) {
   if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
   return Math.max(0, now - parsed);
 }
-function resolveHeartbeatInstanceId(state, heartbeatId) {
+function resolveHeartbeatInstanceId2(state, heartbeatId) {
   if (!state) return null;
   if (state.instances[heartbeatId]) return heartbeatId;
   const hyphenated = heartbeatId.replace(/_/g, "-");
@@ -7214,7 +8504,7 @@ function collectStaleHeartbeatIds(commsDir, state, stateDir) {
   const stale = [];
   for (const [heartbeatId, heartbeat] of Object.entries(store)) {
     const ageMs = parseHeartbeatAgeMs(heartbeat, now);
-    const instanceId = resolveHeartbeatInstanceId(state, heartbeatId);
+    const instanceId = resolveHeartbeatInstanceId2(state, heartbeatId);
     const instance = instanceId ? state?.instances[instanceId] : null;
     const bridgeBacked = instance?.bridgeMode === "app-server";
     const bridgeRunning = bridgeBacked && instanceId ? isBridgeRunning(stateDir, instanceId) : false;
@@ -7252,10 +8542,10 @@ function checkComms(commsDir) {
   const checks = [];
   checks.push({
     name: "comms directory",
-    status: existsSync24(commsDir) ? PASS : FAIL,
-    message: existsSync24(commsDir) ? commsDir : `Not found: ${commsDir}`,
-    fix: existsSync24(commsDir) ? void 0 : () => {
-      mkdirSync13(commsDir, { recursive: true });
+    status: existsSync28(commsDir) ? PASS : FAIL,
+    message: existsSync28(commsDir) ? commsDir : `Not found: ${commsDir}`,
+    fix: existsSync28(commsDir) ? void 0 : () => {
+      mkdirSync14(commsDir, { recursive: true });
       return `Created ${commsDir}`;
     }
   });
@@ -7264,22 +8554,22 @@ function checkComms(commsDir) {
     ["reviews", false],
     ["findings", false]
   ]) {
-    const dir = join23(commsDir, subdir);
-    const exists = existsSync24(dir);
+    const dir = join27(commsDir, subdir);
+    const exists = existsSync28(dir);
     checks.push({
       name: `${subdir} directory`,
       status: exists ? PASS : required ? FAIL : WARN,
       message: exists ? subdir === "findings" ? `${countFiles(dir)} findings` : subdir === "inbox" ? `${countFiles(dir)} messages` : "exists" : `Missing${required ? "" : " (optional)"}`,
       fix: exists ? void 0 : () => {
-        mkdirSync13(dir, { recursive: true });
+        mkdirSync14(dir, { recursive: true });
         return `Created ${dir}`;
       }
     });
   }
-  const heartbeats = join23(commsDir, "heartbeats.json");
-  if (existsSync24(heartbeats)) {
+  const heartbeats = join27(commsDir, "heartbeats.json");
+  if (existsSync28(heartbeats)) {
     try {
-      const store = JSON.parse(readFileSync19(heartbeats, "utf-8"));
+      const store = JSON.parse(readFileSync23(heartbeats, "utf-8"));
       const agents = Object.keys(store);
       const now = Date.now();
       const active = agents.filter((a) => {
@@ -7393,9 +8683,9 @@ function checkInstances(repoRoot, stateDir, commsDir) {
               }
             }
           }
-          const pidPath = join23(stateDir, "pids", `bridge-${id}.json`);
+          const pidPath = join27(stateDir, "pids", `bridge-${id}.json`);
           try {
-            unlinkSync6(pidPath);
+            unlinkSync8(pidPath);
           } catch {
           }
           const currentState = loadState(repoRoot);
@@ -7455,8 +8745,8 @@ function checkInstances(repoRoot, stateDir, commsDir) {
 }
 function checkMessageLifecycle(commsDir) {
   const checks = [];
-  const inbox = join23(commsDir, "inbox");
-  if (!existsSync24(inbox)) {
+  const inbox = join27(commsDir, "inbox");
+  if (!existsSync28(inbox)) {
     checks.push({
       name: "message flow",
       status: FAIL,
@@ -7472,10 +8762,10 @@ function checkMessageLifecycle(commsDir) {
     status: recent10m > 0 ? PASS : total > 0 ? WARN : FAIL,
     message: `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`
   });
-  const receiptsPath = join23(commsDir, "receipts", "receipts.json");
-  if (existsSync24(receiptsPath)) {
+  const receiptsPath = join27(commsDir, "receipts", "receipts.json");
+  if (existsSync28(receiptsPath)) {
     try {
-      const receipts = JSON.parse(readFileSync19(receiptsPath, "utf-8"));
+      const receipts = JSON.parse(readFileSync23(receiptsPath, "utf-8"));
       const receiptCount = Object.keys(receipts).length;
       checks.push({
         name: "read receipts",
@@ -7494,8 +8784,8 @@ function checkMessageLifecycle(commsDir) {
 }
 function checkMcpServer(repoRoot) {
   const checks = [];
-  const mcpJson = join23(repoRoot, ".mcp.json");
-  if (!existsSync24(mcpJson)) {
+  const mcpJson = join27(repoRoot, ".mcp.json");
+  if (!existsSync28(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
@@ -7505,7 +8795,7 @@ function checkMcpServer(repoRoot) {
   }
   let config;
   try {
-    config = JSON.parse(readFileSync19(mcpJson, "utf-8"));
+    config = JSON.parse(readFileSync23(mcpJson, "utf-8"));
   } catch {
     checks.push({
       name: "MCP config (.mcp.json)",
@@ -7548,7 +8838,7 @@ function checkMcpServer(repoRoot) {
   });
   if (hasTapComms.command) {
     const cmd = hasTapComms.command;
-    let cmdAvailable = existsSync24(cmd);
+    let cmdAvailable = existsSync28(cmd);
     if (!cmdAvailable) {
       try {
         const result = spawnSync6(cmd, ["--version"], {
@@ -7570,8 +8860,8 @@ function checkMcpServer(repoRoot) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
-      status: existsSync24(mcpScript) ? PASS : FAIL,
-      message: existsSync24(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
+      status: existsSync28(mcpScript) ? PASS : FAIL,
+      message: existsSync28(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
     });
     if (mcpScript.endsWith(".mjs") && hasTapComms.command && !hasTapComms.command.includes("bun")) {
       checks.push({
@@ -7604,8 +8894,8 @@ function checkMcpServer(repoRoot) {
   } else {
     checks.push({
       name: "MCP TAP_COMMS_DIR",
-      status: existsSync24(envCommsDir) ? PASS : FAIL,
-      message: existsSync24(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
+      status: existsSync28(envCommsDir) ? PASS : FAIL,
+      message: existsSync28(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
     });
   }
   checks.push({
@@ -7622,7 +8912,7 @@ function checkCodexConfig(repoRoot, commsDir) {
   }
   const checks = [];
   const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
-  if (!existsSync24(spec.configPath)) {
+  if (!existsSync28(spec.configPath)) {
     checks.push({
       name: "MCP config (~/.codex/config.toml)",
       status: WARN,
@@ -7631,7 +8921,7 @@ function checkCodexConfig(repoRoot, commsDir) {
     });
     return checks;
   }
-  const content = readFileSync19(spec.configPath, "utf-8");
+  const content = readFileSync23(spec.configPath, "utf-8");
   const tapTable = extractTomlTable(content, "mcp_servers.tap");
   const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
   const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
@@ -7683,6 +8973,14 @@ function checkCodexConfig(repoRoot, commsDir) {
   if (typeof actualAgentId === "string" && actualAgentId.trim()) {
     issues.push(`concrete TAP_AGENT_ID persisted (${actualAgentId})`);
   }
+  if (tapTable) {
+    const actualApprovalMode = selectedMain.approval_mode;
+    if (typeof actualApprovalMode !== "string") {
+      issues.push("approval_mode missing (expected auto)");
+    } else if (actualApprovalMode !== "auto") {
+      issues.push(`approval_mode drift (${actualApprovalMode})`);
+    }
+  }
   for (const trustTarget of spec.trustTargets) {
     const trustTable = extractTomlTable(content, trustSelector2(trustTarget));
     if (!trustTable || !trustTable.includes('trust_level = "trusted"')) {
@@ -7707,8 +9005,8 @@ function checkCodexConfig(repoRoot, commsDir) {
 }
 function checkBridgeTurnHealth(repoRoot) {
   const checks = [];
-  const tmpDir = join23(repoRoot, ".tmp");
-  if (!existsSync24(tmpDir)) return checks;
+  const tmpDir = join27(repoRoot, ".tmp");
+  if (!existsSync28(tmpDir)) return checks;
   const state = loadState(repoRoot);
   const activeMatchers = /* @__PURE__ */ new Set();
   if (state) {
@@ -7721,7 +9019,7 @@ function checkBridgeTurnHealth(repoRoot) {
   }
   let dirs;
   try {
-    dirs = readdirSync6(tmpDir).filter((d) => {
+    dirs = readdirSync8(tmpDir).filter((d) => {
       if (!d.startsWith("codex-app-server-bridge")) return false;
       const suffix = d.replace("codex-app-server-bridge-", "");
       if (activeMatchers.size === 0) return true;
@@ -7734,11 +9032,11 @@ function checkBridgeTurnHealth(repoRoot) {
     return checks;
   }
   for (const dir of dirs) {
-    const heartbeatPath = join23(tmpDir, dir, "heartbeat.json");
-    if (!existsSync24(heartbeatPath)) continue;
+    const heartbeatPath = join27(tmpDir, dir, "heartbeat.json");
+    if (!existsSync28(heartbeatPath)) continue;
     let heartbeat;
     try {
-      heartbeat = JSON.parse(readFileSync19(heartbeatPath, "utf-8"));
+      heartbeat = JSON.parse(readFileSync23(heartbeatPath, "utf-8"));
     } catch {
       checks.push({
         name: `turn: ${dir}`,
@@ -7870,11 +9168,71 @@ async function doctorCommand(args) {
   const state = loadState(repoRoot);
   const commsDir = overrides.commsDir ? config.commsDir : state?.commsDir ?? config.commsDir;
   logHeader(`@hua-labs/tap doctor (v${version})${fixMode ? " --fix" : ""}`);
+  function checkConfigDrift() {
+    let driftResults;
+    try {
+      driftResults = checkAllDrift(config.stateDir, state);
+    } catch (err) {
+      return [
+        {
+          name: "drift:infrastructure",
+          status: "warn",
+          message: `Config drift check failed: ${err instanceof Error ? err.message : String(err)}`
+        }
+      ];
+    }
+    const checks = [];
+    for (const result of driftResults) {
+      for (const dc of result.checks) {
+        const check = {
+          name: `drift:${result.instanceId}:${dc.name}`,
+          status: dc.status === "ok" ? "pass" : dc.autoFixable ? "warn" : "fail",
+          message: dc.details ?? void 0
+        };
+        if (dc.autoFixable && dc.status !== "ok") {
+          check.fix = () => {
+            const {
+              loadInstanceConfig: loadInst,
+              saveInstanceConfig: saveInst
+            } = (init_instance_config(), __toCommonJS(instance_config_exports));
+            const {
+              computeFileHash: hashFile
+            } = (init_drift_detector(), __toCommonJS(drift_detector_exports));
+            const instConfig = loadInst(config.stateDir, result.instanceId);
+            if (!instConfig || !state) {
+              return `Skipped: instance config not found for ${result.instanceId}`;
+            }
+            const inst = state.instances[result.instanceId];
+            if (!inst) {
+              return `Skipped: instance not in state.json for ${result.instanceId}`;
+            }
+            inst.agentName = instConfig.agentName;
+            inst.port = instConfig.port;
+            inst.configHash = instConfig.configHash;
+            inst.configSourceFile = inst.configSourceFile || join27(config.stateDir, "instances", `${result.instanceId}.json`);
+            saveState(repoRoot, state);
+            if (inst.configPath && existsSync28(inst.configPath)) {
+              const currentHash = hashFile(inst.configPath);
+              if (instConfig.runtimeConfigHash !== currentHash) {
+                instConfig.runtimeConfigHash = currentHash;
+                instConfig.lastSyncedToRuntime = (/* @__PURE__ */ new Date()).toISOString();
+                saveInst(config.stateDir, instConfig);
+              }
+            }
+            return `Synced state.json + runtime hash for ${result.instanceId}`;
+          };
+        }
+        checks.push(check);
+      }
+    }
+    return checks;
+  }
   function runAllChecks() {
     const checks = [];
     checks.push(...checkComms(commsDir));
     checks.push(...checkStaleHeartbeats(repoRoot, commsDir, config.stateDir));
     checks.push(...checkInstances(repoRoot, config.stateDir, commsDir));
+    checks.push(...checkConfigDrift());
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
     checks.push(...checkCodexConfig(repoRoot, commsDir));
@@ -7885,6 +9243,7 @@ async function doctorCommand(args) {
   for (const section of [
     "Comms",
     "Instances",
+    "Config Drift",
     "Messages",
     "MCP",
     "Turns"
@@ -7903,6 +9262,7 @@ async function doctorCommand(args) {
       Instances: initialChecks.filter(
         (c) => c.name.startsWith("bridge:") || c.name.startsWith("instance:") || c.name === "tap state"
       ),
+      "Config Drift": initialChecks.filter((c) => c.name.startsWith("drift:")),
       Messages: initialChecks.filter(
         (c) => ["message flow", "read receipts"].includes(c.name)
       ),
@@ -7970,9 +9330,10 @@ async function doctorCommand(args) {
 }
 
 // src/commands/comms.ts
+init_utils();
 import { execSync as execSync6, spawnSync as spawnSync7 } from "child_process";
-import * as fs27 from "fs";
-import * as path26 from "path";
+import * as fs30 from "fs";
+import * as path31 from "path";
 var COMMS_HELP = `
 Usage:
   tap comms <subcommand>
@@ -7986,7 +9347,7 @@ Examples:
   npx @hua-labs/tap comms push
 `.trim();
 function isGitRepo(dir) {
-  return fs27.existsSync(path26.join(dir, ".git"));
+  return fs30.existsSync(path31.join(dir, ".git"));
 }
 function commsPull(commsDir) {
   logHeader("tap comms pull");
@@ -8134,6 +9495,7 @@ async function commsCommand(args) {
 }
 
 // src/commands/watch.ts
+init_utils();
 var WATCH_HELP = `
 Usage:
   tap watch [options]
@@ -8155,7 +9517,7 @@ Examples:
   npx @hua-labs/tap watch --stuck-threshold 120    # 2 min threshold
 `.trim();
 function delay2(ms) {
-  return new Promise((resolve14) => setTimeout(resolve14, ms));
+  return new Promise((resolve15) => setTimeout(resolve15, ms));
 }
 async function watchCommand(args) {
   const { flags } = parseArgs(args);
@@ -8244,8 +9606,8 @@ async function watchCommand(args) {
 import * as http from "http";
 
 // src/engine/missions.ts
-import * as fs28 from "fs";
-import * as path27 from "path";
+import * as fs31 from "fs";
+import * as path32 from "path";
 function parseStatus(raw) {
   const trimmed = raw.trim();
   if (trimmed.includes("active")) return "active";
@@ -8271,10 +9633,10 @@ function parseRow(line) {
   return { id: id.toUpperCase(), title, branch, status, owner };
 }
 function parseMissionsFile(repoRoot) {
-  const missionsPath = path27.join(repoRoot, "docs", "missions", "MISSIONS.md");
+  const missionsPath = path32.join(repoRoot, "docs", "missions", "MISSIONS.md");
   let content;
   try {
-    content = fs28.readFileSync(missionsPath, "utf-8");
+    content = fs31.readFileSync(missionsPath, "utf-8");
   } catch {
     return [];
   }
@@ -8348,6 +9710,8 @@ function fetchPrs(repoRoot) {
 }
 
 // src/commands/gui.ts
+init_config();
+init_utils();
 var GUI_HELP = `
 Usage:
   tap gui [options]
@@ -8369,7 +9733,7 @@ function esc(str) {
 }
 function buildHtml(snapshot, turnData) {
   const agentRows = snapshot.agents.map(
-    (a) => `<tr><td>${esc(a.name)}</td><td class="${a.status === "active" ? "ok" : "warn"}">${esc(a.status)}</td><td>${a.lastActivity ? esc(new Date(a.lastActivity).toLocaleTimeString()) : "-"}</td></tr>`
+    (a) => `<tr><td>${esc(a.name)}</td><td class="${a.presence === "bridge-live" ? "ok" : a.presence === "bridge-stale" ? "warn" : "off"}">${esc(a.presence)}</td><td>${esc(a.lifecycle ?? "-")}</td><td>${a.lastActivity ? esc(new Date(a.lastActivity).toLocaleTimeString()) : "-"}</td></tr>`
   ).join("\n");
   const bridgeRows = snapshot.bridges.map((b) => {
     const turn = turnData[b.instanceId];
@@ -8407,8 +9771,8 @@ function buildHtml(snapshot, turnData) {
 
 <h2>Agents</h2>
 <table>
-<tr><th>Name</th><th>Status</th><th>Last Activity</th></tr>
-${agentRows || '<tr><td colspan="3" class="off">No agents</td></tr>'}
+<tr><th>Name</th><th>Presence</th><th>Lifecycle</th><th>Last Activity</th></tr>
+${agentRows || '<tr><td colspan="4" class="off">No agents</td></tr>'}
 </table>
 
 <h2>Bridges</h2>
@@ -8664,10 +10028,10 @@ async function guiCommand(args) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(buildHtml(snapshot, turnData));
   });
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     server.on("error", (err) => {
       if (err.code === "EADDRINUSE") {
-        resolve14({
+        resolve15({
           ok: false,
           command: "gui",
           code: "TAP_PORT_IN_USE",
@@ -8676,7 +10040,7 @@ async function guiCommand(args) {
           data: {}
         });
       } else {
-        resolve14({
+        resolve15({
           ok: false,
           command: "gui",
           code: "TAP_GUI_ERROR",
@@ -8696,6 +10060,7 @@ async function guiCommand(args) {
 }
 
 // src/output.ts
+init_utils();
 function emitResult(result, jsonMode) {
   if (jsonMode) {
     console.log(JSON.stringify(result, null, 2));
@@ -8723,6 +10088,9 @@ function extractJsonFlag(args) {
   const cleanArgs = args.filter((a) => a !== "--json");
   return { jsonMode, cleanArgs };
 }
+
+// src/cli.ts
+init_utils();
 
 // src/cli-suggest.ts
 var COMMANDS = [

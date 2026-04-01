@@ -182,8 +182,13 @@ describe("bridgeCommand with initialized state", () => {
       path.join(runtimeStateDir, "heartbeat.json"),
       JSON.stringify({
         updatedAt: "2026-03-27T00:00:00.000Z",
+        connected: true,
+        initialized: true,
         threadId: "thread-active",
         threadCwd: tmpDir,
+        activeTurnId: "turn-active",
+        turnState: "active",
+        lastDispatchAt: "2026-03-27T00:00:00.000Z",
       }),
       "utf-8",
     );
@@ -203,10 +208,128 @@ describe("bridgeCommand with initialized state", () => {
     const result = await bridgeCommand(["status", "codex"]);
     expect(result.ok).toBe(true);
     expect(result.data).toMatchObject({
+      lifecycle: {
+        presence: "bridge-live",
+        status: "ready",
+      },
+      session: {
+        status: "active",
+        turnState: "active",
+        activeTurnId: "turn-active",
+      },
       threadId: "thread-active",
       threadCwd: tmpDir,
       savedThreadId: "thread-saved",
       savedThreadCwd: path.join(tmpDir, "..", "other"),
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("status marks a running bridge without an active thread as degraded-no-thread", async () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: {
+          url: "ws://127.0.0.1:4501",
+          pid: 4510,
+          managed: true,
+          healthy: true,
+          lastCheckedAt: "2026-03-27T00:00:00.000Z",
+          lastHealthyAt: "2026-03-27T00:00:00.000Z",
+          logPath: null,
+          manualCommand: "codex app-server --listen ws://127.0.0.1:4501",
+          auth: null,
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        connected: false,
+        initialized: true,
+        threadId: null,
+        threadCwd: null,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-saved",
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: tmpDir,
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      status: "running",
+      lifecycle: {
+        presence: "bridge-live",
+        status: "degraded-no-thread",
+      },
+      session: {
+        status: "disconnected",
+        turnState: "disconnected",
+      },
+      savedThreadId: "thread-saved",
+    });
+    expect(result.data.lifecycle.summary).toContain("saved thread only");
+    vi.restoreAllMocks();
+  });
+
+  it("status marks a fresh running bridge without heartbeat as initializing", async () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: null,
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      status: "running",
+      lifecycle: {
+        presence: "bridge-live",
+        status: "initializing",
+      },
+      session: {
+        status: "initializing",
+      },
     });
     vi.restoreAllMocks();
   });
@@ -658,6 +781,135 @@ describe("bridge start --all auto-clean", () => {
     ) as Record<string, unknown>;
     expect(heartbeats.wrapup).toBeUndefined();
     expect(heartbeats.fresh).toBeDefined();
+    vi.restoreAllMocks();
+  });
+});
+
+describe("bridge watch lifecycle awareness", () => {
+  beforeEach(() => {
+    const state = makeV2State({
+      codex: makeInstance("codex", { agentName: "솔" }),
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, ".tap-comms", "state.json"),
+      JSON.stringify(state, null, 2),
+      "utf-8",
+    );
+    fs.mkdirSync(path.join(tmpDir, "comms"), { recursive: true });
+  });
+
+  it("reports degraded-no-thread separately from healthy bridges", async () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: {
+          url: "ws://127.0.0.1:4501",
+          pid: 4510,
+          managed: true,
+          healthy: true,
+          lastCheckedAt: "2026-03-27T00:00:00.000Z",
+          lastHealthyAt: "2026-03-27T00:00:00.000Z",
+          logPath: null,
+          manualCommand: "codex app-server --listen ws://127.0.0.1:4501",
+          auth: null,
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        connected: false,
+        initialized: true,
+        threadId: null,
+        threadCwd: null,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-saved",
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: tmpDir,
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["watch"]);
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_BRIDGE_WATCH_OK");
+    expect(result.data).toMatchObject({
+      restarted: [],
+      cleaned: [],
+      initializing: [],
+      degraded: ["codex"],
+      healthy: [],
+    });
+    expect(result.message).toContain("Degraded: codex");
+    vi.restoreAllMocks();
+  });
+
+  it("reports initializing bridges separately from healthy bridges", async () => {
+    const runtimeStateDir = path.join(
+      tmpDir,
+      ".tmp",
+      "codex-app-server-bridge",
+    );
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    fs.mkdirSync(runtimeStateDir, { recursive: true });
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "bridge-codex.json"),
+      JSON.stringify({
+        pid: process.pid,
+        statePath: path.join(pidDir, "bridge-codex.json"),
+        lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir,
+        appServer: null,
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeStateDir, "heartbeat.json"),
+      JSON.stringify({
+        updatedAt: "2026-03-27T00:00:00.000Z",
+        connected: true,
+        initialized: false,
+        threadId: null,
+        threadCwd: null,
+      }),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["watch"]);
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_BRIDGE_WATCH_OK");
+    expect(result.data).toMatchObject({
+      restarted: [],
+      cleaned: [],
+      initializing: ["codex"],
+      degraded: [],
+      healthy: [],
+    });
+    expect(result.message).toContain("Initializing: codex");
     vi.restoreAllMocks();
   });
 });

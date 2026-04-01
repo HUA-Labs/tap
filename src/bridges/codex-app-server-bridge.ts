@@ -1,8 +1,8 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { main } from "../../../../scripts/codex-app-server-bridge.js";
+import { main } from "../../scripts/codex-app-server-bridge.js";
 
-export * from "../../../../scripts/codex-app-server-bridge.js";
+export * from "../../scripts/codex-app-server-bridge.js";
 
 function isDirectExecution(): boolean {
   const entry = process.argv[1];

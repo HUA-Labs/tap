@@ -28,14 +28,25 @@ if [[ -z "$MAIN_DIR" ]]; then
   exit 1
 fi
 
-CONFIG_FILE="${MAIN_DIR}/.tap-config"
-if [[ -f "$CONFIG_FILE" ]]; then
+CONFIG_HELPER="${MAIN_DIR}/scripts/lib/tap-config.sh"
+if [[ -f "$CONFIG_HELPER" ]]; then
   # shellcheck source=/dev/null
-  source "$CONFIG_FILE"
+  source "$CONFIG_HELPER"
+  tap_load_config "$MAIN_DIR"
 fi
 
-COMMS_DIR="${TAP_COMMS_DIR:-$(dirname "$MAIN_DIR")/project-comms}"
-MISSIONS_DIR="${TAP_MISSIONS_DIR:-${MAIN_DIR}/docs/missions}"
+if [[ -n "${TAP_COMMS_DIR_RESOLVED:-}" ]]; then
+  COMMS_DIR="$TAP_COMMS_DIR_RESOLVED"
+else
+  COMMS_DIR="${TAP_COMMS_DIR:-$(dirname "$MAIN_DIR")/project-comms}"
+fi
+
+if [[ -n "${TAP_MISSIONS_DIR_RESOLVED:-}" ]]; then
+  MISSIONS_DIR="$TAP_MISSIONS_DIR_RESOLVED"
+else
+  MISSIONS_DIR="${TAP_MISSIONS_DIR:-${MAIN_DIR}/docs/missions}"
+fi
+
 MISSIONS_FILE="${MISSIONS_DIR}/MISSIONS.md"
 
 if [[ ! -f "$MISSIONS_FILE" ]]; then

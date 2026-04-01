@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as http from "node:http";
-import {
-  APP_SERVER_READYZ_PATH,
-} from "../engine/bridge-app-server-health.js";
+import { APP_SERVER_READYZ_PATH } from "../engine/bridge-app-server-health.js";
 import {
   GATEWAY_READYZ_PATH,
   startGatewayServer,
@@ -102,6 +100,91 @@ afterEach(async () => {
     await closeServer(upstreamServer);
     upstreamServer = null;
   }
+});
+
+/**
+ * Send a raw HTTP request with an exact path (bypassing fetch URL normalization).
+ */
+function rawHttpGet(
+  port: number,
+  rawPath: string,
+): Promise<{ statusCode: number }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { hostname: "127.0.0.1", port, path: rawPath, method: "GET" },
+      (res) => resolve({ statusCode: res.statusCode ?? 0 }),
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+describe("auth gateway path traversal", () => {
+  it("rejects request with raw .. in path", async () => {
+    const upstreamPort = await startUpstreamReadyzServer(200);
+    const gatewayPort = await reservePort();
+    gatewayRuntime = await startGatewayServer({
+      listenUrl: `ws://127.0.0.1:${gatewayPort}`,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      token: "secret",
+    });
+
+    const res = await rawHttpGet(gatewayPort, "/../../../etc/passwd");
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects traversal to readyz via ..", async () => {
+    const upstreamPort = await startUpstreamReadyzServer(200);
+    const gatewayPort = await reservePort();
+    gatewayRuntime = await startGatewayServer({
+      listenUrl: `ws://127.0.0.1:${gatewayPort}`,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      token: "secret",
+    });
+
+    const res = await rawHttpGet(gatewayPort, "/foo/../readyz");
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects encoded .. traversal", async () => {
+    const upstreamPort = await startUpstreamReadyzServer(200);
+    const gatewayPort = await reservePort();
+    gatewayRuntime = await startGatewayServer({
+      listenUrl: `ws://127.0.0.1:${gatewayPort}`,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      token: "secret",
+    });
+
+    const res = await rawHttpGet(gatewayPort, "/..%2f..%2fetc%2fpasswd");
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects percent-encoded dot-segment bypass to readyz", async () => {
+    const upstreamPort = await startUpstreamReadyzServer(200);
+    const gatewayPort = await reservePort();
+    gatewayRuntime = await startGatewayServer({
+      listenUrl: `ws://127.0.0.1:${gatewayPort}`,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      token: "secret",
+    });
+
+    // %2e%2e normalizes to ".." — must be caught before URL parsing
+    const res = await rawHttpGet(gatewayPort, "/%2e%2e/readyz");
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("rejects mixed encoded dot-segment (.%2e)", async () => {
+    const upstreamPort = await startUpstreamReadyzServer(200);
+    const gatewayPort = await reservePort();
+    gatewayRuntime = await startGatewayServer({
+      listenUrl: `ws://127.0.0.1:${gatewayPort}`,
+      upstreamUrl: `ws://127.0.0.1:${upstreamPort}`,
+      token: "secret",
+    });
+
+    const res = await rawHttpGet(gatewayPort, "/.%2e/readyz");
+    expect(res.statusCode).toBe(404);
+  });
 });
 
 describe("auth gateway /readyz", () => {

@@ -1,11 +1,21 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { InstanceId, BridgeState, Platform } from "../types.js";
+import type {
+  BridgeLifecycleRecord,
+  BridgeState,
+  InstanceId,
+  Platform,
+} from "../types.js";
 
 import { isProcessAlive, terminateProcess } from "./bridge-process-control.js";
 import { cleanupHeadlessDispatch } from "./bridge-config.js";
-import { loadBridgeState, clearBridgeState } from "./bridge-state.js";
+import {
+  loadBridgeState,
+  saveBridgeState,
+  clearBridgeState,
+  transitionBridgeLifecycle,
+} from "./bridge-state.js";
 import {
   getBridgeRuntimeStateDir,
   startBridge,
@@ -18,18 +28,44 @@ export interface BridgeStopOptions {
   platform: Platform;
 }
 
-export async function stopBridge(options: BridgeStopOptions): Promise<boolean> {
+export interface BridgeStopResult {
+  stopped: boolean;
+  lifecycle: BridgeLifecycleRecord | null;
+}
+
+export async function stopBridge(
+  options: BridgeStopOptions,
+): Promise<BridgeStopResult> {
   const { instanceId, stateDir, platform } = options;
   const state = loadBridgeState(stateDir, instanceId);
 
   if (!state) {
-    return false;
+    return {
+      stopped: false,
+      lifecycle: null,
+    };
   }
+
+  const currentLifecycle = state.lifecycle ?? null;
 
   if (!isProcessAlive(state.pid)) {
     clearBridgeState(stateDir, instanceId);
-    return false;
+    return {
+      stopped: false,
+      lifecycle: transitionBridgeLifecycle(
+        currentLifecycle,
+        "crashed",
+        "bridge pid not alive",
+      ),
+    };
   }
+
+  state.lifecycle = transitionBridgeLifecycle(
+    currentLifecycle,
+    "stopping",
+    "bridge stop requested",
+  );
+  saveBridgeState(stateDir, instanceId, state);
 
   try {
     await terminateProcess(state.pid, platform);
@@ -38,7 +74,14 @@ export async function stopBridge(options: BridgeStopOptions): Promise<boolean> {
   }
 
   clearBridgeState(stateDir, instanceId);
-  return true;
+  return {
+    stopped: true,
+    lifecycle: transitionBridgeLifecycle(
+      state.lifecycle ?? currentLifecycle,
+      "stopped",
+      "bridge stopped",
+    ),
+  };
 }
 
 export interface RestartBridgeOptions extends BridgeStartOptions {
@@ -79,10 +122,11 @@ export async function restartBridge(
     cleanupHeadlessDispatch(path.join(options.commsDir, "inbox"), agentName);
   }
 
-  await stopBridge({ instanceId, stateDir, platform });
+  const stopResult = await stopBridge({ instanceId, stateDir, platform });
 
   return startBridge({
     ...options,
     processExistingMessages: true,
+    previousLifecycle: stopResult.lifecycle ?? options.previousLifecycle ?? null,
   });
 }

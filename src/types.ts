@@ -143,6 +143,25 @@ export interface AppServerState {
   auth?: AppServerAuthState | null;
 }
 
+export type PersistedBridgeLifecycleState =
+  | "spawning"
+  | "initializing"
+  | "ready"
+  | "degraded-no-thread"
+  | "degraded-no-bridge"
+  | "stopping"
+  | "stopped"
+  | "crashed";
+
+export interface BridgeLifecycleRecord {
+  state: PersistedBridgeLifecycleState;
+  since: string; // ISO
+  updatedAt: string; // ISO
+  lastTransitionAt: string; // ISO
+  lastTransitionReason: string | null;
+  restartCount: number;
+}
+
 export interface BridgeState {
   pid: number;
   statePath: string;
@@ -150,6 +169,7 @@ export interface BridgeState {
   appServer?: AppServerState | null;
   /** Instance-specific daemon state dir (thread/heartbeat/processed markers). */
   runtimeStateDir?: string | null;
+  lifecycle?: BridgeLifecycleRecord | null;
 }
 
 /** Runtime instance state. Supports multiple instances per runtime (e.g. codex-reviewer, codex-builder). */
@@ -167,12 +187,18 @@ export interface InstanceState {
   lastAppliedHash: string;
   lastVerifiedAt: string | null; // ISO
   bridge: BridgeState | null;
+  /** Persisted lifecycle summary even when no bridge pid file exists. */
+  bridgeLifecycle?: BridgeLifecycleRecord | null;
   /** Headless mode configuration. null = interactive (default). */
   headless: HeadlessConfig | null;
   /** Whether bridge manages its own app-server process. Saved for restart mode preservation. */
   manageAppServer?: boolean;
   /** Whether bridge runs without auth gateway. Saved for restart mode preservation. */
   noAuth?: boolean;
+  /** Stable hash of resolved config for drift detection (v3+). */
+  configHash?: string;
+  /** Path to the instance config file (v3+). */
+  configSourceFile?: string;
   warnings: string[];
 }
 

@@ -23,6 +23,10 @@ import {
   findNextAvailableAppServerPort,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
+import {
+  createInstanceConfig,
+  saveInstanceConfig,
+} from "../config/instance-config.js";
 import type {
   RuntimeName,
   BridgeState,
@@ -218,6 +222,26 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
         agentName: resolvedAgentName,
       });
       saveState(repoRoot, updatedState);
+
+      // Sync instance config if it exists (Phase 1-2)
+      const { config: cfg } = resolveConfig({}, repoRoot);
+      try {
+        const {
+          loadInstanceConfig: loadInstCfg,
+          updateInstanceConfig: updateInstCfg,
+          saveInstanceConfig: saveInstCfg,
+        } = await import("../config/instance-config.js");
+        const existing = loadInstCfg(cfg.stateDir, instanceId);
+        if (existing) {
+          const updated = updateInstCfg(existing, {
+            agentName: resolvedAgentName,
+          });
+          saveInstCfg(cfg.stateDir, updated);
+        }
+      } catch {
+        // instance config sync failed — non-fatal
+      }
+
       return {
         ok: true,
         command: "add",
@@ -380,6 +404,9 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     );
   }
 
+  // Resolve config for bridge + instance config
+  const { config: resolvedCfg } = resolveConfig({}, repoRoot);
+
   // 7. Start bridge if needed (app-server mode only)
   let bridge: BridgeState | null = null;
   let effectivePort = port;
@@ -389,10 +416,9 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       logWarn("Bridge script not found. Bridge not started.");
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
-      const { config: resolvedCfg } = resolveConfig({}, repoRoot);
       // Auto-assign a free port for managed codex instances without --port
       if (effectivePort == null && runtime === "codex") {
-        const currentState = loadState(repoRoot);
+        const currentState = loadState(repoRoot) ?? state;
         effectivePort = await findNextAvailableAppServerPort(
           currentState,
           resolvedCfg.appServerUrl,
@@ -428,7 +454,54 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     }
   }
 
-  // 8. Save state
+  // 8. Create/update instance config (source-of-truth — Phase 1-2)
+  // Build the actual appServerUrl with the effective port (may differ from default)
+  let effectiveAppServerUrl = resolvedCfg.appServerUrl;
+  if (effectivePort != null) {
+    try {
+      const parsed = new URL(resolvedCfg.appServerUrl);
+      parsed.port = String(effectivePort);
+      effectiveAppServerUrl = parsed.toString().replace(/\/$/, "");
+    } catch {
+      // URL parse failed — use base URL as-is
+    }
+  }
+  // Map headless role to permission role
+  const permRole =
+    roleArg === "reviewer"
+      ? ("reviewer" as const)
+      : headlessFlag
+        ? ("implementer" as const) // non-reviewer headless agents get workspace-write
+        : undefined;
+  const instConfig = createInstanceConfig({
+    instanceId,
+    runtime,
+    agentName: resolvedAgentName,
+    agentId: null,
+    port: effectivePort,
+    appServerUrl: effectiveAppServerUrl,
+    commsDir: ctx.commsDir,
+    stateDir: ctx.stateDir,
+    repoRoot,
+    role: permRole,
+  });
+  // Baseline runtime config hash so drift detection works from the start
+  if (probe.configPath) {
+    try {
+      const { computeFileHash } = await import("../config/drift-detector.js");
+      const runtimeHash = computeFileHash(probe.configPath);
+      if (runtimeHash) {
+        instConfig.runtimeConfigHash = runtimeHash;
+        instConfig.lastSyncedToRuntime = new Date().toISOString();
+      }
+    } catch {
+      // non-fatal — hash will be backfilled by doctor --fix
+    }
+  }
+  const instConfigPath = saveInstanceConfig(ctx.stateDir, instConfig);
+  logSuccess(`Instance config: ${instConfigPath}`);
+
+  // 9. Save state
   const instanceState = {
     instanceId,
     runtime,
@@ -446,6 +519,8 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     manageAppServer: runtime === "codex",
     noAuth: false,
     headless,
+    configHash: instConfig.configHash,
+    configSourceFile: instConfigPath,
     warnings: Array.from(new Set([...result.warnings, ...verify.warnings])),
   };
 

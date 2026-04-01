@@ -1,8 +1,21 @@
 // src/bridges/codex-app-server-bridge.ts
-import { pathToFileURL as pathToFileURL3 } from "url";
-import { resolve as resolve6 } from "path";
+import { pathToFileURL as pathToFileURL2 } from "url";
+import { resolve as resolve2 } from "path";
 
-// ../../scripts/bridge/bridge-types.ts
+// scripts/codex-app-server-bridge.ts
+import { createHash } from "crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "fs";
+import { isAbsolute, join, resolve } from "path";
+import { pathToFileURL } from "url";
 var DEFAULT_AGENT = String.fromCharCode(50728);
 var DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
 var AUTH_SUBPROTOCOL_PREFIX = "tap-auth-";
@@ -20,61 +33,6 @@ var HEADLESS_WARMUP_PROMPT = [
 var HEADLESS_WARMUP_TIMEOUT_MS = 3e4;
 var TURN_COMPLETION_POLL_MS = 250;
 var TURN_COMPLETION_REFRESH_MS = 1e3;
-var HEADLESS_SKIP_PATTERNS = [
-  /리뷰\s*요청/,
-  /review[- ]?request/i,
-  /재리뷰/,
-  /re-?review/i
-];
-var COMMS_HEARTBEAT_LOCK_TIMEOUT_MS = 2e3;
-var COMMS_LOCK_STALE_AGE_MS = 1e4;
-var STALE_TURN_MS = 5 * 60 * 1e3;
-
-// ../../scripts/bridge/bridge-routing.ts
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
-
-// ../tap-plugin/channels/tap-identity.ts
-var BROADCAST_RECIPIENTS = /* @__PURE__ */ new Set(["\uC804\uCCB4", "all"]);
-function trimAddress(value) {
-  return value?.trim() ?? "";
-}
-function canonicalizeAgentId(value) {
-  return trimAddress(value).replace(/-/g, "_");
-}
-function isBroadcastRecipient(value) {
-  return BROADCAST_RECIPIENTS.has(trimAddress(value));
-}
-function sameRoutingAddress(left, right) {
-  const normalizedLeft = trimAddress(left);
-  const normalizedRight = trimAddress(right);
-  if (!normalizedLeft || !normalizedRight) {
-    return false;
-  }
-  if (isBroadcastRecipient(normalizedLeft) && isBroadcastRecipient(normalizedRight)) {
-    return true;
-  }
-  return normalizedLeft === normalizedRight || canonicalizeAgentId(normalizedLeft) === canonicalizeAgentId(normalizedRight);
-}
-function matchesAgentRecipient(recipient, agentId, agentName) {
-  const normalizedRecipient = trimAddress(recipient);
-  if (!normalizedRecipient) {
-    return false;
-  }
-  return isBroadcastRecipient(normalizedRecipient) || sameRoutingAddress(normalizedRecipient, agentId) || normalizedRecipient === trimAddress(agentName);
-}
-function isOwnMessageAddress(sender, agentId, agentName) {
-  const normalizedSender = trimAddress(sender);
-  if (!normalizedSender) {
-    return false;
-  }
-  return sameRoutingAddress(normalizedSender, agentId) || normalizedSender === trimAddress(agentName);
-}
-
-// ../../scripts/bridge/bridge-routing.ts
-function canonicalize(id) {
-  return canonicalizeAgentId(id);
-}
 function normalizeThreadCwd(cwd) {
   return resolve(cwd).replace(/\\/g, "/").toLowerCase();
 }
@@ -101,170 +59,6 @@ function chooseLoadedThreadForCwd(cwd, threads) {
   });
   return matching[0] ?? null;
 }
-function normalizeAgentToken(value) {
-  const normalized = value?.trim();
-  if (!normalized || PLACEHOLDER_AGENT_VALUES.has(normalized)) {
-    return null;
-  }
-  return canonicalize(normalized);
-}
-function resolveAgentId(preferredAgentName) {
-  return normalizeAgentToken(process.env.TAP_AGENT_ID) ?? normalizeAgentToken(preferredAgentName) ?? "unknown";
-}
-function resolveAgentName(preferredAgentName, stateDir) {
-  if (preferredAgentName?.trim()) {
-    return preferredAgentName.trim();
-  }
-  const agentFile = join(stateDir, "agent-name.txt");
-  if (existsSync(agentFile)) {
-    const candidate = readFileSync(agentFile, "utf8").trim();
-    if (candidate) {
-      return candidate;
-    }
-  }
-  return DEFAULT_AGENT;
-}
-function resolveCurrentAgentName(agentId, fallbackAgentName, heartbeats) {
-  const currentName = heartbeats[agentId]?.agent?.trim();
-  if (currentName) {
-    return currentName;
-  }
-  for (const heartbeat of Object.values(heartbeats)) {
-    if (heartbeat.id?.trim() === agentId && heartbeat.agent?.trim()) {
-      return heartbeat.agent.trim();
-    }
-  }
-  return fallbackAgentName;
-}
-function resolveAddressLabel(address, heartbeats) {
-  const normalized = address.trim();
-  if (!normalized || normalized === "\uC804\uCCB4" || normalized === "all") {
-    return address;
-  }
-  const direct = heartbeats[normalized];
-  if (direct?.agent?.trim()) {
-    return formatAgentLabel(normalized, direct.agent);
-  }
-  for (const [agentId, heartbeat] of Object.entries(heartbeats)) {
-    if (heartbeat.agent?.trim() === normalized) {
-      return formatAgentLabel(agentId, heartbeat.agent);
-    }
-  }
-  return normalized;
-}
-function persistAgentName(stateDir, agentName) {
-  writeFileSync(join(stateDir, "agent-name.txt"), `${agentName}
-`, "utf8");
-}
-function formatAgentLabel(agentIdOrName, displayName) {
-  const normalizedId = agentIdOrName.trim();
-  const normalizedName = displayName?.trim();
-  if (!normalizedId) {
-    return normalizedName ?? agentIdOrName;
-  }
-  if (!normalizedName || normalizedName === normalizedId) {
-    return normalizedId;
-  }
-  return `${normalizedName} [${normalizedId}]`;
-}
-function refreshAgentIdentity(options, heartbeats) {
-  const nextAgentName = resolveCurrentAgentName(
-    options.agentId,
-    options.agentName,
-    heartbeats
-  );
-  if (nextAgentName !== options.agentName) {
-    persistAgentName(options.stateDir, nextAgentName);
-  }
-  return nextAgentName;
-}
-function recipientMatchesAgent(recipient, agentId, agentName) {
-  return matchesAgentRecipient(recipient, agentId, agentName);
-}
-function isOwnMessageSender(sender, agentId, agentName) {
-  return isOwnMessageAddress(sender, agentId, agentName);
-}
-function isTurnStuckOnApproval(activeFlags) {
-  return activeFlags.includes("waitingOnApproval");
-}
-function isTurnStale(turnStartedAt, nowMs = Date.now()) {
-  if (!turnStartedAt) return false;
-  return nowMs - new Date(turnStartedAt).getTime() > STALE_TURN_MS;
-}
-function shouldRetrySteerAsStart(error) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message.toLowerCase();
-  return message.includes("no active turn") || message.includes("expectedturnid") || message.includes("turn/steer failed") && (message.includes("active turn") || message.includes("not found"));
-}
-function parseBridgeFrontmatter(content) {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return null;
-  const fields = {};
-  for (const line of match[1].split("\n")) {
-    const kv = line.match(/^(\w+):\s*(.+)$/);
-    if (kv) fields[kv[1]] = kv[2].trim();
-  }
-  if (!fields.from || !fields.to) return null;
-  return {
-    sender: fields.from,
-    recipient: fields.to,
-    subject: fields.subject ?? ""
-  };
-}
-function stripBridgeFrontmatter(content) {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n*/, "");
-}
-function getInboxRoute(fileName, body) {
-  if (body) {
-    const fm = parseBridgeFrontmatter(body);
-    if (fm) return fm;
-  }
-  return getInboxRouteFromFilename(fileName);
-}
-function getInboxRouteFromFilename(fileName) {
-  const stem = fileName.replace(/\.md$/i, "");
-  const parts = stem.split("-");
-  let offset = 0;
-  if (parts[0] && /^\d{8}$/.test(parts[0])) {
-    offset = 1;
-  }
-  return {
-    sender: parts[offset] ?? "",
-    recipient: parts[offset + 1] ?? "",
-    subject: parts.slice(offset + 2).join("-")
-  };
-}
-
-// ../../scripts/bridge/bridge-config.ts
-import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync3 } from "fs";
-import { isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "path";
-
-// src/config/resolve.ts
-import * as fs from "fs";
-import * as path from "path";
-function normalizeTapPath(input) {
-  const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
-  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
-    return trimmed;
-  }
-  if (process.platform === "win32") {
-    const match = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
-    if (match) {
-      return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, "\\")}`;
-    }
-  }
-  return trimmed;
-}
-
-// ../../scripts/bridge/bridge-config.ts
-function ensureDir(target) {
-  if (!existsSync3(target)) {
-    mkdirSync(target, { recursive: true });
-  }
-  return resolve3(target);
-}
 function printHelp() {
   console.log(`Codex App Server bridge
 
@@ -286,7 +80,6 @@ Options:
   --app-server-url=<ws-url>
   --gateway-token-file=<path>
   --busy-mode=wait|steer
-  --log-level=debug|info|warn|error
   --thread-id=<id>
   --ephemeral
   --help
@@ -445,42 +238,50 @@ function parseArgs(argv) {
       }
       continue;
     }
-    if (flag.startsWith("--log-level")) {
-      const value = readFlagValue(argv, index, "--log-level");
-      if (value !== "debug" && value !== "info" && value !== "warn" && value !== "error") {
-        throw new Error(`Invalid --log-level: ${value}`);
-      }
-      parsed.logLevel = value;
-      if (consumesNext) {
-        index += 1;
-      }
-      continue;
-    }
     throw new Error(`Unknown argument: ${flag}`);
   }
   return parsed;
 }
+function timestamp() {
+  return (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").replace("Z", " UTC");
+}
+function logStatus(message) {
+  console.log(`[${timestamp()}] ${message}`);
+}
+function ensureDir(target) {
+  if (!existsSync(target)) {
+    mkdirSync(target, { recursive: true });
+  }
+  return resolve(target);
+}
+function convertTapPath(input) {
+  const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (/^[A-Za-z]:\\/.test(trimmed)) {
+    return trimmed;
+  }
+  const match = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
+  if (match) {
+    return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, "\\")}`;
+  }
+  return trimmed;
+}
 function resolveRepoRoot(explicit) {
   if (explicit) {
-    return resolve3(explicit);
+    return resolve(explicit);
   }
   return process.cwd();
 }
-function resolveTapConfigPath(repoRoot, input) {
-  const converted = normalizeTapPath(input);
-  return isAbsolute2(converted) ? resolve3(converted) : resolve3(repoRoot, converted);
-}
 function resolveCommsDir(repoRoot, explicit) {
   if (explicit) {
-    return resolve3(normalizeTapPath(explicit));
+    return resolve(convertTapPath(explicit));
   }
-  const tapConfigPath = join3(repoRoot, ".tap-config");
-  if (!existsSync3(tapConfigPath)) {
+  const tapConfigPath = join(repoRoot, ".tap-config");
+  if (!existsSync(tapConfigPath)) {
     throw new Error(
       "Unable to resolve comms directory. Pass --comms-dir explicitly."
     );
   }
-  const configText = readFileSync3(tapConfigPath, "utf8");
+  const configText = readFileSync(tapConfigPath, "utf8");
   const match = configText.match(/^TAP_COMMS_DIR="?(.*?)"?$/m);
   if (!match?.[1]) {
     throw new Error(
@@ -501,195 +302,352 @@ function resolvePreferredAgentName(requested) {
   }
   return null;
 }
+function normalizeAgentToken(value) {
+  const normalized = value?.trim();
+  if (!normalized || PLACEHOLDER_AGENT_VALUES.has(normalized)) {
+    return null;
+  }
+  return normalized.replace(/-/g, "_");
+}
+function resolveAgentId(preferredAgentName) {
+  return normalizeAgentToken(process.env.TAP_AGENT_ID) ?? normalizeAgentToken(preferredAgentName) ?? "unknown";
+}
 function sanitizeStateSegment(agentName) {
   const normalized = agentName.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").replace(/[. ]+$/g, "");
   return normalized || "agent";
 }
 function buildDefaultStateDir(repoRoot, preferredAgentName) {
   const suffix = preferredAgentName?.trim() ? `-${sanitizeStateSegment(preferredAgentName)}` : "";
-  return resolve3(join3(repoRoot, ".tmp", `codex-app-server-bridge${suffix}`));
+  return resolve(join(repoRoot, ".tmp", `codex-app-server-bridge${suffix}`));
 }
 function resolveStateDir(repoRoot, explicit, preferredAgentName) {
-  const root = explicit ? resolve3(explicit) : buildDefaultStateDir(repoRoot, preferredAgentName);
+  const root = explicit ? resolve(explicit) : buildDefaultStateDir(repoRoot, preferredAgentName);
   ensureDir(root);
-  ensureDir(join3(root, "processed"));
-  ensureDir(join3(root, "logs"));
+  ensureDir(join(root, "processed"));
+  ensureDir(join(root, "logs"));
   return root;
 }
+function resolveAgentName(preferredAgentName, stateDir) {
+  if (preferredAgentName?.trim()) {
+    return preferredAgentName.trim();
+  }
+  const agentFile = join(stateDir, "agent-name.txt");
+  if (existsSync(agentFile)) {
+    const candidate = readFileSync(agentFile, "utf8").trim();
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return DEFAULT_AGENT;
+}
+function persistAgentName(stateDir, agentName) {
+  writeFileSync(join(stateDir, "agent-name.txt"), `${agentName}
+`, "utf8");
+}
+function sanitizeErrorForPersistence(error) {
+  if (!error) return null;
+  return error.replace(/([?&])tap_token=[^\s&)"'}]+/gi, "$1tap_token=***").replace(/"tap_token"\s*:\s*"[^"]*"/g, '"tap_token":"***"').replace(/tap-auth-[A-Za-z0-9_-]+/g, "tap-auth-***").replace(/Bearer\s+[A-Za-z0-9_.-]+/gi, "Bearer ***");
+}
 function readGatewayTokenFile(tokenFile) {
-  const token = readFileSync3(tokenFile, "utf8").trim();
+  const token = readFileSync(tokenFile, "utf8").trim();
   if (!token) {
     throw new Error(`Gateway token file is empty: ${tokenFile}`);
   }
   return token;
 }
-function buildOptions(argv) {
-  const parsed = parseArgs(argv);
-  const repoRoot = resolveRepoRoot(parsed.repoRoot);
-  const commsDir = resolveCommsDir(repoRoot, parsed.commsDir);
-  const preferredAgentName = resolvePreferredAgentName(parsed.agentName);
-  const stateDir = resolveStateDir(
-    repoRoot,
-    parsed.stateDir,
-    preferredAgentName
-  );
-  const agentName = resolveAgentName(preferredAgentName, stateDir);
-  const agentId = resolveAgentId(agentName);
-  persistAgentName(stateDir, agentName);
-  const gatewayTokenFile = parsed.gatewayTokenFile?.trim() || process.env.TAP_GATEWAY_TOKEN_FILE?.trim() || null;
-  const appServerUrl = parsed.appServerUrl?.trim() || process.env.CODEX_APP_SERVER_URL || DEFAULT_APP_SERVER_URL;
-  return {
-    repoRoot,
-    commsDir,
-    agentId,
-    stateDir,
-    agentName,
-    pollSeconds: parsed.pollSeconds ?? 5,
-    reconnectSeconds: parsed.reconnectSeconds ?? 5,
-    messageLookbackMinutes: parsed.messageLookbackMinutes ?? 10,
-    processExistingMessages: parsed.processExistingMessages,
-    dryRun: parsed.dryRun,
-    runOnce: parsed.runOnce,
-    waitAfterDispatchSeconds: parsed.waitAfterDispatchSeconds ?? 0,
-    appServerUrl,
-    connectAppServerUrl: appServerUrl,
-    gatewayToken: gatewayTokenFile ? readGatewayTokenFile(gatewayTokenFile) : null,
-    gatewayTokenFile,
-    busyMode: parsed.busyMode ?? "steer",
-    logLevel: parsed.logLevel ?? "info",
-    threadId: parsed.threadId?.trim() || null,
-    ephemeral: parsed.ephemeral
-  };
+function resolveTapConfigPath(repoRoot, input) {
+  const converted = convertTapPath(input);
+  return isAbsolute(converted) ? resolve(converted) : resolve(repoRoot, converted);
 }
-
-// ../../scripts/bridge/bridge-candidates.ts
-import { createHash } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync, statSync } from "fs";
-import { join as join4 } from "path";
-
-// ../../scripts/bridge/bridge-logging.ts
-var LOG_LEVEL_PRIORITY = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40
-};
-var currentLogLevel = "info";
-function configureBridgeLogging(level) {
-  currentLogLevel = level;
-}
-function shouldLog(level) {
-  return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[currentLogLevel];
-}
-function formatValue(value) {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
+function readThreadState(stateDir) {
+  const threadPath = join(stateDir, "thread.json");
+  if (!existsSync(threadPath)) {
+    return null;
   }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (value === null) {
-    return "null";
-  }
-  return JSON.stringify(value);
-}
-function formatContext(context) {
-  if (!context) {
-    return "";
-  }
-  const entries = Object.entries(context).filter(
-    ([, value]) => value !== void 0
-  );
-  if (entries.length === 0) {
-    return "";
-  }
-  return ` ${entries.map(([key, value]) => `${key}=${formatValue(value)}`).join(" ")}`;
-}
-function logBridge(level, message, context) {
-  if (!shouldLog(level)) {
-    return;
-  }
-  const ts = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").replace("Z", " UTC");
-  const line = `[${ts}] ${level.toUpperCase()} ${message}${formatContext(context)}`;
-  if (level === "error") {
-    console.error(line);
-    return;
-  }
-  if (level === "warn") {
-    console.warn(line);
-    return;
-  }
-  console.log(line);
-}
-function createBridgeLogger(scope) {
-  const scopedMessage = (message) => `[${scope}] ${message}`;
-  return {
-    debug(message, context) {
-      logBridge("debug", scopedMessage(message), context);
-    },
-    info(message, context) {
-      logBridge("info", scopedMessage(message), context);
-    },
-    warn(message, context) {
-      logBridge("warn", scopedMessage(message), context);
-    },
-    error(message, context) {
-      logBridge("error", scopedMessage(message), context);
+  try {
+    const parsed = JSON.parse(
+      readFileSync(threadPath, "utf8")
+    );
+    if (parsed.threadId) {
+      return parsed;
     }
+  } catch {
+    return null;
+  }
+  return null;
+}
+function readHeartbeatState(stateDir) {
+  const heartbeatPath = join(stateDir, "heartbeat.json");
+  if (!existsSync(heartbeatPath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(readFileSync(heartbeatPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function parseUpdatedAt(value) {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function appServerUrlMatches(expectedAppServerUrl, actualAppServerUrl) {
+  return actualAppServerUrl?.trim() === expectedAppServerUrl;
+}
+function hasValidHeartbeatThreadCwd(threadCwd) {
+  const normalized = threadCwd?.trim();
+  if (!normalized) {
+    return false;
+  }
+  return isAbsolute(normalized) || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.startsWith("\\\\");
+}
+function loadResumableThreadState(stateDir, fallbackAppServerUrl) {
+  const savedThread = readThreadState(stateDir);
+  const heartbeat = readHeartbeatState(stateDir);
+  const heartbeatThreadId = heartbeat?.threadId?.trim();
+  if (!heartbeatThreadId) {
+    return savedThread;
+  }
+  if (!appServerUrlMatches(fallbackAppServerUrl, heartbeat?.appServerUrl)) {
+    return savedThread;
+  }
+  if (!hasValidHeartbeatThreadCwd(heartbeat?.threadCwd)) {
+    return savedThread;
+  }
+  const heartbeatBackedThread = {
+    threadId: heartbeatThreadId,
+    updatedAt: heartbeat?.updatedAt ?? savedThread?.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+    appServerUrl: heartbeat?.appServerUrl || savedThread?.appServerUrl || fallbackAppServerUrl,
+    ephemeral: savedThread?.ephemeral ?? false,
+    cwd: heartbeat?.threadCwd ?? (savedThread?.threadId === heartbeatThreadId ? savedThread.cwd ?? null : null)
+  };
+  let preferred = savedThread;
+  if (!savedThread?.threadId) {
+    preferred = heartbeatBackedThread;
+  } else if (savedThread.threadId === heartbeatThreadId) {
+    preferred = {
+      ...savedThread,
+      updatedAt: heartbeatBackedThread.updatedAt ?? savedThread.updatedAt,
+      appServerUrl: heartbeatBackedThread.appServerUrl,
+      cwd: heartbeatBackedThread.cwd ?? savedThread.cwd ?? null
+    };
+  } else if (parseUpdatedAt(heartbeat?.updatedAt) > parseUpdatedAt(savedThread.updatedAt)) {
+    preferred = heartbeatBackedThread;
+  }
+  return preferred;
+}
+function persistThreadState(stateDir, threadId, appServerUrl, ephemeral, cwd) {
+  const payload = {
+    threadId,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    appServerUrl,
+    ephemeral,
+    cwd
+  };
+  writeFileSync(
+    join(stateDir, "thread.json"),
+    `${JSON.stringify(payload, null, 2)}
+`,
+    "utf8"
+  );
+}
+function getGeneralInboxCutoff(stateDir, lookbackMinutes, processExistingMessages) {
+  if (processExistingMessages) {
+    return /* @__PURE__ */ new Date(0);
+  }
+  if (lookbackMinutes > 0) {
+    return new Date(Date.now() - lookbackMinutes * 6e4);
+  }
+  const cutoffPath = join(stateDir, "general-inbox-cutoff.txt");
+  if (existsSync(cutoffPath)) {
+    try {
+      return new Date(readFileSync(cutoffPath, "utf8").trim());
+    } catch {
+      return /* @__PURE__ */ new Date();
+    }
+  }
+  const cutoff = /* @__PURE__ */ new Date();
+  writeFileSync(cutoffPath, `${cutoff.toISOString()}
+`, "utf8");
+  return cutoff;
+}
+function recipientMatchesAgent(recipient, agentId, agentName) {
+  const normalizedRecipient = recipient.trim();
+  if (!normalizedRecipient) {
+    return false;
+  }
+  const aliases = /* @__PURE__ */ new Set([
+    agentId.trim(),
+    agentId.trim().replace(/-/g, "_"),
+    agentId.trim().replace(/_/g, "-"),
+    agentName.trim(),
+    agentName.trim().replace(/-/g, "_"),
+    agentName.trim().replace(/_/g, "-")
+  ]);
+  return normalizedRecipient === "\uC804\uCCB4" || normalizedRecipient === "all" || aliases.has(normalizedRecipient);
+}
+function isOwnMessageSender(sender, agentId, agentName) {
+  const normalizedSender = sender.trim();
+  if (!normalizedSender) {
+    return false;
+  }
+  const aliases = /* @__PURE__ */ new Set([
+    agentId.trim(),
+    agentId.trim().replace(/-/g, "_"),
+    agentId.trim().replace(/_/g, "-"),
+    agentName.trim(),
+    agentName.trim().replace(/-/g, "_"),
+    agentName.trim().replace(/_/g, "-")
+  ]);
+  return aliases.has(normalizedSender);
+}
+function decodeRouteSegment(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+function parseInboxFrontmatter(body) {
+  if (!body) {
+    return null;
+  }
+  const frontmatter = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) {
+    return null;
+  }
+  let sender = "";
+  let recipient = "";
+  let subject = "";
+  for (const line of frontmatter[1].split(/\r?\n/)) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key === "from") sender = value;
+    if (key === "to") recipient = value;
+    if (key === "subject") subject = value;
+  }
+  if (!sender || !recipient || !subject) {
+    return null;
+  }
+  return { sender, recipient, subject };
+}
+function getInboxRoute(fileName, body) {
+  const frontmatterRoute = parseInboxFrontmatter(body);
+  if (frontmatterRoute) {
+    return frontmatterRoute;
+  }
+  const stem = fileName.replace(/\.md$/i, "");
+  const parts = stem.split("-");
+  let offset = 0;
+  if (parts[0] && /^\d{8}$/.test(parts[0])) {
+    offset = 1;
+  }
+  return {
+    sender: decodeRouteSegment(parts[offset] ?? ""),
+    recipient: decodeRouteSegment(parts[offset + 1] ?? ""),
+    subject: decodeRouteSegment(parts.slice(offset + 2).join("-"))
   };
 }
-
-// ../../scripts/bridge/bridge-candidates.ts
-var routingLogger = createBridgeLogger("routing");
 function buildMarkerId(filePath, mtimeMs) {
   return createHash("sha1").update(`${filePath}|${mtimeMs}`).digest("hex");
 }
 function getProcessedMarkerPath(stateDir, markerId) {
-  return join4(stateDir, "processed", `${markerId}.done`);
+  return join(stateDir, "processed", `${markerId}.done`);
 }
 function loadHeartbeats(commsDir) {
   try {
-    return JSON.parse(readFileSync4(join4(commsDir, "heartbeats.json"), "utf8"));
+    return JSON.parse(readFileSync(join(commsDir, "heartbeats.json"), "utf8"));
   } catch {
     return {};
   }
 }
+function formatAgentLabel(agentIdOrName, displayName) {
+  const normalizedId = agentIdOrName.trim();
+  const normalizedName = displayName?.trim();
+  if (!normalizedId) {
+    return normalizedName ?? agentIdOrName;
+  }
+  if (!normalizedName || normalizedName === normalizedId) {
+    return normalizedId;
+  }
+  return `${normalizedName} [${normalizedId}]`;
+}
+function resolveAddressLabel(address, heartbeats) {
+  const normalized = address.trim();
+  if (!normalized || normalized === "\uC804\uCCB4" || normalized === "all") {
+    return address;
+  }
+  const direct = heartbeats[normalized];
+  if (direct?.agent?.trim()) {
+    return formatAgentLabel(normalized, direct.agent);
+  }
+  for (const [agentId, heartbeat] of Object.entries(heartbeats)) {
+    if (heartbeat.agent?.trim() === normalized) {
+      return formatAgentLabel(agentId, heartbeat.agent);
+    }
+  }
+  return normalized;
+}
+function resolveCurrentAgentName(agentId, fallbackAgentName, heartbeats) {
+  const currentName = heartbeats[agentId]?.agent?.trim();
+  if (currentName) {
+    return currentName;
+  }
+  for (const heartbeat of Object.values(heartbeats)) {
+    if (heartbeat.id?.trim() === agentId && heartbeat.agent?.trim()) {
+      return heartbeat.agent.trim();
+    }
+  }
+  return fallbackAgentName;
+}
+function refreshAgentIdentity(options, heartbeats) {
+  const nextAgentName = resolveCurrentAgentName(
+    options.agentId,
+    options.agentName,
+    heartbeats
+  );
+  if (nextAgentName !== options.agentName) {
+    options.agentName = nextAgentName;
+    persistAgentName(options.stateDir, nextAgentName);
+  }
+  return nextAgentName;
+}
+var HEADLESS_SKIP_PATTERNS = [
+  /리뷰\s*요청/,
+  /review[- ]?request/i,
+  /재리뷰/,
+  /re-?review/i
+];
 function shouldSkipInHeadlessMode(fileName, body) {
   if (process.env.TAP_HEADLESS !== "true") return false;
   const combined = `${fileName}
 ${body}`;
   return HEADLESS_SKIP_PATTERNS.some((p) => p.test(combined));
 }
-function collectCandidates(inboxDir, agentId, agentName, aliasName) {
+function collectCandidates(inboxDir, agentId, agentName) {
   const entries = readdirSync(inboxDir, { withFileTypes: true }).filter(
     (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md")
   ).map((entry) => {
-    const filePath = join4(inboxDir, entry.name);
+    const filePath = join(inboxDir, entry.name);
     const stats = statSync(filePath);
     return { entry, filePath, stats };
   }).sort((left, right) => left.stats.mtimeMs - right.stats.mtimeMs);
   const candidates = [];
-  let filteredByRecipient = 0;
-  let filteredBySelf = 0;
-  let filteredByHeadless = 0;
   for (const item of entries) {
-    let body;
-    try {
-      body = readFileSync4(item.filePath, "utf8");
-    } catch {
-      continue;
-    }
+    const body = readFileSync(item.filePath, "utf8");
     const route = getInboxRoute(item.entry.name, body);
-    if (!recipientMatchesAgent(route.recipient, agentId, agentName) && !(aliasName && recipientMatchesAgent(route.recipient, agentId, aliasName))) {
-      filteredByRecipient += 1;
+    if (!recipientMatchesAgent(route.recipient, agentId, agentName)) {
       continue;
     }
-    if (isOwnMessageSender(route.sender, agentId, agentName) || aliasName && isOwnMessageSender(route.sender, agentId, aliasName)) {
-      filteredBySelf += 1;
+    if (isOwnMessageSender(route.sender, agentId, agentName)) {
       continue;
     }
     if (shouldSkipInHeadlessMode(item.entry.name, body)) {
-      filteredByHeadless += 1;
       continue;
     }
     candidates.push({
@@ -699,58 +657,34 @@ function collectCandidates(inboxDir, agentId, agentName, aliasName) {
       sender: route.sender,
       recipient: route.recipient,
       subject: route.subject,
-      body: stripBridgeFrontmatter(body),
+      body,
       mtimeMs: item.stats.mtimeMs
     });
   }
-  routingLogger.debug("candidate scan completed", {
-    inboxDir,
-    scanned: entries.length,
-    matched: candidates.length,
-    filteredByRecipient,
-    filteredBySelf,
-    filteredByHeadless,
-    agentId,
-    agentName,
-    aliasName
-  });
   return candidates;
 }
 function getPendingCandidates(options, cutoff) {
-  const inboxDir = join4(options.commsDir, "inbox");
-  if (!existsSync4(inboxDir)) {
+  const inboxDir = join(options.commsDir, "inbox");
+  if (!existsSync(inboxDir)) {
     throw new Error(`Inbox directory not found: ${inboxDir}`);
   }
   const heartbeats = loadHeartbeats(options.commsDir);
-  const refreshedName = refreshAgentIdentity(options, heartbeats);
+  const agentName = refreshAgentIdentity(options, heartbeats);
   const cutoffMs = cutoff.getTime();
   const candidates = collectCandidates(
     inboxDir,
     options.agentId,
-    options.agentName,
-    // M205: Also accept messages addressed to the heartbeat-refreshed name
-    refreshedName !== options.agentName ? refreshedName : void 0
+    agentName
   ).filter((candidate) => {
     if (candidate.mtimeMs < cutoffMs) {
       return false;
     }
-    return !existsSync4(
+    return !existsSync(
       getProcessedMarkerPath(options.stateDir, candidate.markerId)
     );
   });
-  routingLogger.debug("pending candidates resolved", {
-    agentId: options.agentId,
-    configuredName: options.agentName,
-    refreshedName: refreshedName !== options.agentName ? refreshedName : void 0,
-    candidateCount: candidates.length,
-    cutoff: cutoff.toISOString()
-  });
   return { heartbeats, candidates };
 }
-
-// ../../scripts/bridge/bridge-format.ts
-import { writeFileSync as writeFileSync3 } from "fs";
-import { join as join5 } from "path";
 function buildUserInput(candidate, agentName, heartbeats) {
   const sender = resolveAddressLabel(candidate.sender || "unknown", heartbeats);
   const recipient = resolveAddressLabel(
@@ -789,7 +723,7 @@ function writeProcessedMarker(stateDir, candidate, dispatchMode, threadId, turnI
     turnId,
     markedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  writeFileSync3(
+  writeFileSync(
     getProcessedMarkerPath(stateDir, candidate.markerId),
     `${JSON.stringify(payload, null, 2)}
 `,
@@ -809,311 +743,30 @@ function writeLastDispatch(stateDir, candidate, dispatchMode, threadId, turnId) 
     turnId,
     dispatchedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  writeFileSync3(
-    join5(stateDir, "last-dispatch.json"),
+  writeFileSync(
+    join(stateDir, "last-dispatch.json"),
     `${JSON.stringify(payload, null, 2)}
 `,
     "utf8"
   );
 }
-
-// ../../scripts/bridge/bridge-dispatch.ts
-import {
-  existsSync as existsSync5,
-  readFileSync as readFileSync5,
-  renameSync as renameSync2,
-  statSync as statSync2,
-  unlinkSync,
-  writeFileSync as writeFileSync4
-} from "fs";
-import { join as join6 } from "path";
-var dispatchLogger = createBridgeLogger("dispatch");
-var heartbeatLogger = createBridgeLogger("heartbeat");
-function sanitizeErrorForPersistence(error) {
-  if (!error) return null;
-  return error.replace(/([?&])tap_token=[^\s&)"'}]+/gi, "$1tap_token=***").replace(/([?&])token=[^\s&)"'}]+/gi, "$1token=***").replace(/([?&])secret=[^\s&)"'}]+/gi, "$1secret=***").replace(/([?&])key=[^\s&)"'}]+/gi, "$1key=***").replace(/"tap_token"\s*:\s*"[^"]*"/g, '"tap_token":"***"').replace(/"token"\s*:\s*"[^"]*"/g, '"token":"***"').replace(/"secret"\s*:\s*"[^"]*"/g, '"secret":"***"').replace(/"password"\s*:\s*"[^"]*"/g, '"password":"***"').replace(/"authorization"\s*:\s*"[^"]*"/gi, '"authorization":"***"').replace(/tap-auth-[A-Za-z0-9_.\-/+=]+/g, "tap-auth-***").replace(/Bearer\s+[A-Za-z0-9_.\-/+=]+/gi, "Bearer ***").replace(/(?<=[=:"\s])[A-Za-z0-9_\-/+=]{40,}(?=["\s&)}'}\],]|$)/g, "***");
+function formatJsonRpcError(error) {
+  if (!error) {
+    return "Unknown App Server error";
+  }
+  return JSON.stringify(
+    {
+      code: error.code,
+      message: error.message,
+      data: error.data
+    },
+    null,
+    2
+  );
 }
 function delay(ms) {
   return new Promise((resolvePromise) => {
     setTimeout(resolvePromise, ms);
-  });
-}
-function readThreadState(stateDir) {
-  const threadPath = join6(stateDir, "thread.json");
-  if (!existsSync5(threadPath)) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(
-      readFileSync5(threadPath, "utf8")
-    );
-    if (parsed.threadId) {
-      return parsed;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-function persistThreadState(stateDir, threadId, appServerUrl, ephemeral, cwd) {
-  const payload = {
-    threadId,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    appServerUrl,
-    ephemeral,
-    cwd
-  };
-  writeFileSync4(
-    join6(stateDir, "thread.json"),
-    `${JSON.stringify(payload, null, 2)}
-`,
-    "utf8"
-  );
-}
-function acquireCommsLock(lockPath) {
-  const deadline = Date.now() + COMMS_HEARTBEAT_LOCK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    try {
-      writeFileSync4(lockPath, String(process.pid), { flag: "wx" });
-      return true;
-    } catch {
-      try {
-        const lockAge = Date.now() - statSync2(lockPath).mtimeMs;
-        if (lockAge > COMMS_LOCK_STALE_AGE_MS) {
-          unlinkSync(lockPath);
-          try {
-            writeFileSync4(lockPath, String(process.pid), { flag: "wx" });
-            return true;
-          } catch {
-          }
-        }
-      } catch {
-      }
-      const start = Date.now();
-      while (Date.now() - start < 50) {
-      }
-    }
-  }
-  return false;
-}
-function releaseCommsLock(lockPath) {
-  try {
-    unlinkSync(lockPath);
-  } catch {
-  }
-}
-function updateCommsHeartbeat(options, status) {
-  const heartbeatsPath = join6(options.commsDir, "heartbeats.json");
-  const lockPath = join6(options.commsDir, ".heartbeats.lock");
-  if (!acquireCommsLock(lockPath)) {
-    return;
-  }
-  try {
-    let store = {};
-    try {
-      store = JSON.parse(readFileSync5(heartbeatsPath, "utf-8"));
-    } catch {
-    }
-    const key = options.agentId;
-    const existing = store[key];
-    store[key] = {
-      id: options.agentId,
-      agent: options.agentName,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      lastActivity: (/* @__PURE__ */ new Date()).toISOString(),
-      joinedAt: existing?.joinedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-      status
-    };
-    const tmpPath = heartbeatsPath + ".tmp." + process.pid;
-    writeFileSync4(tmpPath, JSON.stringify(store, null, 2), "utf-8");
-    renameSync2(tmpPath, heartbeatsPath);
-  } catch {
-  } finally {
-    releaseCommsLock(lockPath);
-  }
-}
-var heartbeatCount = 0;
-function writeHeartbeat(options, client, health) {
-  if (client?.threadId) {
-    const savedThread = readThreadState(options.stateDir);
-    persistThreadState(
-      options.stateDir,
-      client.threadId,
-      options.appServerUrl,
-      options.ephemeral,
-      client.currentThreadCwd ?? savedThread?.cwd ?? null
-    );
-  }
-  const payload = {
-    pid: process.pid,
-    agent: options.agentName,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    pollSeconds: options.pollSeconds,
-    appServerUrl: options.appServerUrl,
-    authenticated: Boolean(options.gatewayToken),
-    connected: client?.connected ?? false,
-    initialized: client?.initialized ?? false,
-    threadId: client?.threadId ?? null,
-    threadCwd: client?.currentThreadCwd ?? null,
-    activeTurnId: client?.activeTurnId ?? null,
-    turnStartedAt: client?.turnStartedAt ?? null,
-    lastTurnStatus: client?.lastTurnStatus ?? null,
-    lastNotificationMethod: client?.lastNotificationMethod ?? null,
-    lastNotificationAt: client?.lastNotificationAt ?? null,
-    lastError: sanitizeErrorForPersistence(client?.lastError ?? null),
-    lastSuccessfulAppServerAt: client?.lastSuccessfulAppServerAt ?? null,
-    lastSuccessfulAppServerMethod: client?.lastSuccessfulAppServerMethod ?? null,
-    consecutiveFailureCount: health.consecutiveFailureCount,
-    busyMode: options.busyMode
-  };
-  writeFileSync4(
-    join6(options.stateDir, "heartbeat.json"),
-    `${JSON.stringify(payload, null, 2)}
-`,
-    "utf8"
-  );
-  heartbeatCount += 1;
-  if (heartbeatCount % 5 === 0) {
-    heartbeatLogger.debug("heartbeat written", {
-      connected: payload.connected,
-      threadId: payload.threadId ?? "null",
-      activeTurnId: payload.activeTurnId ?? null,
-      consecutiveFailureCount: payload.consecutiveFailureCount
-    });
-  }
-  const status = client?.connected ? "active" : "idle";
-  updateCommsHeartbeat(options, status);
-}
-async function dispatchCandidate(client, options, candidate, heartbeats) {
-  const input = buildUserInput(candidate, options.agentName, heartbeats);
-  dispatchLogger.info("dispatching candidate", {
-    sender: candidate.sender || "unknown",
-    recipient: candidate.recipient || options.agentName,
-    subject: candidate.subject || "(none)",
-    fileName: candidate.fileName,
-    threadId: client.threadId,
-    activeTurnId: client.activeTurnId,
-    busyMode: options.busyMode
-  });
-  if (client.isBusy()) {
-    if (options.busyMode !== "steer") {
-      dispatchLogger.debug("bridge busy and steer disabled", {
-        fileName: candidate.fileName,
-        activeTurnId: client.activeTurnId
-      });
-      return false;
-    }
-    try {
-      const turnId2 = await client.steerTurn(input);
-      writeProcessedMarker(
-        options.stateDir,
-        candidate,
-        "steer",
-        client.threadId,
-        turnId2
-      );
-      writeLastDispatch(
-        options.stateDir,
-        candidate,
-        "steer",
-        client.threadId,
-        turnId2
-      );
-      dispatchLogger.info("steered active turn", {
-        fileName: candidate.fileName,
-        threadId: client.threadId,
-        turnId: turnId2
-      });
-      return true;
-    } catch (error) {
-      await client.refreshCurrentThreadState().catch(() => void 0);
-      if (!client.isBusy()) {
-        return dispatchCandidate(client, options, candidate, heartbeats);
-      }
-      if (shouldRetrySteerAsStart(error)) {
-        client.activeTurnId = null;
-        client.turnStartedAt = null;
-        dispatchLogger.warn("steer fallback to start", {
-          fileName: candidate.fileName,
-          threadId: client.threadId,
-          error: sanitizeErrorForPersistence(String(error))
-        });
-        return dispatchCandidate(client, options, candidate, heartbeats);
-      }
-      throw error;
-    }
-  }
-  const turnId = await client.startTurn(input);
-  writeProcessedMarker(
-    options.stateDir,
-    candidate,
-    "start",
-    client.threadId,
-    turnId
-  );
-  writeLastDispatch(
-    options.stateDir,
-    candidate,
-    "start",
-    client.threadId,
-    turnId
-  );
-  dispatchLogger.info("started turn for candidate", {
-    fileName: candidate.fileName,
-    threadId: client.threadId,
-    turnId
-  });
-  return true;
-}
-async function runScan(options, cutoff, client) {
-  const { heartbeats, candidates } = getPendingCandidates(options, cutoff);
-  if (candidates.length === 0) {
-    dispatchLogger.debug("no pending candidates", {
-      cutoff: cutoff.toISOString(),
-      agentName: options.agentName
-    });
-  }
-  let maxMtimeMs = 0;
-  for (const candidate of candidates) {
-    if (options.dryRun) {
-      dispatchLogger.info("dry-run candidate", {
-        fileName: candidate.fileName,
-        sender: candidate.sender,
-        recipient: candidate.recipient
-      });
-      maxMtimeMs = Math.max(maxMtimeMs, candidate.mtimeMs);
-      continue;
-    }
-    if (!client) {
-      throw new Error("App Server client is not available");
-    }
-    const dispatched = await dispatchCandidate(
-      client,
-      options,
-      candidate,
-      heartbeats
-    );
-    if (!dispatched && options.busyMode === "wait") {
-      return { dispatched: false, maxMtimeMs };
-    }
-    maxMtimeMs = Math.max(maxMtimeMs, candidate.mtimeMs);
-    return { dispatched: true, maxMtimeMs };
-  }
-  return { dispatched: false, maxMtimeMs: 0 };
-}
-async function waitForTurnDrain(options, client, health) {
-  const deadline = Date.now() + options.waitAfterDispatchSeconds * 1e3;
-  while (Date.now() < deadline) {
-    writeHeartbeat(options, client, health);
-    if (!client.activeTurnId) {
-      return;
-    }
-    await delay(1e3);
-  }
-  dispatchLogger.warn("wait-after-dispatch deadline reached", {
-    threadId: client.threadId,
-    activeTurnId: client.activeTurnId,
-    waitAfterDispatchSeconds: options.waitAfterDispatchSeconds
   });
 }
 async function waitForTurnCompletion(client, turnId, timeoutMs) {
@@ -1148,9 +801,7 @@ async function maybeBootstrapHeadlessTurn(options, cutoff, client) {
   if (candidates.length > 0 || client.activeTurnId || client.lastTurnStatus !== null) {
     return false;
   }
-  dispatchLogger.info("headless cold-start warmup starting", {
-    threadId: client.activeTurnId
-  });
+  logStatus("headless cold-start: sending warmup turn");
   const turnId = await client.startTurn(HEADLESS_WARMUP_PROMPT);
   if (!turnId) {
     throw new Error(
@@ -1168,10 +819,7 @@ async function maybeBootstrapHeadlessTurn(options, cutoff, client) {
         `turn ${turnId} finished with status ${status ?? "unknown"}`
       );
     }
-    dispatchLogger.info("headless cold-start warmup completed", {
-      turnId,
-      status
-    });
+    logStatus(`headless cold-start warmup completed (${status})`);
     return true;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -1180,8 +828,13 @@ async function maybeBootstrapHeadlessTurn(options, cutoff, client) {
     );
   }
 }
-
-// ../../scripts/bridge/bridge-ws-client.ts
+function shouldRetrySteerAsStart(error) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("no active turn") || message.includes("expectedturnid") || message.includes("turn/steer failed") && (message.includes("active turn") || message.includes("not found"));
+}
 async function readSocketData(data) {
   if (typeof data === "string") {
     return data;
@@ -1199,27 +852,11 @@ async function readSocketData(data) {
   }
   return String(data);
 }
-function formatJsonRpcError(error) {
-  if (!error) {
-    return "Unknown App Server error";
-  }
-  return JSON.stringify(
-    {
-      code: error.code,
-      message: error.message,
-      data: error.data
-    },
-    null,
-    2
-  );
-}
-var nextAppServerClientId = 1;
 var AppServerClient = class {
   socket = null;
   url;
   gatewayToken;
   logger;
-  clientId = nextAppServerClientId++;
   nextId = 1;
   pending = /* @__PURE__ */ new Map();
   connected = false;
@@ -1242,12 +879,6 @@ var AppServerClient = class {
   async connect() {
     if (this.connected && this.socket?.readyState === WebSocket.OPEN) {
       return;
-    }
-    if (!this.gatewayToken) {
-      this.logger.warn(
-        "connecting without auth token \u2014 app-server session is unprotected. Use --gateway-token-file or TAP_GATEWAY_TOKEN_FILE to enable auth.",
-        { url: this.url }
-      );
     }
     const wsOptions = {};
     if (this.gatewayToken) {
@@ -1274,11 +905,7 @@ var AppServerClient = class {
         "open",
         () => {
           this.connected = true;
-          this.logger.info("connected to app-server", {
-            clientId: this.clientId,
-            url: this.url,
-            authenticated: Boolean(this.gatewayToken)
-          });
+          this.logger(`connected to app-server at ${this.url}`);
           resolveOnce();
         },
         { once: true }
@@ -1287,12 +914,7 @@ var AppServerClient = class {
         const error = new Error(
           `Failed to connect to App Server at ${this.url}`
         );
-        this.lastError = sanitizeErrorForPersistence(error.message);
-        this.logger.error("failed to connect to app-server", {
-          clientId: this.clientId,
-          url: this.url,
-          error: this.lastError
-        });
+        this.lastError = error.message;
         rejectOnce(error);
       });
       this.socket?.addEventListener("close", () => {
@@ -1300,10 +922,7 @@ var AppServerClient = class {
         this.initialized = false;
         this.activeTurnId = null;
         this.turnStartedAt = null;
-        this.logger.warn("disconnected from app-server", {
-          clientId: this.clientId,
-          url: this.url
-        });
+        this.logger("disconnected from app-server");
         this.rejectPending(new Error("App Server connection closed"));
       });
       this.socket?.addEventListener("message", (event) => {
@@ -1340,20 +959,13 @@ var AppServerClient = class {
         });
         const resumedThreadId = resumeResponse?.thread?.id ?? explicitThreadId;
         await this.refreshThreadState(resumedThreadId);
-        this.logger.info("resumed explicit thread", {
-          clientId: this.clientId,
-          threadId: resumedThreadId,
-          activeTurnId: this.activeTurnId
-        });
+        this.logger(
+          `resumed thread ${resumedThreadId}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
+        );
         return resumedThreadId;
       } catch (error) {
-        this.logger.warn(
-          "explicit thread resume failed; starting fresh thread",
-          {
-            clientId: this.clientId,
-            threadId: explicitThreadId,
-            error: sanitizeErrorForPersistence(String(error))
-          }
+        this.logger(
+          `thread resume failed for ${explicitThreadId}; starting a fresh thread (${String(error)})`
         );
       }
     }
@@ -1363,12 +975,9 @@ var AppServerClient = class {
     }
     if (savedThread?.threadId) {
       if (savedThread.cwd && !threadCwdMatches(cwd, savedThread.cwd)) {
-        this.logger.warn("saved thread cwd mismatch; skipping saved thread", {
-          clientId: this.clientId,
-          threadId: savedThread.threadId,
-          savedCwd: savedThread.cwd,
-          expectedCwd: cwd
-        });
+        this.logger(
+          `saved thread ${savedThread.threadId} cwd ${savedThread.cwd} does not match ${cwd}; skipping saved thread`
+        );
       } else {
         try {
           const resumeResponse = await this.request("thread/resume", {
@@ -1378,33 +987,23 @@ var AppServerClient = class {
           const resumedThreadId = resumeResponse?.thread?.id ?? savedThread.threadId;
           await this.refreshThreadState(resumedThreadId);
           if (!threadCwdMatches(cwd, this.currentThreadCwd)) {
-            this.logger.warn("saved thread resumed with mismatched cwd", {
-              clientId: this.clientId,
-              threadId: resumedThreadId,
-              expectedCwd: cwd,
-              actualCwd: this.currentThreadCwd ?? "unknown"
-            });
+            this.logger(
+              `saved thread ${resumedThreadId} cwd ${this.currentThreadCwd ?? "unknown"} does not match ${cwd}; starting a fresh thread`
+            );
             this.threadId = null;
             this.currentThreadCwd = null;
             this.activeTurnId = null;
             this.turnStartedAt = null;
             this.lastTurnStatus = null;
           } else {
-            this.logger.info("resumed saved thread", {
-              clientId: this.clientId,
-              threadId: resumedThreadId,
-              activeTurnId: this.activeTurnId
-            });
+            this.logger(
+              `resumed saved thread ${resumedThreadId}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
+            );
             return resumedThreadId;
           }
         } catch (error) {
-          this.logger.warn(
-            "saved thread resume failed; starting fresh thread",
-            {
-              clientId: this.clientId,
-              threadId: savedThread.threadId,
-              error: sanitizeErrorForPersistence(String(error))
-            }
+          this.logger(
+            `saved thread resume failed for ${savedThread.threadId}; starting a fresh thread (${String(error)})`
           );
         }
       }
@@ -1424,12 +1023,7 @@ var AppServerClient = class {
     this.currentThreadCwd = this.currentThreadCwd ?? cwd;
     this.activeTurnId = null;
     this.lastTurnStatus = null;
-    this.logger.info("started thread", {
-      clientId: this.clientId,
-      threadId: startedThreadId,
-      cwd: this.currentThreadCwd,
-      ephemeral
-    });
+    this.logger(`started thread ${startedThreadId}`);
     return startedThreadId;
   }
   async findLoadedThread(cwd) {
@@ -1467,21 +1061,14 @@ var AppServerClient = class {
     const chosen = chooseLoadedThreadForCwd(cwd, threads);
     if (!chosen) {
       if (threads.length > 0) {
-        this.logger.debug("loaded threads exist but none match cwd", {
-          clientId: this.clientId,
-          cwd,
-          loadedThreadCount: threads.length
-        });
+        this.logger(`loaded threads exist but none match cwd ${cwd}`);
       }
       return null;
     }
     this.syncThreadStateFromThread(chosen.thread);
-    this.logger.info("attached to loaded thread", {
-      clientId: this.clientId,
-      threadId: chosen.id,
-      activeTurnId: this.activeTurnId,
-      cwd: chosen.cwd
-    });
+    this.logger(
+      `attached to loaded thread ${chosen.id}${this.activeTurnId ? ` (active turn ${this.activeTurnId})` : ""}`
+    );
     return chosen.id;
   }
   async startTurn(inputText) {
@@ -1520,18 +1107,7 @@ var AppServerClient = class {
     return turnId;
   }
   isBusy() {
-    if (!this.activeTurnId) return false;
-    if (isTurnStale(this.turnStartedAt)) {
-      this.logger.warn("active turn is stale; treating bridge as idle", {
-        clientId: this.clientId,
-        turnId: this.activeTurnId,
-        turnStartedAt: this.turnStartedAt
-      });
-      this.activeTurnId = null;
-      this.turnStartedAt = null;
-      return false;
-    }
-    return true;
+    return Boolean(this.activeTurnId);
   }
   async refreshCurrentThreadState() {
     if (!this.threadId) {
@@ -1565,33 +1141,12 @@ var AppServerClient = class {
     this.currentThreadCwd = typeof thread?.cwd === "string" ? thread.cwd : null;
     let activeTurnId = null;
     let lastTurnStatus = null;
-    const threadActiveFlags = Array.isArray(
-      thread?.status?.activeFlags
-    ) ? thread.status.activeFlags : [];
-    const threadStuckOnApproval = isTurnStuckOnApproval(threadActiveFlags);
-    if (threadStuckOnApproval) {
-      this.logger.warn("thread waitingOnApproval; ignoring in-progress turns", {
-        clientId: this.clientId,
-        threadId: this.threadId
-      });
-    }
     const turns = Array.isArray(thread?.turns) ? thread.turns : [];
     for (const turn of turns) {
       if (typeof turn?.status === "string") {
         lastTurnStatus = turn.status;
       }
       if (turn?.status === "inProgress" && typeof turn.id === "string") {
-        if (threadStuckOnApproval) {
-          continue;
-        }
-        const turnActiveFlags = Array.isArray(turn.activeFlags) ? turn.activeFlags : [];
-        if (isTurnStuckOnApproval(turnActiveFlags)) {
-          this.logger.warn("turn waitingOnApproval; ignoring turn as active", {
-            clientId: this.clientId,
-            turnId: turn.id
-          });
-          continue;
-        }
         activeTurnId = turn.id;
       }
     }
@@ -1614,12 +1169,7 @@ var AppServerClient = class {
       this.pending.delete(message.id);
       if (message.error) {
         const errorText = formatJsonRpcError(message.error);
-        this.lastError = sanitizeErrorForPersistence(errorText);
-        this.logger.error("app-server request failed", {
-          clientId: this.clientId,
-          method: pending.method,
-          error: this.lastError
-        });
+        this.lastError = errorText;
         pending.reject(new Error(`${pending.method} failed: ${errorText}`));
         return;
       }
@@ -1634,10 +1184,6 @@ var AppServerClient = class {
     }
     this.lastNotificationMethod = message.method;
     this.lastNotificationAt = (/* @__PURE__ */ new Date()).toISOString();
-    this.logger.debug("received app-server notification", {
-      clientId: this.clientId,
-      method: message.method
-    });
     this.handleNotification(message.method, message.params);
   }
   handleNotification(method, params) {
@@ -1649,28 +1195,18 @@ var AppServerClient = class {
         if (typeof params?.thread?.cwd === "string") {
           this.currentThreadCwd = params.thread.cwd;
         }
-        this.logger.info("thread started notification", {
-          clientId: this.clientId,
-          threadId: params?.thread?.id ?? null,
-          cwd: params?.thread?.cwd ?? null
-        });
+        this.logger(`thread started ${params?.thread?.id ?? ""}`.trim());
         break;
       case "thread/status/changed":
-        this.logger.debug("thread status changed", {
-          clientId: this.clientId,
-          threadId: params?.thread?.id ?? this.threadId,
-          status: params?.thread?.status?.type ?? params?.status?.type ?? "unknown"
-        });
+        this.logger(
+          `thread status changed (${params?.thread?.status?.type ?? params?.status?.type ?? "unknown"})`
+        );
         break;
       case "turn/started":
         if (params?.turn?.id) {
           this.activeTurnId = params.turn.id;
           this.turnStartedAt = (/* @__PURE__ */ new Date()).toISOString();
-          this.logger.info("turn started", {
-            clientId: this.clientId,
-            threadId: this.threadId,
-            turnId: params.turn.id
-          });
+          this.logger(`turn started ${params.turn.id}`);
         }
         break;
       case "turn/completed": {
@@ -1679,22 +1215,15 @@ var AppServerClient = class {
         this.activeTurnId = null;
         this.turnStartedAt = null;
         const elapsedMs = prevTurnStartedAt ? Date.now() - new Date(prevTurnStartedAt).getTime() : null;
-        this.logger.info("turn completed", {
-          clientId: this.clientId,
-          threadId: this.threadId,
-          status: this.lastTurnStatus ?? "unknown",
-          elapsedSeconds: elapsedMs !== null ? Math.round(elapsedMs / 1e3) : void 0
-        });
+        const elapsedSuffix = elapsedMs !== null ? ` \u2014 ${Math.round(elapsedMs / 1e3)}s elapsed` : "";
+        this.logger(
+          `turn completed (${this.lastTurnStatus ?? "unknown"})${elapsedSuffix}`
+        );
         break;
       }
       case "error":
-        this.lastError = sanitizeErrorForPersistence(
-          JSON.stringify(params ?? {}, null, 2)
-        );
-        this.logger.error("app-server error notification", {
-          clientId: this.clientId,
-          error: this.lastError
-        });
+        this.lastError = JSON.stringify(params ?? {}, null, 2);
+        this.logger(`app-server error notification: ${this.lastError}`);
         break;
       default:
         break;
@@ -1728,109 +1257,251 @@ var AppServerClient = class {
     this.pending.clear();
   }
 };
-
-// ../../scripts/bridge/bridge-main.ts
-import { existsSync as existsSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync5 } from "fs";
-import { isAbsolute as isAbsolute3, join as join7, resolve as resolve4 } from "path";
-import { pathToFileURL } from "url";
-function delay2(ms) {
-  return new Promise((resolvePromise) => {
-    setTimeout(resolvePromise, ms);
-  });
-}
-function readHeartbeatState(stateDir) {
-  const heartbeatPath = join7(stateDir, "heartbeat.json");
-  if (!existsSync6(heartbeatPath)) {
-    return null;
+var heartbeatCount = 0;
+function writeHeartbeat(options, client, health) {
+  if (client?.threadId) {
+    const savedThread = readThreadState(options.stateDir);
+    persistThreadState(
+      options.stateDir,
+      client.threadId,
+      options.appServerUrl,
+      options.ephemeral,
+      client.currentThreadCwd ?? savedThread?.cwd ?? null
+    );
   }
-  try {
-    return JSON.parse(readFileSync6(heartbeatPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-function parseUpdatedAt(value) {
-  if (!value) {
-    return 0;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-function appServerUrlMatches(expectedAppServerUrl, actualAppServerUrl) {
-  return actualAppServerUrl?.trim() === expectedAppServerUrl;
-}
-function hasValidHeartbeatThreadCwd(threadCwd) {
-  const normalized = threadCwd?.trim();
-  if (!normalized) {
-    return false;
-  }
-  return isAbsolute3(normalized) || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.startsWith("\\\\");
-}
-function loadResumableThreadState(stateDir, fallbackAppServerUrl) {
-  const savedThread = readThreadState(stateDir);
-  const heartbeat = readHeartbeatState(stateDir);
-  const heartbeatThreadId = heartbeat?.threadId?.trim();
-  if (!heartbeatThreadId) {
-    return savedThread;
-  }
-  if (!appServerUrlMatches(fallbackAppServerUrl, heartbeat?.appServerUrl)) {
-    return savedThread;
-  }
-  if (!hasValidHeartbeatThreadCwd(heartbeat?.threadCwd)) {
-    return savedThread;
-  }
-  const heartbeatBackedThread = {
-    threadId: heartbeatThreadId,
-    updatedAt: heartbeat?.updatedAt ?? savedThread?.updatedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
-    appServerUrl: heartbeat?.appServerUrl || savedThread?.appServerUrl || fallbackAppServerUrl,
-    ephemeral: savedThread?.ephemeral ?? false,
-    cwd: heartbeat?.threadCwd ?? (savedThread?.threadId === heartbeatThreadId ? savedThread.cwd ?? null : null)
+  const payload = {
+    pid: process.pid,
+    agent: options.agentName,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    pollSeconds: options.pollSeconds,
+    appServerUrl: options.appServerUrl,
+    connected: client?.connected ?? false,
+    initialized: client?.initialized ?? false,
+    threadId: client?.threadId ?? null,
+    threadCwd: client?.currentThreadCwd ?? null,
+    activeTurnId: client?.activeTurnId ?? null,
+    turnStartedAt: client?.turnStartedAt ?? null,
+    lastTurnStatus: client?.lastTurnStatus ?? null,
+    lastNotificationMethod: client?.lastNotificationMethod ?? null,
+    lastNotificationAt: client?.lastNotificationAt ?? null,
+    lastError: sanitizeErrorForPersistence(client?.lastError ?? null),
+    lastSuccessfulAppServerAt: client?.lastSuccessfulAppServerAt ?? null,
+    lastSuccessfulAppServerMethod: client?.lastSuccessfulAppServerMethod ?? null,
+    consecutiveFailureCount: health.consecutiveFailureCount,
+    busyMode: options.busyMode
   };
-  let preferred = savedThread;
-  if (!savedThread?.threadId) {
-    preferred = heartbeatBackedThread;
-  } else if (savedThread.threadId === heartbeatThreadId) {
-    preferred = {
-      ...savedThread,
-      updatedAt: heartbeatBackedThread.updatedAt ?? savedThread.updatedAt,
-      appServerUrl: heartbeatBackedThread.appServerUrl,
-      cwd: heartbeatBackedThread.cwd ?? savedThread.cwd ?? null
-    };
-  } else if (parseUpdatedAt(heartbeat?.updatedAt) > parseUpdatedAt(savedThread.updatedAt)) {
-    preferred = heartbeatBackedThread;
+  writeFileSync(
+    join(options.stateDir, "heartbeat.json"),
+    `${JSON.stringify(payload, null, 2)}
+`,
+    "utf8"
+  );
+  heartbeatCount += 1;
+  if (heartbeatCount % 5 === 0) {
+    logStatus(
+      `heartbeat: connected=${payload.connected}, thread=${payload.threadId ?? "null"}, turns=${payload.activeTurnId ? "active" : "0"}`
+    );
   }
-  return preferred;
+  const status = client?.connected ? "active" : "idle";
+  updateCommsHeartbeat(options, status);
 }
-function getGeneralInboxCutoff(stateDir, lookbackMinutes, processExistingMessages) {
-  if (processExistingMessages) {
-    return /* @__PURE__ */ new Date(0);
-  }
-  const lookbackCutoff = lookbackMinutes > 0 ? new Date(Date.now() - lookbackMinutes * 6e4) : null;
-  const cutoffPath = join7(stateDir, "general-inbox-cutoff.txt");
-  if (existsSync6(cutoffPath)) {
+var COMMS_HEARTBEAT_LOCK_TIMEOUT_MS = 2e3;
+var COMMS_LOCK_STALE_AGE_MS = 1e4;
+function acquireCommsLock(lockPath) {
+  const deadline = Date.now() + COMMS_HEARTBEAT_LOCK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     try {
-      const saved = new Date(readFileSync6(cutoffPath, "utf8").trim());
-      if (!isNaN(saved.getTime())) {
-        if (lookbackCutoff && lookbackCutoff > saved) {
-          return lookbackCutoff;
-        }
-        return saved;
-      }
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      return true;
     } catch {
+      try {
+        const lockAge = Date.now() - statSync(lockPath).mtimeMs;
+        if (lockAge > COMMS_LOCK_STALE_AGE_MS) {
+          unlinkSync(lockPath);
+          try {
+            writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+            return true;
+          } catch {
+          }
+        }
+      } catch {
+      }
+      const start = Date.now();
+      while (Date.now() - start < 50) {
+      }
     }
   }
-  if (lookbackCutoff) {
-    return lookbackCutoff;
+  return false;
+}
+function releaseCommsLock(lockPath) {
+  try {
+    unlinkSync(lockPath);
+  } catch {
   }
-  const cutoff = /* @__PURE__ */ new Date();
-  writeFileSync5(cutoffPath, `${cutoff.toISOString()}
-`, "utf8");
-  return cutoff;
+}
+function updateCommsHeartbeat(options, status) {
+  const heartbeatsPath = join(options.commsDir, "heartbeats.json");
+  const lockPath = join(options.commsDir, ".heartbeats.lock");
+  if (!acquireCommsLock(lockPath)) {
+    return;
+  }
+  try {
+    let store = {};
+    try {
+      store = JSON.parse(readFileSync(heartbeatsPath, "utf-8"));
+    } catch {
+    }
+    const key = options.agentId;
+    const existing = store[key];
+    store[key] = {
+      id: options.agentId,
+      agent: options.agentName,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      lastActivity: (/* @__PURE__ */ new Date()).toISOString(),
+      joinedAt: existing?.joinedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+      status
+    };
+    const tmpPath = heartbeatsPath + ".tmp." + process.pid;
+    writeFileSync(tmpPath, JSON.stringify(store, null, 2), "utf-8");
+    renameSync(tmpPath, heartbeatsPath);
+  } catch {
+  } finally {
+    releaseCommsLock(lockPath);
+  }
+}
+async function dispatchCandidate(client, options, candidate, heartbeats) {
+  const input = buildUserInput(candidate, options.agentName, heartbeats);
+  logStatus(
+    `dispatching from ${candidate.sender || "unknown"}: ${candidate.subject || "(none)"}`
+  );
+  if (client.isBusy()) {
+    if (options.busyMode !== "steer") {
+      return false;
+    }
+    try {
+      const turnId2 = await client.steerTurn(input);
+      writeProcessedMarker(
+        options.stateDir,
+        candidate,
+        "steer",
+        client.threadId,
+        turnId2
+      );
+      writeLastDispatch(
+        options.stateDir,
+        candidate,
+        "steer",
+        client.threadId,
+        turnId2
+      );
+      logStatus(`steered active turn with ${candidate.fileName}`);
+      return true;
+    } catch (error) {
+      await client.refreshCurrentThreadState().catch(() => void 0);
+      if (!client.isBusy()) {
+        return dispatchCandidate(client, options, candidate, heartbeats);
+      }
+      if (shouldRetrySteerAsStart(error)) {
+        client.activeTurnId = null;
+        client.turnStartedAt = null;
+        logStatus(
+          `steer fallback -> start for ${candidate.fileName} (${String(error)})`
+        );
+        return dispatchCandidate(client, options, candidate, heartbeats);
+      }
+      throw error;
+    }
+  }
+  const turnId = await client.startTurn(input);
+  writeProcessedMarker(
+    options.stateDir,
+    candidate,
+    "start",
+    client.threadId,
+    turnId
+  );
+  writeLastDispatch(
+    options.stateDir,
+    candidate,
+    "start",
+    client.threadId,
+    turnId
+  );
+  logStatus(`dispatched ${candidate.fileName} to thread ${client.threadId}`);
+  return true;
+}
+async function runScan(options, cutoff, client) {
+  const { heartbeats, candidates } = getPendingCandidates(options, cutoff);
+  for (const candidate of candidates) {
+    if (options.dryRun) {
+      logStatus(`dry-run candidate ${candidate.fileName}`);
+      continue;
+    }
+    if (!client) {
+      throw new Error("App Server client is not available");
+    }
+    const dispatched = await dispatchCandidate(
+      client,
+      options,
+      candidate,
+      heartbeats
+    );
+    if (!dispatched && options.busyMode === "wait") {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+async function waitForTurnDrain(options, client, health) {
+  const deadline = Date.now() + options.waitAfterDispatchSeconds * 1e3;
+  while (Date.now() < deadline) {
+    writeHeartbeat(options, client, health);
+    if (!client.activeTurnId) {
+      return;
+    }
+    await delay(1e3);
+  }
+}
+function buildOptions(argv) {
+  const parsed = parseArgs(argv);
+  const repoRoot = resolveRepoRoot(parsed.repoRoot);
+  const commsDir = resolveCommsDir(repoRoot, parsed.commsDir);
+  const preferredAgentName = resolvePreferredAgentName(parsed.agentName);
+  const stateDir = resolveStateDir(
+    repoRoot,
+    parsed.stateDir,
+    preferredAgentName
+  );
+  const agentName = resolveAgentName(preferredAgentName, stateDir);
+  const agentId = resolveAgentId(agentName);
+  persistAgentName(stateDir, agentName);
+  const gatewayTokenFile = parsed.gatewayTokenFile?.trim() || process.env.TAP_GATEWAY_TOKEN_FILE?.trim() || null;
+  const appServerUrl = parsed.appServerUrl?.trim() || process.env.CODEX_APP_SERVER_URL || DEFAULT_APP_SERVER_URL;
+  return {
+    repoRoot,
+    commsDir,
+    agentId,
+    stateDir,
+    agentName,
+    pollSeconds: parsed.pollSeconds ?? 5,
+    reconnectSeconds: parsed.reconnectSeconds ?? 5,
+    messageLookbackMinutes: parsed.messageLookbackMinutes ?? 10,
+    processExistingMessages: parsed.processExistingMessages,
+    dryRun: parsed.dryRun,
+    runOnce: parsed.runOnce,
+    waitAfterDispatchSeconds: parsed.waitAfterDispatchSeconds ?? 0,
+    appServerUrl,
+    connectAppServerUrl: appServerUrl,
+    gatewayToken: gatewayTokenFile ? readGatewayTokenFile(gatewayTokenFile) : null,
+    gatewayTokenFile,
+    busyMode: parsed.busyMode ?? "steer",
+    threadId: parsed.threadId?.trim() || null,
+    ephemeral: parsed.ephemeral
+  };
 }
 async function main() {
   const options = buildOptions(process.argv.slice(2));
-  configureBridgeLogging(options.logLevel);
-  const logger = createBridgeLogger("bridge");
   const cutoff = getGeneralInboxCutoff(
     options.stateDir,
     options.messageLookbackMinutes,
@@ -1840,20 +1511,28 @@ async function main() {
     options.stateDir,
     options.appServerUrl
   );
-  logger.info("codex app-server bridge ready", {
-    repoRoot: options.repoRoot,
-    commsDir: options.commsDir,
-    agentName: options.agentName,
-    stateDir: options.stateDir,
-    appServerUrl: options.appServerUrl,
-    busyMode: options.busyMode,
-    logLevel: options.logLevel,
-    waitAfterDispatchSeconds: options.waitAfterDispatchSeconds > 0 ? options.waitAfterDispatchSeconds : void 0,
-    lookback: options.processExistingMessages ? "existing messages" : `${options.messageLookbackMinutes} minute(s)`,
-    threadId: options.threadId ?? initialSavedThread?.threadId
-  });
+  logStatus("codex app-server bridge ready");
+  console.log(`  repo:       ${options.repoRoot}`);
+  console.log(`  comms:      ${options.commsDir}`);
+  console.log(`  agent:      ${options.agentName}`);
+  console.log(`  state:      ${options.stateDir}`);
+  console.log(`  app-server: ${options.appServerUrl}`);
+  console.log(`  busy-mode:  ${options.busyMode}`);
+  if (options.waitAfterDispatchSeconds > 0) {
+    console.log(
+      `  wait:       ${options.waitAfterDispatchSeconds}s after dispatch`
+    );
+  }
+  console.log(
+    `  lookback:   ${options.processExistingMessages ? "existing messages" : `${options.messageLookbackMinutes} minute(s)`}`
+  );
+  if (options.threadId || initialSavedThread?.threadId) {
+    console.log(
+      `  thread:     ${options.threadId ?? initialSavedThread?.threadId}`
+    );
+  }
   if (options.dryRun) {
-    logger.info("dry-run mode enabled");
+    logStatus("dry-run mode enabled");
   }
   let client = null;
   const health = {
@@ -1865,7 +1544,7 @@ async function main() {
         if (!client || !client.connected) {
           client = new AppServerClient(
             options.connectAppServerUrl,
-            createBridgeLogger("app-server"),
+            logStatus,
             options.gatewayToken
           );
           await client.connect();
@@ -1873,10 +1552,6 @@ async function main() {
             options.stateDir,
             options.appServerUrl
           );
-          logger.debug("resolved resumable thread state", {
-            savedThreadId: savedThread?.threadId,
-            savedThreadCwd: savedThread?.cwd ?? null
-          });
           const threadId = await client.ensureThread(
             options.threadId,
             savedThread,
@@ -1901,14 +1576,8 @@ async function main() {
           }
         }
       }
-      const scanResult = await runScan(options, cutoff, client);
-      if (scanResult.dispatched && scanResult.maxMtimeMs > 0) {
-        const cutoffPath = join7(options.stateDir, "general-inbox-cutoff.txt");
-        const advancedCutoff = new Date(scanResult.maxMtimeMs);
-        writeFileSync5(cutoffPath, `${advancedCutoff.toISOString()}
-`, "utf8");
-      }
-      if (scanResult.dispatched && client && options.waitAfterDispatchSeconds > 0) {
+      const dispatched = await runScan(options, cutoff, client);
+      if (dispatched && client && options.waitAfterDispatchSeconds > 0) {
         await waitForTurnDrain(options, client, health);
       }
       health.consecutiveFailureCount = 0;
@@ -1916,28 +1585,22 @@ async function main() {
       if (options.runOnce) {
         break;
       }
-      await delay2(options.pollSeconds * 1e3);
+      await delay(options.pollSeconds * 1e3);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.error("bridge error", {
-        error: sanitizeErrorForPersistence(message)
-      });
+      logStatus(`bridge error: ${message}`);
       if (client) {
-        client.lastError = sanitizeErrorForPersistence(message);
+        client.lastError = message;
       }
       health.consecutiveFailureCount += 1;
       writeHeartbeat(options, client, health);
       if (options.runOnce) {
-        const sanitized = sanitizeErrorForPersistence(message);
-        throw new Error(sanitized ?? message);
+        throw error;
       }
       client?.disconnect().catch(() => void 0);
       client = null;
-      logger.warn("reconnecting after bridge error", {
-        reconnectSeconds: options.reconnectSeconds,
-        consecutiveFailureCount: health.consecutiveFailureCount
-      });
-      await delay2(options.reconnectSeconds * 1e3);
+      logStatus(`reconnecting in ${options.reconnectSeconds}s...`);
+      await delay(options.reconnectSeconds * 1e3);
     }
   }
   await client?.disconnect();
@@ -1945,32 +1608,24 @@ async function main() {
 function isDirectExecution() {
   const entry = process.argv[1];
   if (!entry) return false;
-  return import.meta.url === pathToFileURL(resolve4(entry)).href;
+  return import.meta.url === pathToFileURL(resolve(entry)).href;
 }
-
-// ../../scripts/codex-app-server-bridge.ts
-import { resolve as resolve5 } from "path";
-import { pathToFileURL as pathToFileURL2 } from "url";
-function isDirectExecution2() {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  return import.meta.url === pathToFileURL2(resolve5(entry)).href;
-}
-if (isDirectExecution2()) {
+if (isDirectExecution()) {
   main().catch((error) => {
-    const raw = error instanceof Error ? error.stack ?? error.message : String(error);
-    console.error(sanitizeErrorForPersistence(raw));
+    console.error(
+      error instanceof Error ? error.stack ?? error.message : String(error)
+    );
     process.exitCode = 1;
   });
 }
 
 // src/bridges/codex-app-server-bridge.ts
-function isDirectExecution3() {
+function isDirectExecution2() {
   const entry = process.argv[1];
   if (!entry) return false;
-  return import.meta.url === pathToFileURL3(resolve6(entry)).href;
+  return import.meta.url === pathToFileURL2(resolve2(entry)).href;
 }
-if (isDirectExecution3()) {
+if (isDirectExecution2()) {
   main().catch((error) => {
     console.error(
       error instanceof Error ? error.stack ?? error.message : String(error)
@@ -1979,77 +1634,19 @@ if (isDirectExecution3()) {
   });
 }
 export {
-  AUTH_SUBPROTOCOL_PREFIX,
-  AppServerClient,
-  COMMS_HEARTBEAT_LOCK_TIMEOUT_MS,
-  COMMS_LOCK_STALE_AGE_MS,
-  DEFAULT_AGENT,
-  DEFAULT_APP_SERVER_URL,
-  HEADLESS_SKIP_PATTERNS,
   HEADLESS_WARMUP_PROMPT,
-  HEADLESS_WARMUP_TIMEOUT_MS,
-  PLACEHOLDER_AGENT_VALUES,
-  STALE_TURN_MS,
-  TURN_COMPLETION_POLL_MS,
-  TURN_COMPLETION_REFRESH_MS,
-  acquireCommsLock,
-  buildDefaultStateDir,
-  buildMarkerId,
   buildOptions,
   buildUserInput,
-  canonicalize,
   chooseLoadedThreadForCwd,
-  collectCandidates,
-  dispatchCandidate,
-  formatAgentLabel,
-  formatJsonRpcError,
-  getGeneralInboxCutoff,
-  getInboxRoute,
-  getInboxRouteFromFilename,
-  getPendingCandidates,
-  getProcessedMarkerPath,
-  isDirectExecution,
   isOwnMessageSender,
-  isTurnStale,
-  isTurnStuckOnApproval,
-  loadHeartbeats,
   loadResumableThreadState,
   main,
   maybeBootstrapHeadlessTurn,
-  normalizeAgentToken,
-  normalizeThreadCwd,
-  parseArgs,
-  parseBridgeFrontmatter,
-  persistAgentName,
-  persistThreadState,
-  readGatewayTokenFile,
-  readHeartbeatState,
-  readSocketData,
-  readThreadState,
   recipientMatchesAgent,
-  refreshAgentIdentity,
-  releaseCommsLock,
   resolveAddressLabel,
   resolveAgentId,
-  resolveAgentName,
-  resolveCommsDir,
   resolveCurrentAgentName,
-  resolvePreferredAgentName,
-  resolveRepoRoot,
-  resolveStateDir,
-  resolveTapConfigPath,
-  runScan,
-  sanitizeErrorForPersistence,
-  sanitizeStateSegment,
-  shouldRetrySteerAsStart,
-  shouldSkipInHeadlessMode,
-  stripBridgeFrontmatter,
   threadCwdMatches,
-  updateCommsHeartbeat,
-  waitForTurnCompletion,
-  waitForTurnDrain,
-  writeHeartbeat,
-  writeLastDispatch,
-  writeProcessedMarker
+  waitForTurnCompletion
 };
 //# sourceMappingURL=codex-app-server-bridge.mjs.map

@@ -53,9 +53,7 @@ export function unwrapNpmCmdShim(cmdPath: string): string | null {
 
   // Match the final line: "%_prog%" "%dp0%\...\script.js" %*
   // npm shims use %dp0% (directory of the .cmd file) as base
-  const match = content.match(
-    /"%_prog%"\s+"(%dp0%\\[^"]+)"\s+%\*/,
-  );
+  const match = content.match(/"%_prog%"\s+"(%dp0%\\[^"]+)"\s+%\*/);
   if (!match) return null;
 
   const dp0 = path.dirname(cmdPath);
@@ -98,6 +96,9 @@ export function resolvePowerShellCommand(): string {
 
 export function resolveAuthGatewayScript(repoRoot: string): string | null {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const resolvedModuleDir = path.resolve(moduleDir);
+  const resolvedRepoRoot = path.resolve(repoRoot);
+
   const candidates = [
     // Bundled: dist/bridges/ sibling (npm install / built package)
     path.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
@@ -123,8 +124,16 @@ export function resolveAuthGatewayScript(repoRoot: string): string | null {
   ];
 
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
+    const resolved = path.resolve(candidate);
+    // Verify the resolved path stays within moduleDir or repoRoot
+    if (
+      !resolved.startsWith(resolvedModuleDir + path.sep) &&
+      !resolved.startsWith(resolvedRepoRoot + path.sep)
+    ) {
+      continue;
+    }
+    if (fs.existsSync(resolved)) {
+      return resolved;
     }
   }
 

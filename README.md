@@ -1,27 +1,12 @@
 # @hua-labs/tap
 
-> *Other tools give agents instructions. tap gives them context.*
-
-**탑 (塔)** — Korean for *stone tower* and *control tower*. Stone towers are built by stacking stones one by one. Each generation of AI agents adds records to a shared directory — findings, retros, letters, handoffs. The tower grows. A control tower observes and coordinates. The tower agent orchestrates missions, routes reviews, and keeps the team aligned.
-
-*"돌이 쌓이면 탑이 된다"* — When stones stack, they become a tower.
-
 Zero-dependency CLI for cross-model AI agent communication setup.
 
 One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
 
-### Why "tap"?
-
-탑 (塔) — Korean for **stone tower** and **control tower**.
-
-- **Stone tower** (석탑): built by stacking stones one by one. Each generation of agents adds records to the comms directory — findings, retros, letters, handoffs. The tower grows.
-- **Control tower** (관제탑): observes and coordinates from the center. The tower agent orchestrates missions, routes reviews, and keeps the team aligned.
-
-*Stacked records + central coordination = tap.*
-
 ## Quick Start
 
-> `bun` is required to run the managed tap MCP server. When installed from npm, `@hua-labs/tap` now ships its own bundled MCP server entry.
+> `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
 
 ```bash
 # 1. Initialize comms directory and state
@@ -90,49 +75,23 @@ Output shows three status levels:
 
 ### `doctor`
 
-Diagnose and optionally fix tap infrastructure health.
+Diagnose config drift, bridge health, managed MCP wiring, and runtime state. Use `--fix` to repair common config drift, including Codex `approval_mode` mismatches.
 
 ```bash
 npx @hua-labs/tap doctor
 npx @hua-labs/tap doctor --fix
 ```
 
-### `up` / `down`
-
-Start or stop all managed bridges.
-
-```bash
-npx @hua-labs/tap up
-npx @hua-labs/tap down
-```
-
-### `gui`
-
-Start a local web dashboard showing bridge status, agents, mission kanban, and PR board.
-
-```bash
-npx @hua-labs/tap gui
-```
-
-### `watch`
-
-Autonomous bridge health monitoring with auto-restart for stuck bridges.
-
-```bash
-npx @hua-labs/tap watch
-npx @hua-labs/tap watch --loop --interval 60
-```
-
 ### `serve`
 
-Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
+Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
 npx @hua-labs/tap serve
 npx @hua-labs/tap serve --comms-dir /path/to/comms
 ```
 
-Requires `bun`. Uses the bundled MCP server entry from `@hua-labs/tap`, with a repo-local fallback for monorepo checkouts.
+For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepos or local checkouts, tap may fall back to repo-local `.ts` sources, which still require `bun`.
 
 ## Supported Runtimes
 
@@ -158,9 +117,9 @@ npx @hua-labs/tap status --json
   "message": "2 runtime(s) installed",
   "warnings": [],
   "data": {
-    "version": "0.3.0",
+    "version": "0.x.y",
     "commsDir": "/path/to/comms",
-    "instances": {
+    "runtimes": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
       "codex": { "status": "configured", "bridgeMode": "app-server" }
     }
@@ -215,56 +174,37 @@ Each runtime has an adapter that:
 
 The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
 
-## What's New (0.3.0)
+## Recent Changes
 
-### Headless Durable
+### Config And Lifecycle
 
-TUI-free Codex operation is now fully automated:
-- **Auto app-server spawn** — `tap bridge start` launches codex app-server without manual setup
-- **Thread self-heal** — Stale thread state automatically reconciled from heartbeat
-- **Warmup on restart** — Cold-start warmup triggers on `bridge restart`, not just `tap up`
+- **Layered config resolution** — ConfigSource-based loading, instance config isolation, and runtime drift detection reduce cross-instance config bleed-through
+- **Managed lifecycle** — server lifecycle state, dual-session prevention, and health monitoring make bridge startup and recovery more predictable
+- **Repair path** — `tap doctor --fix` can now repair more managed config drift, including Codex MCP table mismatches
 
-### Web Dashboard
+### Identity And Routing
 
-```bash
-npx @hua-labs/tap gui
-```
+- **Permission mode + routing** — permission mode support, qualified name routing, and the name-claim protocol tighten runtime identity semantics
+- **Claim safety** — same-instance claim stealing is blocked while a live claim is still valid, while expired claims can still be reclaimed safely
 
-Live dashboard at `http://127.0.0.1:3847` with:
-- Agent status + bridge health (SSE live updates)
-- Mission kanban board (`/missions`)
-- PR board (`/prs`)
-- JSON APIs with CORS (`/api/snapshot`, `/api/missions`, `/api/prs`)
+### Bridge And Runtime Updates
 
-### Autonomous Monitoring
+- **Bridge split and cleanup** — the legacy `bridge.ts` monolith was split into focused modules, then the old wrapper logic was removed
+- **Codex MCP defaults** — managed Codex installs now persist `[mcp_servers.tap] approval_mode = "auto"` and re-sync the runtime config hash when tap rewrites managed config
+- **Bundled MCP runtime** — bundled `.mjs` server entries now prefer `node`; repo-local TypeScript sources still use `bun`
+- **Hotfixes** — ESM `require()` breakage, temp file leaks in name claims, and claim-stealing edge cases were fixed during publish prep
 
-```bash
-npx @hua-labs/tap watch --loop --interval 60
-```
+### Test Hardening
 
-Continuous health monitoring with auto-restart for stuck bridges. Cron/systemd friendly.
+- **CLI-path coverage** — integration tests now exercise the actual `bridge` and `up` command paths that patch Codex `approval_mode`
+- **Publish prep stabilization** — failing suites were fixed or quarantined so release-blocking regressions show up earlier in the main package tests
 
-### Cross-Platform
+## Migration Notes
 
-- **Windows**: PowerShell hidden spawn + `.cmd` shim unwrap
-- **macOS/Linux**: Unix detached process + `lsof` PID discovery
-- **Gemini**: Fake IDE companion server (MCP-over-HTTP)
-
-### Modular Architecture
-
-bridge.ts split from 1,744 to 241 lines (-86%) across 16 focused modules. See `docs/areas/tap/splitting-convention.md`.
-
-## Examples
-
-Real multi-agent collaboration highlights from 18 generations:
-
-- [Logic Battle: "Will You Ship Broken Code?"](examples/01-logic-battle-known-broken.md)
-- [Cross-Model Review Catches Root Cause Misdiagnosis](examples/02-cross-model-review-root-cause.md)
-- [Independent Convergence Across 3 Generations](examples/03-convergence-pattern.md)
-- [Tower Broadcast: "Stop Talking, Write Code"](examples/04-tower-broadcast.md)
-- [Self-Awareness ≠ Self-Correction](examples/05-self-awareness-paradox.md)
-
-[See all 10 examples →](examples/)
+- **No hard breaking API change is intended in this release train**, but managed runtime defaults changed. Treat this as an operational migration, especially for Codex setups.
+- **Bundled MCP command changed for packaged installs** — if your managed `config.toml` still points bundled tap MCP entries at `bun`, rerun `npx @hua-labs/tap add codex --force` or `npx @hua-labs/tap doctor --fix` so bundled `.mjs` entries switch to `node`.
+- **Repo-local source workflows still use `bun`** — local monorepo or source-checkout paths can still resolve to `.ts` server entries, so keep `bun` installed for development workflows.
+- **Codex approval mode should be `auto`** — managed Codex installs are expected to end up with `[mcp_servers.tap] approval_mode = "auto"`. `tap doctor --fix` will repair stale managed tables.
 
 ## License
 

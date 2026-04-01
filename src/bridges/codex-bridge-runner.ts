@@ -172,11 +172,21 @@ async function main(): Promise<void> {
   // Honor TAP_STATE_DIR env (set by config resolver) before falling back to .tmp/
   const instanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
   const envStateDir = process.env.TAP_STATE_DIR;
-  const stateDir = envStateDir
-    ? envStateDir
-    : instanceId
-      ? path.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
-      : undefined;
+  let stateDir: string | undefined;
+  if (envStateDir) {
+    stateDir = envStateDir;
+  } else if (instanceId) {
+    const resolved = path.resolve(
+      path.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`),
+    );
+    const expectedBase = path.resolve(repoRoot, ".tmp") + path.sep;
+    if (!resolved.startsWith(expectedBase)) {
+      throw new Error(
+        `Path traversal blocked: runtime state dir escapes .tmp/ directory`,
+      );
+    }
+    stateDir = resolved;
+  }
 
   // Honor pre-resolved node from parent (2-stage spawn: engine → runner → daemon)
   // TAP_STRIP_TYPES preserves metadata so bun doesn't get --experimental-strip-types.

@@ -17,7 +17,7 @@ import {
   STALE_TURN_MS,
   stripBridgeFrontmatter,
   threadCwdMatches,
-} from "../../../../scripts/codex-app-server-bridge.js";
+} from "../../scripts/codex-app-server-bridge.js";
 
 describe("codex app-server bridge option building", () => {
   const createdDirs: string[] = [];
@@ -140,7 +140,9 @@ describe("codex app-server bridge option building", () => {
   });
 
   it("defaults bridge log-level to info", () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-log-level-"));
+    const repoRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "bridge-log-level-"),
+    );
     createdDirs.push(repoRoot);
     const commsDir = path.join(repoRoot, "hua-comms");
     fs.mkdirSync(commsDir, { recursive: true });
@@ -157,7 +159,9 @@ describe("codex app-server bridge option building", () => {
   });
 
   it("parses an explicit bridge log-level", () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-log-level-"));
+    const repoRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "bridge-log-level-"),
+    );
     createdDirs.push(repoRoot);
     const commsDir = path.join(repoRoot, "hua-comms");
     fs.mkdirSync(commsDir, { recursive: true });
@@ -176,7 +180,9 @@ describe("codex app-server bridge option building", () => {
   });
 
   it("rejects an invalid bridge log-level", () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-log-level-"));
+    const repoRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "bridge-log-level-"),
+    );
     createdDirs.push(repoRoot);
     const commsDir = path.join(repoRoot, "hua-comms");
     fs.mkdirSync(commsDir, { recursive: true });
@@ -302,6 +308,41 @@ describe("codex app-server bridge option building", () => {
     ]);
 
     expect(chosen?.id).toBe("thread-match-active");
+  });
+
+  it("ignores matching loaded threads that are notLoaded", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-not-loaded",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 300,
+        statusType: "notLoaded",
+        thread: { id: "thread-not-loaded", cwd: "C:/hua-wt-review" },
+      },
+    ]);
+
+    expect(chosen).toBeNull();
+  });
+
+  it("prefers a usable loaded thread over a newer notLoaded match", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-not-loaded",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 300,
+        statusType: "notLoaded",
+        thread: { id: "thread-not-loaded", cwd: "C:/hua-wt-review" },
+      },
+      {
+        id: "thread-usable",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 200,
+        statusType: "idle",
+        thread: { id: "thread-usable", cwd: "C:/hua-wt-review" },
+      },
+    ]);
+
+    expect(chosen?.id).toBe("thread-usable");
   });
 
   it("prefers a newer valid runtime heartbeat without mutating thread.json", () => {

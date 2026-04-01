@@ -56,7 +56,9 @@ describe("migrateStateV1toV2", () => {
 
     const v2 = migrateStateV1toV2(v1);
 
-    expect(v2.schemaVersion).toBe(2);
+    // migrateStateV1toV2 returns intermediate v2 format
+    // (loadState chains v2→v3 automatically)
+    expect(v2.schemaVersion).toBeGreaterThanOrEqual(2);
     expect(v2.instances).toBeDefined();
     expect(Object.keys(v2.instances)).toHaveLength(2);
 
@@ -89,7 +91,7 @@ describe("migrateStateV1toV2", () => {
     };
 
     const v2 = migrateStateV1toV2(v1);
-    expect(v2.schemaVersion).toBe(2);
+    expect(v2.schemaVersion).toBeGreaterThanOrEqual(2);
     expect(Object.keys(v2.instances)).toHaveLength(0);
   });
 
@@ -146,7 +148,8 @@ describe("loadState auto-migration", () => {
 
     const loaded = loadState(tmpDir);
     expect(loaded).not.toBeNull();
-    expect(loaded!.schemaVersion).toBe(2);
+    // v1 → v2 → v3 chain migration
+    expect(loaded!.schemaVersion).toBe(3);
     expect(loaded!.instances).toBeDefined();
     expect(loaded!.instances["codex"]).toBeDefined();
     expect(loaded!.instances["codex"].instanceId).toBe("codex");
@@ -156,7 +159,7 @@ describe("loadState auto-migration", () => {
     const persisted = JSON.parse(
       fs.readFileSync(path.join(tmpDir, ".tap-comms", "state.json"), "utf-8"),
     );
-    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.schemaVersion).toBe(3);
     expect(persisted.instances).toBeDefined();
   });
 
@@ -196,8 +199,12 @@ describe("loadState auto-migration", () => {
 
     const loaded = loadState(tmpDir);
     expect(loaded).not.toBeNull();
-    expect(loaded!.schemaVersion).toBe(2);
+    // v2 auto-migrates to v3
+    expect(loaded!.schemaVersion).toBe(3);
     expect(loaded!.instances["codex-reviewer"].port).toBe(4501);
+    // v3 fields added
+    expect(loaded!.instances["codex-reviewer"].configHash).toBe("");
+    expect(loaded!.instances["codex-reviewer"].configSourceFile).toBe("");
   });
 });
 

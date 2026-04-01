@@ -189,11 +189,17 @@ export function getHealthReport(options?: StateApiOptions): HealthReport {
 
   const hasFailures = snapshot.warnings.some((w) => w.level === "error");
   const hasBridgeDown = snapshot.bridges.some(
-    (b) => b.status === "stale" || b.status === "stopped",
+    (b) =>
+      b.status === "stale" ||
+      b.status === "stopped" ||
+      b.lifecycle?.status === "degraded-no-thread",
+  );
+  const hasBridgeDegraded = snapshot.bridges.some(
+    (b) => b.lifecycle?.status === "degraded-no-thread",
   );
 
   return {
-    ok: !hasFailures && !hasBridgeDown,
+    ok: !hasFailures && !hasBridgeDown && !hasBridgeDegraded,
     timestamp: snapshot.generatedAt,
     bridges: snapshot.bridges,
     agents: snapshot.agents,

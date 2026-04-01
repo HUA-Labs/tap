@@ -68,6 +68,7 @@ export {
   isBridgeRunning,
   loadRuntimeBridgeHeartbeat,
   loadRuntimeBridgeThreadState,
+  transitionBridgeLifecycle,
 } from "./bridge-state.js";
 
 export type {
@@ -86,6 +87,27 @@ export {
 } from "./bridge-observability.js";
 
 export type { TurnInfo } from "./bridge-observability.js";
+
+export {
+  resolveBridgeLifecycleSnapshot,
+  deriveBridgeLifecycleState,
+} from "./server-lifecycle.js";
+
+export type {
+  BridgePresence,
+  BridgeLifecycleStatus,
+  BridgeLifecycleSnapshot,
+  DeriveBridgeLifecycleOptions,
+} from "./server-lifecycle.js";
+
+export { deriveCodexSessionState } from "./codex-session-state.js";
+
+export type {
+  CodexSessionTurnState,
+  CodexSessionStatus,
+  CodexSessionSnapshot,
+  DeriveCodexSessionOptions,
+} from "./codex-session-state.js";
 
 export {
   checkAppServerHealth,

@@ -49,16 +49,16 @@ function renderSnapshot(snapshot: DashboardSnapshot): void {
   if (snapshot.agents.length === 0) {
     log("  (no heartbeats)");
   } else {
+    log(
+      `  ${"Agent".padEnd(18)} ${"Presence".padEnd(18)} ${"Lifecycle".padEnd(20)} ${"Idle"}`,
+    );
+    log(
+      `  ${"─".repeat(18)} ${"─".repeat(18)} ${"─".repeat(20)} ${"─".repeat(12)}`,
+    );
     for (const agent of snapshot.agents) {
-      const activity = agent.lastActivity
-        ? formatAge(
-            Math.floor(
-              (Date.now() - new Date(agent.lastActivity).getTime()) / 1000,
-            ),
-          )
-        : "unknown";
-      const status = agent.status ?? "unknown";
-      log(`  ${agent.name.padEnd(12)} ${status.padEnd(10)} active ${activity}`);
+      log(
+        `  ${truncate(agent.name, 18).padEnd(18)} ${agent.presence.padEnd(18)} ${String(agent.lifecycle ?? "-").padEnd(20)} ${formatAge(agent.idleSeconds)}`,
+      );
     }
   }
 
@@ -69,15 +69,16 @@ function renderSnapshot(snapshot: DashboardSnapshot): void {
     log("  (none)");
   } else {
     log(
-      `  ${"Instance".padEnd(20)} ${"Status".padEnd(10)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Heartbeat"}`,
+      `  ${"Instance".padEnd(20)} ${"Status".padEnd(10)} ${"Lifecycle".padEnd(20)} ${"PID".padEnd(8)} ${"Port".padEnd(6)} ${"Heartbeat"}`,
     );
     log(
-      `  ${"─".repeat(20)} ${"─".repeat(10)} ${"─".repeat(8)} ${"─".repeat(6)} ${"─".repeat(12)}`,
+      `  ${"─".repeat(20)} ${"─".repeat(10)} ${"─".repeat(20)} ${"─".repeat(8)} ${"─".repeat(6)} ${"─".repeat(12)}`,
     );
     for (const b of snapshot.bridges) {
       const headlessTag = b.headless ? " [H]" : "";
+      const lifecycle = b.lifecycle?.status ?? "-";
       log(
-        `  ${truncate(b.instanceId + headlessTag, 20).padEnd(20)} ${formatStatus(b.status).padEnd(10)} ${(b.pid ? String(b.pid) : "-").padEnd(8)} ${(b.port ? String(b.port) : "-").padEnd(6)} ${formatAge(b.heartbeatAge)}`,
+        `  ${truncate(b.instanceId + headlessTag, 20).padEnd(20)} ${formatStatus(b.status).padEnd(10)} ${truncate(lifecycle, 20).padEnd(20)} ${(b.pid ? String(b.pid) : "-").padEnd(8)} ${(b.port ? String(b.port) : "-").padEnd(6)} ${formatAge(b.heartbeatAge)}`,
       );
     }
   }

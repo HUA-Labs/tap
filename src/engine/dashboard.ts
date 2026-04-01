@@ -15,23 +15,36 @@ import {
   getBridgeStatus,
   getHeartbeatAge,
   isProcessAlive,
+  loadRuntimeBridgeHeartbeat,
+  resolveBridgeLifecycleSnapshot,
+  deriveCodexSessionState,
 } from "./bridge.js";
 import type { InstanceId } from "../types.js";
 import { loadState } from "../state.js";
+import type {
+  BridgeLifecycleSnapshot,
+  CodexSessionSnapshot,
+} from "./bridge.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
 export interface AgentInfo {
   name: string;
+  instanceId: string | null;
+  presence: "bridge-live" | "bridge-stale" | "mcp-only";
+  lifecycle: BridgeLifecycleSnapshot["status"] | null;
   status: string | null;
   lastActivity: string | null;
   joinedAt: string | null;
+  idleSeconds: number | null;
 }
 
 export interface BridgeInfo {
   instanceId: string;
   runtime: string;
   status: "running" | "stopped" | "stale";
+  lifecycle: BridgeLifecycleSnapshot | null;
+  session: CodexSessionSnapshot | null;
   pid: number | null;
   port: number | null;
   heartbeatAge: number | null;
@@ -63,7 +76,57 @@ export interface DashboardSnapshot {
 
 // ─── Agent collection ──────────────────────────────────────────
 
-function collectAgents(commsDir: string): AgentInfo[] {
+function formatAgentLabel(
+  agentIdOrName: string,
+  displayName?: string | null,
+): string {
+  const normalizedId = agentIdOrName.trim();
+  const normalizedName = displayName?.trim();
+
+  if (!normalizedId) {
+    return normalizedName ?? agentIdOrName;
+  }
+
+  if (!normalizedName || normalizedName === normalizedId) {
+    return normalizedId;
+  }
+
+  return `${normalizedName} [${normalizedId}]`;
+}
+
+function parseIsoAgeSeconds(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return null;
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+}
+
+function resolveHeartbeatInstanceId(
+  heartbeatId: string,
+  displayName: string | null,
+  state: ReturnType<typeof loadState>,
+): string | null {
+  if (!state) return null;
+  if (state.instances[heartbeatId]?.installed) return heartbeatId;
+
+  const hyphenated = heartbeatId.replace(/_/g, "-");
+  if (state.instances[hyphenated]?.installed) return hyphenated;
+
+  const underscored = heartbeatId.replace(/-/g, "_");
+  if (state.instances[underscored]?.installed) return underscored;
+
+  if (!displayName) return null;
+  const matches = Object.values(state.instances).filter(
+    (inst) => inst?.installed && inst.agentName === displayName,
+  );
+  return matches.length === 1 ? matches[0].instanceId : null;
+}
+
+function collectAgents(
+  commsDir: string,
+  state: ReturnType<typeof loadState>,
+  bridges: BridgeInfo[],
+): AgentInfo[] {
   // Read heartbeats.json (written by tap-comms MCP server)
   const heartbeatsPath = path.join(commsDir, "heartbeats.json");
   if (!fs.existsSync(heartbeatsPath)) return [];
@@ -81,12 +144,37 @@ function collectAgents(commsDir: string): AgentInfo[] {
       }
     >;
 
-    return Object.entries(data).map(([name, info]) => ({
-      name: info.agent ?? name,
-      status: info.status ?? null,
-      lastActivity: info.lastActivity ?? info.timestamp ?? null,
-      joinedAt: info.joinedAt ?? null,
-    }));
+    return Object.entries(data).map(([agentId, info]) => {
+      const instanceId = resolveHeartbeatInstanceId(
+        agentId,
+        info.agent ?? null,
+        state,
+      );
+      const bridge = instanceId
+        ? (bridges.find((candidate) => candidate.instanceId === instanceId) ??
+          null)
+        : null;
+      const presence =
+        bridge?.status === "stale" ||
+        bridge?.lifecycle?.status === "bridge-stale"
+          ? "bridge-stale"
+          : bridge?.status === "running"
+            ? "bridge-live"
+            : "mcp-only";
+      const lastActivity = info.lastActivity ?? info.timestamp ?? null;
+      const idleBasis = bridge?.session?.idleSince ?? lastActivity;
+
+      return {
+        name: formatAgentLabel(agentId, info.agent ?? null),
+        instanceId,
+        presence,
+        lifecycle: bridge?.lifecycle?.status ?? null,
+        status: info.status ?? null,
+        lastActivity,
+        joinedAt: info.joinedAt ?? null,
+        idleSeconds: parseIsoAgeSeconds(idleBasis),
+      };
+    });
   } catch {
     return [];
   }
@@ -108,13 +196,28 @@ function collectBridges(repoRoot: string): BridgeInfo[] {
 
       const instanceId = id as InstanceId;
       const status = getBridgeStatus(stateDir, instanceId);
-      const bridgeState = loadBridgeState(stateDir, instanceId);
+      const persistedBridgeState = loadBridgeState(stateDir, instanceId);
+      const bridgeState = persistedBridgeState ?? inst.bridge ?? null;
       const age = getHeartbeatAge(stateDir, instanceId);
+      const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
+      const lifecycle =
+        bridgeState != null
+          ? resolveBridgeLifecycleSnapshot(stateDir, instanceId, bridgeState)
+          : null;
+      const session =
+        bridgeState != null
+          ? deriveCodexSessionState({
+              runtimeHeartbeat,
+              runtimeStateDir: bridgeState.runtimeStateDir ?? null,
+            })
+          : null;
 
       bridges.push({
         instanceId: id,
         runtime: inst.runtime,
         status,
+        lifecycle,
+        session,
         pid: bridgeState?.pid ?? null,
         port: inst.port ?? null,
         heartbeatAge: age,
@@ -162,6 +265,8 @@ function collectBridges(repoRoot: string): BridgeInfo[] {
             instanceId: agentName,
             runtime: "codex",
             status: running ? "running" : "stale",
+            lifecycle: null,
+            session: null,
             pid: daemon.pid ?? null,
             port,
             heartbeatAge: null,
@@ -233,6 +338,12 @@ function collectWarnings(
         message: `Bridge ${bridge.instanceId} heartbeat stale (${bridge.heartbeatAge}s ago)`,
       });
     }
+    if (bridge.lifecycle?.status === "degraded-no-thread") {
+      warnings.push({
+        level: "warn",
+        message: `Bridge ${bridge.instanceId} is degraded (no active thread)`,
+      });
+    }
   }
 
   if (bridges.length === 0) {
@@ -264,8 +375,9 @@ export function collectDashboardSnapshot(
   );
   const resolved = config;
 
-  const agents = collectAgents(resolved.commsDir);
+  const state = loadState(resolved.repoRoot);
   const bridges = collectBridges(resolved.repoRoot);
+  const agents = collectAgents(resolved.commsDir, state, bridges);
   const prs = collectPRs();
   const warnings = collectWarnings(bridges, agents);
 

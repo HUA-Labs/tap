@@ -17,6 +17,8 @@ const getBridgeHeartbeatTimestampMock = vi.fn();
 const saveBridgeStateMock = vi.fn();
 const stopManagedAppServerMock = vi.fn();
 const findNextAvailableAppServerPortMock = vi.fn();
+const resolveAgentNameMock = vi.fn();
+const inferRestartModeMock = vi.fn();
 
 vi.mock("../state.js", () => ({
   loadState: loadStateMock,
@@ -43,6 +45,8 @@ vi.mock("../engine/bridge.js", () => ({
   getBridgeHeartbeatTimestamp: getBridgeHeartbeatTimestampMock,
   saveBridgeState: saveBridgeStateMock,
   stopManagedAppServer: stopManagedAppServerMock,
+  resolveAgentName: resolveAgentNameMock,
+  inferRestartMode: inferRestartModeMock,
   checkAppServerHealth: checkAppServerHealthMock,
   findNextAvailableAppServerPort: findNextAvailableAppServerPortMock,
   waitForPortRelease: vi.fn().mockResolvedValue(true),
@@ -172,6 +176,13 @@ describe("bridgeCommand auto app-server behavior", () => {
     stopManagedAppServerMock.mockResolvedValue(true);
     checkAppServerHealthMock.mockResolvedValue(true);
     findNextAvailableAppServerPortMock.mockResolvedValue(4510);
+    resolveAgentNameMock.mockImplementation(
+      (_instanceId: string, explicitName?: string) => explicitName ?? null,
+    );
+    inferRestartModeMock.mockReturnValue({
+      manageAppServer: true,
+      noAuth: false,
+    });
   });
 
   it("enables app-server management by default for codex bridge start", async () => {
@@ -211,6 +222,37 @@ describe("bridgeCommand auto app-server behavior", () => {
       expect.objectContaining({
         manageAppServer: false,
         appServerUrl: "ws://127.0.0.1:4510",
+      }),
+    );
+  });
+
+  it("recovers agentName from config and backwrites state before bridge start", async () => {
+    loadStateMock.mockReturnValue(makeState(undefined, { agentName: null }));
+    resolveAgentNameMock.mockReturnValue("솔");
+
+    const result = await bridgeCommand(["start", "codex"]);
+
+    expect(result.ok).toBe(true);
+    expect(resolveAgentNameMock).toHaveBeenCalledWith(
+      "codex",
+      undefined,
+      expect.objectContaining({
+        repoRoot: "D:/repo",
+        stateDir: "D:/repo/.tap-comms",
+      }),
+    );
+    expect(startBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "codex",
+        agentName: "솔",
+      }),
+    );
+    expect(saveStateMock).toHaveBeenCalledWith(
+      "D:/repo",
+      expect.objectContaining({
+        instances: expect.objectContaining({
+          codex: expect.objectContaining({ agentName: "솔" }),
+        }),
       }),
     );
   });

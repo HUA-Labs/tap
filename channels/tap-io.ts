@@ -11,33 +11,81 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
+import { createHash } from "crypto";
 import { join } from "path";
 import {
   RECEIPTS_DIR,
   RECEIPTS_PATH,
-  RECEIPTS_LOCK,
   HEARTBEATS_PATH,
-  INBOX_DIR,
   stripBom,
-  parseInboxEnvelope,
+  parseFilename,
+  parseFrontmatter,
+  stripFrontmatter,
   isForMe,
-  isOwnSender,
+  getAgentId,
+  getAgentName,
   getSourceDir,
   getSourceKey,
   normalizeSources,
-  debug,
   type ChannelSource,
   type TapUnreadItem,
-  type Receipt,
   type ReceiptStore,
-  type Heartbeat,
   type HeartbeatStore,
 } from "./tap-utils.js";
+import { isOwnMessageAddress } from "./tap-identity.js";
 
 // ── State ───────────────────────────────────────────────────────────────
 
 export const startupFiles = new Set<string>();
 export const readFiles = new Set<string>();
+
+// ── Bridge Dedup ───────────────────────────────────────────────────────
+// Bridge writes processed markers at {bridgeStateDir}/processed/{sha1}.done.
+// bridgeStateDir = {repoRoot}/.tmp/codex-app-server-bridge-{name}/
+// Scan all bridge state dirs to find markers.
+
+const REPO_ROOT = process.env.TAP_REPO_ROOT ?? null;
+
+const BRIDGE_DIR_CACHE_TTL_MS = 30_000; // re-scan every 30s to pick up late-start bridges
+let _bridgeProcessedDirs: string[] = [];
+let _bridgeDirsCachedAt = 0;
+
+function getBridgeProcessedDirs(): string[] {
+  const now = Date.now();
+  if (now - _bridgeDirsCachedAt < BRIDGE_DIR_CACHE_TTL_MS) {
+    return _bridgeProcessedDirs;
+  }
+  _bridgeDirsCachedAt = now;
+
+  if (!REPO_ROOT) {
+    _bridgeProcessedDirs = [];
+    return _bridgeProcessedDirs;
+  }
+  const tmpDir = join(REPO_ROOT, ".tmp");
+  if (!existsSync(tmpDir)) {
+    _bridgeProcessedDirs = [];
+    return _bridgeProcessedDirs;
+  }
+  try {
+    _bridgeProcessedDirs = readdirSync(tmpDir)
+      .filter((d) => d.startsWith("codex-app-server-bridge"))
+      .map((d) => join(tmpDir, d, "processed"))
+      .filter((p) => existsSync(p));
+  } catch {
+    _bridgeProcessedDirs = [];
+  }
+  return _bridgeProcessedDirs;
+}
+
+function isBridgeProcessed(filePath: string, mtimeMs: number): boolean {
+  const dirs = getBridgeProcessedDirs();
+  if (dirs.length === 0) return false;
+  const markerId = createHash("sha1")
+    .update(`${filePath}|${mtimeMs}`)
+    .digest("hex");
+  const markerFile = `${markerId}.done`;
+  return dirs.some((dir) => existsSync(join(dir, markerFile)));
+}
 
 // ── Lock ────────────────────────────────────────────────────────────────
 
@@ -110,6 +158,47 @@ export function saveHeartbeats(store: HeartbeatStore) {
   renameSync(tmpPath, HEARTBEATS_PATH);
 }
 
+export function formatAgentLabel(
+  agentIdOrName: string,
+  displayName?: string | null,
+): string {
+  const normalizedId = agentIdOrName.trim();
+  const normalizedName = displayName?.trim();
+
+  if (!normalizedId) {
+    return normalizedName ?? agentIdOrName;
+  }
+
+  if (!normalizedName || normalizedName === normalizedId) {
+    return normalizedId;
+  }
+
+  return `${normalizedName} [${normalizedId}]`;
+}
+
+export function resolveAgentLabel(
+  agentIdOrName: string,
+  store: HeartbeatStore = loadHeartbeats(),
+): string {
+  const normalized = agentIdOrName.trim();
+  if (!normalized || normalized === "전체" || normalized === "all") {
+    return agentIdOrName;
+  }
+
+  const byId = store[normalized];
+  if (byId?.agent?.trim()) {
+    return formatAgentLabel(normalized, byId.agent);
+  }
+
+  for (const [agentId, heartbeat] of Object.entries(store)) {
+    if (heartbeat.agent?.trim() === normalized) {
+      return formatAgentLabel(agentId, heartbeat.agent);
+    }
+  }
+
+  return normalized;
+}
+
 // ── Startup ─────────────────────────────────────────────────────────────
 
 export function seedStartupFiles(source: ChannelSource) {
@@ -137,12 +226,15 @@ export function getUnreadItems(options?: {
     typeof options?.since === "string" ? new Date(options.since).getTime() : 0;
 
   // Apply joinedAt filter: don't show messages from before agent joined
+  // Look up by id first, fallback to name for backward compat
+  const agentId = getAgentId();
   const agentName = getAgentName();
+  let heartbeatStore: HeartbeatStore = {};
   let joinedAtMs = 0;
-  if (agentName !== "unknown") {
+  if (agentId !== "unknown") {
     try {
-      const store = loadHeartbeats();
-      const entry = store[agentName];
+      heartbeatStore = loadHeartbeats();
+      const entry = heartbeatStore[agentId] ?? heartbeatStore[agentName];
       if (entry?.joinedAt) {
         joinedAtMs = new Date(entry.joinedAt).getTime();
       }
@@ -184,6 +276,12 @@ export function getUnreadItems(options?: {
       }
       if (effectiveSinceMs && mtime < effectiveSinceMs) continue;
 
+      // Skip messages already delivered via bridge (dedup)
+      if (isBridgeProcessed(fullPath, mtime)) {
+        readFiles.add(key);
+        continue;
+      }
+
       let content: string;
       try {
         content = stripBom(readFileSync(fullPath, "utf-8"));
@@ -196,12 +294,21 @@ export function getUnreadItems(options?: {
       let subject = filename.replace(/\.md$/, "");
 
       if (source === "inbox") {
-        const parsed = parseInboxEnvelope(filename, content);
+        // Frontmatter-first routing (M202): try frontmatter, fall back to filename
+        const fm = parseFrontmatter(content);
+        const parsed = fm
+          ? { from: fm.from, to: fm.to, subject: fm.subject }
+          : parseFilename(filename);
         if (!parsed || !isForMe(parsed.to)) continue;
-        if (isOwnSender(parsed.from)) continue;
-        from = parsed.from;
-        to = parsed.to;
+        if (isOwnMessageAddress(parsed.from, getAgentId(), getAgentName()))
+          continue;
+        from = resolveAgentLabel(fm?.from_name ?? parsed.from, heartbeatStore);
+        to = resolveAgentLabel(fm?.to_name ?? parsed.to, heartbeatStore);
         subject = parsed.subject;
+        // Strip frontmatter from displayed content
+        if (fm && includeContent) {
+          content = stripFrontmatter(content);
+        }
       }
 
       const item: TapUnreadItem = {

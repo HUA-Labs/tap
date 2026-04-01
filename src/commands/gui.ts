@@ -48,7 +48,7 @@ function buildHtml(
   const agentRows = snapshot.agents
     .map(
       (a) =>
-        `<tr><td>${esc(a.name)}</td><td class="${a.status === "active" ? "ok" : "warn"}">${esc(a.status)}</td><td>${a.lastActivity ? esc(new Date(a.lastActivity).toLocaleTimeString()) : "-"}</td></tr>`,
+        `<tr><td>${esc(a.name)}</td><td class="${a.presence === "bridge-live" ? "ok" : a.presence === "bridge-stale" ? "warn" : "off"}">${esc(a.presence)}</td><td>${esc(a.lifecycle ?? "-")}</td><td>${a.lastActivity ? esc(new Date(a.lastActivity).toLocaleTimeString()) : "-"}</td></tr>`,
     )
     .join("\n");
 
@@ -102,8 +102,8 @@ function buildHtml(
 
 <h2>Agents</h2>
 <table>
-<tr><th>Name</th><th>Status</th><th>Last Activity</th></tr>
-${agentRows || '<tr><td colspan="3" class="off">No agents</td></tr>'}
+<tr><th>Name</th><th>Presence</th><th>Lifecycle</th><th>Last Activity</th></tr>
+${agentRows || '<tr><td colspan="4" class="off">No agents</td></tr>'}
 </table>
 
 <h2>Bridges</h2>

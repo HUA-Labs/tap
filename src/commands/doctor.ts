@@ -33,6 +33,7 @@ import {
   loadRuntimeBridgeThreadState,
 } from "../engine/bridge.js";
 import { resolveConfig } from "../config/index.js";
+import { checkAllDrift } from "../config/drift-detector.js";
 import {
   createAdapterContext,
   findRepoRoot,
@@ -256,6 +257,7 @@ function repairCodexConfig(repoRoot: string, commsDir: string): string {
       {
         command: spec.managed.command,
         args: spec.managed.args,
+        approval_mode: "auto",
       },
       extractTomlTable(existingContent, "mcp_servers.tap"),
     ),
@@ -997,6 +999,16 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
     issues.push(`concrete TAP_AGENT_ID persisted (${actualAgentId})`);
   }
 
+  // M224: approval_mode drift check
+  if (tapTable) {
+    const actualApprovalMode = selectedMain.approval_mode;
+    if (typeof actualApprovalMode !== "string") {
+      issues.push("approval_mode missing (expected auto)");
+    } else if (actualApprovalMode !== "auto") {
+      issues.push(`approval_mode drift (${actualApprovalMode})`);
+    }
+  }
+
   for (const trustTarget of spec.trustTargets) {
     const trustTable = extractTomlTable(content, trustSelector(trustTarget));
     if (!trustTable || !trustTable.includes('trust_level = "trusted"')) {
@@ -1251,11 +1263,81 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
 
   logHeader(`@hua-labs/tap doctor (v${version})${fixMode ? " --fix" : ""}`);
 
+  function checkConfigDrift(): Check[] {
+    let driftResults;
+    try {
+      driftResults = checkAllDrift(config.stateDir, state);
+    } catch (err) {
+      // Surface the error as a warn so drift check failure is visible
+      return [
+        {
+          name: "drift:infrastructure",
+          status: "warn" as const,
+          message: `Config drift check failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+    }
+    const checks: Check[] = [];
+    for (const result of driftResults) {
+      for (const dc of result.checks) {
+        const check: Check = {
+          name: `drift:${result.instanceId}:${dc.name}`,
+          status:
+            dc.status === "ok" ? "pass" : dc.autoFixable ? "warn" : "fail",
+          message: dc.details ?? undefined,
+        };
+        if (dc.autoFixable && dc.status !== "ok") {
+          check.fix = () => {
+            const {
+              loadInstanceConfig: loadInst,
+              saveInstanceConfig: saveInst,
+            } = require("../config/instance-config.js");
+            const {
+              computeFileHash: hashFile,
+            } = require("../config/drift-detector.js");
+            const instConfig = loadInst(config.stateDir, result.instanceId);
+            if (!instConfig || !state) {
+              return `Skipped: instance config not found for ${result.instanceId}`;
+            }
+            const inst = state.instances[result.instanceId];
+            if (!inst) {
+              return `Skipped: instance not in state.json for ${result.instanceId}`;
+            }
+
+            // Sync state.json fields from instance config
+            inst.agentName = instConfig.agentName;
+            inst.port = instConfig.port;
+            inst.configHash = instConfig.configHash;
+            inst.configSourceFile =
+              inst.configSourceFile ||
+              join(config.stateDir, "instances", `${result.instanceId}.json`);
+            saveState(repoRoot, state);
+
+            // Resync runtime config hash if configPath exists
+            if (inst.configPath && existsSync(inst.configPath)) {
+              const currentHash = hashFile(inst.configPath);
+              if (instConfig.runtimeConfigHash !== currentHash) {
+                instConfig.runtimeConfigHash = currentHash;
+                instConfig.lastSyncedToRuntime = new Date().toISOString();
+                saveInst(config.stateDir, instConfig);
+              }
+            }
+
+            return `Synced state.json + runtime hash for ${result.instanceId}`;
+          };
+        }
+        checks.push(check);
+      }
+    }
+    return checks;
+  }
+
   function runAllChecks(): Check[] {
     const checks: Check[] = [];
     checks.push(...checkComms(commsDir));
     checks.push(...checkStaleHeartbeats(repoRoot, commsDir, config.stateDir));
     checks.push(...checkInstances(repoRoot, config.stateDir, commsDir));
+    checks.push(...checkConfigDrift());
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
     checks.push(...checkCodexConfig(repoRoot, commsDir));
@@ -1268,6 +1350,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
   for (const section of [
     "Comms",
     "Instances",
+    "Config Drift",
     "Messages",
     "MCP",
     "Turns",
@@ -1289,6 +1372,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
           c.name.startsWith("instance:") ||
           c.name === "tap state",
       ),
+      "Config Drift": initialChecks.filter((c) => c.name.startsWith("drift:")),
       Messages: initialChecks.filter((c) =>
         ["message flow", "read receipts"].includes(c.name),
       ),

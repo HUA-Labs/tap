@@ -106,6 +106,15 @@ interface AppServerState {
     manualCommand: string;
     auth?: AppServerAuthState | null;
 }
+type PersistedBridgeLifecycleState = "spawning" | "initializing" | "ready" | "degraded-no-thread" | "degraded-no-bridge" | "stopping" | "stopped" | "crashed";
+interface BridgeLifecycleRecord {
+    state: PersistedBridgeLifecycleState;
+    since: string;
+    updatedAt: string;
+    lastTransitionAt: string;
+    lastTransitionReason: string | null;
+    restartCount: number;
+}
 interface BridgeState {
     pid: number;
     statePath: string;
@@ -113,6 +122,7 @@ interface BridgeState {
     appServer?: AppServerState | null;
     /** Instance-specific daemon state dir (thread/heartbeat/processed markers). */
     runtimeStateDir?: string | null;
+    lifecycle?: BridgeLifecycleRecord | null;
 }
 /** Runtime instance state. Supports multiple instances per runtime (e.g. codex-reviewer, codex-builder). */
 interface InstanceState {
@@ -129,12 +139,18 @@ interface InstanceState {
     lastAppliedHash: string;
     lastVerifiedAt: string | null;
     bridge: BridgeState | null;
+    /** Persisted lifecycle summary even when no bridge pid file exists. */
+    bridgeLifecycle?: BridgeLifecycleRecord | null;
     /** Headless mode configuration. null = interactive (default). */
     headless: HeadlessConfig | null;
     /** Whether bridge manages its own app-server process. Saved for restart mode preservation. */
     manageAppServer?: boolean;
     /** Whether bridge runs without auth gateway. Saved for restart mode preservation. */
     noAuth?: boolean;
+    /** Stable hash of resolved config for drift detection (v3+). */
+    configHash?: string;
+    /** Path to the instance config file (v3+). */
+    configSourceFile?: string;
     warnings: string[];
 }
 /** @deprecated Use InstanceState. Kept for v1 state migration. */
@@ -275,7 +291,7 @@ interface TapResolvedConfig {
     appServerUrl: string;
     towerName: string | null;
 }
-/** Config resolution source for diagnostics. */
+/** Config resolution source for diagnostics (legacy API — backward compatible). */
 type ConfigSource = "cli-flag" | "env" | "local-config" | "shared-config" | "legacy-shell-config" | "auto";
 interface ConfigResolution {
     config: TapResolvedConfig;
@@ -320,6 +336,39 @@ declare function updateBridgeHeartbeat(stateDir: string, instanceId: InstanceId)
 declare function getHeartbeatAge(stateDir: string, instanceId: InstanceId): number | null;
 declare function rotateLog(logPath: string): void;
 
+type BridgePresence = "bridge-live" | "bridge-stale" | "stopped";
+type BridgeLifecycleStatus = "ready" | "initializing" | "degraded-no-thread" | "bridge-stale" | "stopped";
+interface BridgeLifecycleSnapshot {
+    presence: BridgePresence;
+    status: BridgeLifecycleStatus;
+    summary: string;
+    lastTransitionAt: string | null;
+    lastTransitionReason: string | null;
+    restartCount: number;
+    threadId: string | null;
+    threadCwd: string | null;
+    savedThreadId: string | null;
+    savedThreadCwd: string | null;
+    activeTurnId: string | null;
+    connected: boolean | null;
+    initialized: boolean | null;
+    appServerHealthy: boolean | null;
+}
+
+type CodexSessionTurnState = "active" | "idle" | "waiting-approval" | "disconnected";
+type CodexSessionStatus = "initializing" | "active" | "idle" | "waiting-approval" | "disconnected";
+interface CodexSessionSnapshot {
+    status: CodexSessionStatus;
+    turnState: CodexSessionTurnState | null;
+    summary: string;
+    activeTurnId: string | null;
+    lastTurnAt: string | null;
+    lastDispatchAt: string | null;
+    idleSince: string | null;
+    connected: boolean | null;
+    initialized: boolean | null;
+}
+
 interface BridgeStartOptions {
     instanceId: InstanceId;
     runtime: RuntimeName;
@@ -345,6 +394,8 @@ interface BridgeStartOptions {
     manageAppServer?: boolean;
     /** Skip auth gateway — app-server listens directly on the public port (localhost only). */
     noAuth?: boolean;
+    /** Persisted lifecycle from the previous session, used to track restarts. */
+    previousLifecycle?: BridgeLifecycleRecord | null;
 }
 
 interface RestartBridgeOptions extends BridgeStartOptions {
@@ -365,16 +416,23 @@ declare function restartBridge(options: RestartBridgeOptions): Promise<BridgeSta
  * Ref: tap public repo tap-ops-dashboard.ps1 (single-agent view)
  * M74 extends to control-tower view (all agents, all bridges, all PRs).
  */
+
 interface AgentInfo {
     name: string;
+    instanceId: string | null;
+    presence: "bridge-live" | "bridge-stale" | "mcp-only";
+    lifecycle: BridgeLifecycleSnapshot["status"] | null;
     status: string | null;
     lastActivity: string | null;
     joinedAt: string | null;
+    idleSeconds: number | null;
 }
 interface BridgeInfo {
     instanceId: string;
     runtime: string;
     status: "running" | "stopped" | "stale";
+    lifecycle: BridgeLifecycleSnapshot | null;
+    session: CodexSessionSnapshot | null;
     pid: number | null;
     port: number | null;
     heartbeatAge: number | null;

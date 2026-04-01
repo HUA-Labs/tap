@@ -18,4 +18,11 @@ export default defineConfig({
   target: "node20",
   splitting: false,
   sourcemap: true,
+  external: [
+    "@modelcontextprotocol/sdk",
+    "@modelcontextprotocol/sdk/server/index.js",
+    "@modelcontextprotocol/sdk/server/streamableHttp.js",
+    "@modelcontextprotocol/sdk/server/stdio.js",
+    "@modelcontextprotocol/sdk/types.js",
+  ],
 });

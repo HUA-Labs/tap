@@ -5,8 +5,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import type { Socket } from "node:net";
 import { resolve } from "node:path";
+import type { Duplex } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -185,13 +185,29 @@ function writeNotFound(response: ServerResponse): void {
   response.end("Not Found");
 }
 
-function rejectUpgrade(socket: Socket | import("stream").Duplex, statusCode: number): void {
-  socket.write(`HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r\n\r\n`);
+function rejectUpgrade(socket: Duplex, statusCode: number): void {
+  socket.write(
+    `HTTP/1.1 ${statusCode} ${statusCode === 404 ? "Not Found" : "Bad Request"}\r\n\r\n`,
+  );
   socket.destroy();
 }
 
+/**
+ * Detect traversal sequences in any encoding: raw "..", percent-encoded
+ * "%2e%2e", or mixed forms like ".%2e" / "%2e.".
+ */
+function containsTraversal(raw: string): boolean {
+  if (raw.includes("..")) return true;
+  // Decode percent-encoded dots and recheck
+  if (/%2e/i.test(raw) && raw.replace(/%2e/gi, ".").includes("..")) return true;
+  return false;
+}
+
 function isUpgradePath(listenUrl: string, request: IncomingMessage): boolean {
-  const requestUrl = new URL(request.url ?? "/", listenUrl.replace(/^ws/, "http"));
+  const requestUrl = new URL(
+    request.url ?? "/",
+    listenUrl.replace(/^ws/, "http"),
+  );
   const listenPath = new URL(listenUrl).pathname;
   return requestUrl.pathname === (listenPath || "/");
 }
@@ -283,18 +299,30 @@ export async function startGatewayServer(
     });
   });
 
+  const listenPath = new URL(options.listenUrl).pathname || "/";
+
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(
       request.url ?? "/",
       options.listenUrl.replace(/^ws/, "http"),
     );
 
-    if (request.method === "GET" && requestUrl.pathname === GATEWAY_READYZ_PATH) {
+    // Defense-in-depth: reject traversal sequences in any encoding.
+    // Covers raw "..", percent-encoded "%2e%2e", and mixed forms.
+    if (containsTraversal(request.url ?? "")) {
+      writeNotFound(response);
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === GATEWAY_READYZ_PATH
+    ) {
       await handleReadyzRequest(response, options);
       return;
     }
 
-    if (isUpgradePath(options.listenUrl, request)) {
+    if (requestUrl.pathname === listenPath) {
       writeUpgradeRequired(response);
       return;
     }
@@ -303,6 +331,12 @@ export async function startGatewayServer(
   });
 
   server.on("upgrade", (request, socket, head) => {
+    // Block traversal in upgrade requests (raw + encoded)
+    if (containsTraversal(request.url ?? "")) {
+      rejectUpgrade(socket, 400);
+      return;
+    }
+
     if (!isUpgradePath(options.listenUrl, request)) {
       rejectUpgrade(socket, 404);
       return;

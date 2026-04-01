@@ -40,6 +40,19 @@ describe("up/down orchestration commands", () => {
           instanceId: "codex",
           runtime: "codex",
           status: "running",
+          lifecycle: {
+            presence: "bridge-live",
+            status: "ready",
+            summary: "bridge-live, ready",
+            threadId: "thread_123",
+            threadCwd: "D:/repo",
+            savedThreadId: "thread_123",
+            savedThreadCwd: "D:/repo",
+            activeTurnId: null,
+            connected: true,
+            initialized: true,
+            appServerHealthy: true,
+          },
           pid: 1234,
           port: 4510,
           heartbeatAge: 1,
@@ -81,6 +94,7 @@ describe("up/down orchestration commands", () => {
     expect(result.ok).toBe(true);
     expect(result.command).toBe("up");
     expect(result.code).toBe("TAP_UP_OK");
+    expect(result.message).toContain("1 ready, 0 initializing, 0 degraded");
     expect(result.data).toHaveProperty("snapshot");
   });
 

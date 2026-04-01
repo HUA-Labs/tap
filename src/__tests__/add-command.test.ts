@@ -33,6 +33,25 @@ vi.mock("../config/index.js", () => ({
   resolveConfig: resolveConfigMock,
 }));
 
+const createInstanceConfigMock = vi.fn().mockReturnValue({
+  schemaVersion: 1,
+  instanceId: "codex",
+  runtime: "codex",
+  agentName: null,
+  configHash: "abcd1234",
+  mcpEnv: {},
+});
+const saveInstanceConfigMock = vi
+  .fn()
+  .mockReturnValue("/mock/instances/codex.json");
+
+vi.mock("../config/instance-config.js", () => ({
+  createInstanceConfig: createInstanceConfigMock,
+  saveInstanceConfig: saveInstanceConfigMock,
+  loadInstanceConfig: vi.fn().mockReturnValue(null),
+  updateInstanceConfig: vi.fn(),
+}));
+
 vi.mock("../utils.js", async () => {
   const actual =
     await vi.importActual<typeof import("../utils.js")>("../utils.js");

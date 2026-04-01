@@ -14,6 +14,7 @@ const logMock = vi.fn();
 const logSuccessMock = vi.fn();
 const logErrorMock = vi.fn();
 const logHeaderMock = vi.fn();
+const resolveAgentNameMock = vi.fn();
 
 vi.mock("../engine/bridge.js", async () => {
   const actual = await vi.importActual<typeof import("../engine/bridge.js")>(
@@ -24,6 +25,7 @@ vi.mock("../engine/bridge.js", async () => {
     restartBridge: restartBridgeMock,
     inferRestartMode: inferRestartModeMock,
     loadBridgeState: loadBridgeStateMock,
+    resolveAgentName: resolveAgentNameMock,
   };
 });
 
@@ -132,6 +134,10 @@ describe("bridge restart cold-start warmup env", () => {
       noAuth: false,
     });
     loadBridgeStateMock.mockReturnValue(null);
+    resolveAgentNameMock.mockImplementation(
+      (_instanceId: string, explicitName?: string) =>
+        explicitName ?? state.instances.codex.agentName,
+    );
   });
 
   it("enables cold-start warmup only while delegating bridge restart", async () => {
@@ -192,5 +198,52 @@ describe("bridge restart cold-start warmup env", () => {
         process.env.TAP_COLD_START_WARMUP = originalWarmup;
       }
     }
+  });
+
+  it("restarts with recovered agentName and syncs state", async () => {
+    const recoveredState = {
+      ...state,
+      instances: {
+        ...state.instances,
+        codex: {
+          ...state.instances.codex,
+          agentName: null,
+        },
+      },
+    };
+    loadStateMock.mockReturnValue(recoveredState);
+    resolveAgentNameMock.mockReturnValue("솔");
+    restartBridgeMock.mockResolvedValue({
+      pid: 4321,
+      statePath: "D:/repo/.tap-comms/pids/bridge-codex.json",
+      lastHeartbeat: "2026-03-28T00:00:00.000Z",
+      appServer: null,
+    });
+
+    const result = await bridgeCommand(["restart", "codex"]);
+
+    expect(result.ok).toBe(true);
+    expect(resolveAgentNameMock).toHaveBeenCalledWith(
+      "codex",
+      undefined,
+      expect.objectContaining({
+        repoRoot: "D:/repo",
+        stateDir: "D:/repo/.tap-comms",
+      }),
+    );
+    expect(restartBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "codex",
+        agentName: "솔",
+      }),
+    );
+    expect(saveStateMock).toHaveBeenCalledWith(
+      "D:/repo",
+      expect.objectContaining({
+        instances: expect.objectContaining({
+          codex: expect.objectContaining({ agentName: "솔" }),
+        }),
+      }),
+    );
   });
 });

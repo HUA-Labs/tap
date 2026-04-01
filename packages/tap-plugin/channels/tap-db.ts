@@ -5,7 +5,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import {
-  COMMS_DIR,
   DB_PATH,
   INBOX_DIR,
   RECEIPTS_DIR,
@@ -16,7 +15,19 @@ import {
 
 // ── DB Instance ─────────────────────────────────────────────────────────
 
-let db: import("bun:sqlite").Database | null = null;
+// bun:sqlite type stub — avoids TS2307 when not running in Bun
+interface BunDatabase {
+  exec(sql: string): void;
+  run(sql: string, ...args: unknown[]): void;
+  prepare(sql: string): {
+    run(...args: unknown[]): void;
+    all(...args: unknown[]): unknown[];
+    get(...args: unknown[]): unknown;
+  };
+  close(): void;
+}
+
+let db: BunDatabase | null = null;
 
 export function getDb() {
   return db;
@@ -26,7 +37,9 @@ export function getDb() {
 
 export function initDb(): boolean {
   try {
-    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const { Database } = require("bun:sqlite") as {
+      Database: new (path: string, opts?: { create?: boolean }) => BunDatabase;
+    };
     db = new Database(DB_PATH, { create: true });
     db.exec("PRAGMA journal_mode=WAL");
     db.exec("PRAGMA busy_timeout=5000");

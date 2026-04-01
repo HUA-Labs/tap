@@ -8,12 +8,18 @@ set -uo pipefail
 
 # ── Config ───────────────────────────────────────────────────────────────────
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-CONFIG_FILE="${REPO_ROOT}/.tap-config"
-if [[ -f "$CONFIG_FILE" ]]; then
+CONFIG_HELPER="${REPO_ROOT}/scripts/lib/tap-config.sh"
+if [[ -f "$CONFIG_HELPER" ]]; then
   # shellcheck source=/dev/null
-  source "$CONFIG_FILE"
+  source "$CONFIG_HELPER"
+  tap_load_config "$REPO_ROOT"
 fi
-COMMS_DIR="${TAP_COMMS_DIR:-$(dirname "$REPO_ROOT")/project-comms}"
+
+if [[ -n "${TAP_COMMS_DIR_RESOLVED:-}" ]]; then
+  COMMS_DIR="$TAP_COMMS_DIR_RESOLVED"
+else
+  COMMS_DIR="${TAP_COMMS_DIR:-$(dirname "$REPO_ROOT")/project-comms}"
+fi
 
 # ── Guard: comms directory must exist ────────────────────────────────────────
 [[ -d "$COMMS_DIR" ]] || exit 0

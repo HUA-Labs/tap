@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   configureBridgeLogging,
   createBridgeLogger,
-} from "../../../../scripts/bridge/bridge-logging.js";
+} from "../../scripts/bridge/bridge-logging.js";
 
 describe("codex app-server bridge logging", () => {
   afterEach(() => {

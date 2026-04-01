@@ -12,7 +12,7 @@ import type {
 import { resolveConfig } from "./config/index.js";
 
 const STATE_FILE = "state.json";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function getStateDir(repoRoot: string): string {
   const { config } = resolveConfig({}, repoRoot);
@@ -56,6 +56,26 @@ export function migrateStateV1toV2(v1: TapStateV1): TapState {
   };
 }
 
+// ─── v2 → v3 Migration ────────────────────────────────────────
+
+export function migrateStateV2toV3(v2: TapState): TapState {
+  const instances: Record<InstanceId, InstanceState> = {};
+
+  for (const [id, inst] of Object.entries(v2.instances)) {
+    instances[id] = {
+      ...inst,
+      configHash: inst.configHash ?? "",
+      configSourceFile: inst.configSourceFile ?? "",
+    };
+  }
+
+  return {
+    ...v2,
+    schemaVersion: SCHEMA_VERSION,
+    instances,
+  };
+}
+
 // ─── Load / Save ───────────────────────────────────────────────
 
 export function loadState(repoRoot: string): TapState | null {
@@ -67,9 +87,17 @@ export function loadState(repoRoot: string): TapState | null {
 
   // Auto-migrate v1 → v2
   if (parsed.schemaVersion === 1 || parsed.runtimes) {
-    const migrated = migrateStateV1toV2(parsed as TapStateV1);
-    saveState(repoRoot, migrated);
-    return migrated;
+    const v2 = migrateStateV1toV2(parsed as TapStateV1);
+    const v3 = migrateStateV2toV3(v2);
+    saveState(repoRoot, v3);
+    return v3;
+  }
+
+  // Auto-migrate v2 → v3
+  if (parsed.schemaVersion === 2) {
+    const v3 = migrateStateV2toV3(parsed as TapState);
+    saveState(repoRoot, v3);
+    return v3;
   }
 
   return parsed as TapState;

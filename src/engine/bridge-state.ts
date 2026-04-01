@@ -10,7 +10,12 @@
  */
 
 import * as fs from "node:fs";
-import type { InstanceId, BridgeState } from "../types.js";
+import type {
+  InstanceId,
+  BridgeLifecycleRecord,
+  BridgeState,
+  PersistedBridgeLifecycleState,
+} from "../types.js";
 import {
   pidFilePath,
   runtimeHeartbeatFilePath,
@@ -28,6 +33,10 @@ export interface RuntimeBridgeHeartbeat {
   activeTurnId?: string | null;
   turnStartedAt?: string | null;
   lastTurnStatus?: string | null;
+  lastTurnAt?: string | null;
+  lastDispatchAt?: string | null;
+  idleSince?: string | null;
+  turnState?: "active" | "idle" | "waiting-approval" | "disconnected" | null;
   lastError?: string | null;
   connected?: boolean;
   initialized?: boolean;
@@ -39,6 +48,35 @@ export interface RuntimeBridgeThreadState {
   appServerUrl?: string;
   ephemeral?: boolean;
   cwd?: string | null;
+}
+
+// ─── Persisted lifecycle helpers ──────────────────────────────
+
+export function transitionBridgeLifecycle(
+  previous: BridgeLifecycleRecord | null | undefined,
+  nextState: PersistedBridgeLifecycleState,
+  reason: string | null,
+  options?: {
+    at?: string;
+    incrementRestart?: boolean;
+  },
+): BridgeLifecycleRecord {
+  const at = options?.at ?? new Date().toISOString();
+  const changed = previous?.state !== nextState;
+
+  return {
+    state: nextState,
+    since: changed || !previous?.since ? at : previous.since,
+    updatedAt: at,
+    lastTransitionAt:
+      changed || !previous?.lastTransitionAt ? at : previous.lastTransitionAt,
+    lastTransitionReason:
+      changed || previous?.lastTransitionReason == null
+        ? reason
+        : previous.lastTransitionReason,
+    restartCount:
+      (previous?.restartCount ?? 0) + (options?.incrementRestart ? 1 : 0),
+  };
 }
 
 // ─── Runtime state readers ────────────────────────────────────

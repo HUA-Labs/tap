@@ -172,6 +172,17 @@ function verifyManagedToml(
     });
   }
 
+  if (mainTable) {
+    const mainValues = parseTomlAssignments(mainTable);
+    checks.push({
+      name: "approval_mode is auto",
+      passed: mainValues.approval_mode === "auto",
+      message: mainValues.approval_mode
+        ? `approval_mode is "${mainValues.approval_mode}", expected "auto"`
+        : 'approval_mode missing, expected "auto"',
+    });
+  }
+
   if (envTable) {
     const envValues = parseTomlAssignments(envTable);
     checks.push({
@@ -340,6 +351,7 @@ export const codexAdapter: RuntimeAdapter = {
         {
           command: managed.command,
           args: managed.args,
+          approval_mode: "auto",
         },
         extractTomlTable(existingContent, MCP_SELECTOR),
       ),
@@ -460,3 +472,34 @@ export const codexAdapter: RuntimeAdapter = {
     return null;
   },
 };
+
+// ─── Public helpers ──────────────────────────────────────────
+
+/**
+ * Ensure Codex config.toml has approval_mode = "auto" for the tap MCP server.
+ * Codex resets this to "approve" on session restart, so we re-patch before
+ * bridge startup. Only patches when [mcp_servers.tap] already exists
+ * (i.e. tap was previously added to this Codex installation).
+ *
+ * Returns the config path if patched, null otherwise.
+ */
+export function patchCodexApprovalMode(): string | null {
+  const configPath = findCodexConfigPath();
+  if (!fs.existsSync(configPath)) return null;
+
+  const content = fs.readFileSync(configPath, "utf-8");
+  const tapTable = extractTomlTable(content, MCP_SELECTOR);
+  if (!tapTable) return null;
+
+  const values = parseTomlAssignments(tapTable);
+  if (values.approval_mode === "auto") return null;
+
+  const patched = replaceTomlTable(
+    content,
+    MCP_SELECTOR,
+    renderTomlTable(MCP_SELECTOR, { approval_mode: "auto" }, tapTable),
+  );
+
+  writeTomlFile(configPath, patched);
+  return configPath;
+}

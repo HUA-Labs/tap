@@ -28,7 +28,7 @@ describe("HTTP State API CSRF protection (M176)", () => {
     });
 
     expect(res.status).toBe(403);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("non-loopback origin");
   });
 
@@ -73,7 +73,7 @@ describe("HTTP State API CSRF protection (M176)", () => {
     });
 
     expect(res.status).toBe(415);
-    const body = await res.json();
+    const body = (await res.json()) as { error: string };
     expect(body.error).toContain("application/json");
   });
 

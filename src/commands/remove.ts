@@ -100,12 +100,12 @@ export async function removeCommand(args: string[]): Promise<CommandResult> {
   // Stop bridge if running before rollback
   if (instance.bridge) {
     const ctx = createAdapterContext(state.commsDir, repoRoot);
-    const stopped = await stopBridge({
+    const stopResult = await stopBridge({
       instanceId,
       stateDir: ctx.stateDir,
       platform: ctx.platform,
     });
-    if (stopped) {
+    if (stopResult.stopped) {
       logSuccess(`Bridge for ${instanceId} stopped`);
     } else {
       log(`No running bridge for ${instanceId}`);

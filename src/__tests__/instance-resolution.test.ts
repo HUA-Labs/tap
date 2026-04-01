@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveInstanceId,
   buildInstanceId,
+  validateInstanceName,
   extractRuntimeFromInstanceId,
   findPortConflict,
   findNextAvailablePort,
@@ -118,6 +119,52 @@ describe("buildInstanceId", () => {
 
   it("handles claude runtime", () => {
     expect(buildInstanceId("claude", "main")).toBe("claude-main");
+  });
+
+  it("rejects name with forward slash (path traversal)", () => {
+    expect(() => buildInstanceId("codex", "../../evil")).toThrow(
+      "must not contain path separators",
+    );
+  });
+
+  it("rejects name with backslash (path traversal)", () => {
+    expect(() => buildInstanceId("codex", "..\\evil")).toThrow(
+      "must not contain path separators",
+    );
+  });
+
+  it("rejects name with dotdot sequence", () => {
+    expect(() => buildInstanceId("codex", "foo..bar")).toThrow(
+      'must not contain path separators or ".."',
+    );
+  });
+});
+
+describe("validateInstanceName", () => {
+  it("accepts normal names", () => {
+    expect(() => validateInstanceName("reviewer")).not.toThrow();
+    expect(() => validateInstanceName("my-agent")).not.toThrow();
+    expect(() => validateInstanceName("builder2")).not.toThrow();
+  });
+
+  it("rejects forward slash", () => {
+    expect(() => validateInstanceName("a/b")).toThrow();
+  });
+
+  it("rejects backslash", () => {
+    expect(() => validateInstanceName("a\\b")).toThrow();
+  });
+
+  it("rejects bare dotdot", () => {
+    expect(() => validateInstanceName("..")).toThrow();
+  });
+
+  it("rejects dotdot embedded in path-like name", () => {
+    expect(() => validateInstanceName("../../etc/passwd")).toThrow();
+  });
+
+  it("rejects dotdot within name", () => {
+    expect(() => validateInstanceName("foo..bar")).toThrow();
   });
 });
 
