@@ -194,6 +194,14 @@ The adapter contract (`RuntimeAdapter`) is the extension point for adding new ru
 - **Bundled MCP runtime** — bundled `.mjs` server entries now prefer `node`; repo-local TypeScript sources still use `bun`
 - **Hotfixes** — ESM `require()` breakage, temp file leaks in name claims, and claim-stealing edge cases were fixed during publish prep
 
+### Trust Layer And Delivery
+
+- **Shared vs runtime state split** — `TAP_STATE_DIR` remains the shared source of truth while `TAP_RUNTIME_STATE_DIR` is reserved for per-bridge runtime files, so headless restarts and later TUI attaches keep the same identity contract
+- **Attached TUI rebind** — Codex TUI attach can now recover `agentId` and `agentName` from runtime heartbeat and agent-name files without relying on per-session env injection
+- **State surface alignment** — bridge status, runtime heartbeat, and presence now read from the same state surfaces, reducing mismatches between `tap status`, bridge state, and plugin-visible presence
+- **Broadcast dedupe** — bridge-dispatched notifications are deduplicated so one broadcast does not fan out twice
+- **Ack storm prevention** — peer DM auto-replies are rate-limited to stop acknowledgement loops from flooding the inbox
+
 ### Test Hardening
 
 - **CLI-path coverage** — integration tests now exercise the actual `bridge` and `up` command paths that patch Codex `approval_mode`
@@ -205,6 +213,7 @@ The adapter contract (`RuntimeAdapter`) is the extension point for adding new ru
 - **Bundled MCP command changed for packaged installs** — if your managed `config.toml` still points bundled tap MCP entries at `bun`, rerun `npx @hua-labs/tap add codex --force` or `npx @hua-labs/tap doctor --fix` so bundled `.mjs` entries switch to `node`.
 - **Repo-local source workflows still use `bun`** — local monorepo or source-checkout paths can still resolve to `.ts` server entries, so keep `bun` installed for development workflows.
 - **Codex approval mode should be `auto`** — managed Codex installs are expected to end up with `[mcp_servers.tap] approval_mode = "auto"`. `tap doctor --fix` will repair stale managed tables.
+- **Restart Codex bridges after upgrading** — managed bridge launches now export both `TAP_STATE_DIR` and `TAP_RUNTIME_STATE_DIR`; restart existing bridge processes so headless/runtime identity repair is active end-to-end.
 
 ## License
 
