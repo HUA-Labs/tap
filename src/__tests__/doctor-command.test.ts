@@ -44,6 +44,7 @@ const logHeaderMock = vi.fn();
 const logSuccessMock = vi.fn();
 const logWarnMock = vi.fn();
 const buildManagedMcpServerSpecMock = vi.fn();
+const probeCommandMock = vi.fn();
 
 vi.mock("node:os", async () => {
   const actual = await vi.importActual<typeof import("node:os")>("node:os");
@@ -81,6 +82,7 @@ vi.mock("../config/index.js", async () => {
 
 vi.mock("../adapters/common.js", () => ({
   buildManagedMcpServerSpec: buildManagedMcpServerSpecMock,
+  probeCommand: probeCommandMock,
 }));
 
 vi.mock("../utils.js", async () => {
@@ -203,6 +205,10 @@ describe("doctorCommand", () => {
       },
     });
     findRepoRootMock.mockReturnValue(repoRoot);
+    probeCommandMock.mockImplementation((candidates: string[]) => ({
+      command: candidates[0] ?? null,
+      version: "1.0.0",
+    }));
     buildManagedMcpServerSpecMock.mockReturnValue({
       command: "bun",
       args: ["server.ts"],
@@ -323,6 +329,57 @@ describe("doctorCommand", () => {
         c.message?.includes("old-legacy-runner"),
     );
     expect(legacyCommandCheck).toBeUndefined();
+  });
+
+  it("warns instead of failing when a fresh inbox has no messages yet", async () => {
+    fs.rmSync(path.join(commsDir, "inbox", "20260325-초-온-check.md"), {
+      force: true,
+    });
+
+    const result = await doctorCommand([]);
+
+    const checks = result.data?.checks as Array<{
+      name: string;
+      status: string;
+      message?: string;
+    }>;
+    const messageFlowCheck = checks.find((c) => c.name === "message flow");
+
+    expect(result.ok).toBe(true);
+    expect(messageFlowCheck?.status).toBe("warn");
+    expect(messageFlowCheck?.message).toContain("0 total");
+    expect(messageFlowCheck?.message).toContain(
+      "expected before first exchange",
+    );
+  });
+
+  it("accepts npx package launchers in .mcp.json", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          tap: {
+            command: "npx",
+            args: ["@hua-labs/tap", "serve"],
+            cwd: repoRoot,
+            env: { TAP_COMMS_DIR: commsDir },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await doctorCommand([]);
+
+    const checks = result.data?.checks as Array<{
+      name: string;
+      status: string;
+      message?: string;
+    }>;
+    const scriptCheck = checks.find((c) => c.name === "MCP server script");
+
+    expect(scriptCheck?.status).toBe("pass");
+    expect(scriptCheck?.message).toContain("npx @hua-labs/tap serve");
   });
 
   it("surfaces runtime heartbeat lastError as a doctor warning", async () => {

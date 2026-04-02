@@ -19,18 +19,26 @@ export interface ManagedMcpServerSpec {
   issues: string[];
 }
 
+function resolveProbeCommand(candidate: string): string {
+  return resolveCommandPath(candidate) ?? candidate;
+}
+
+function probeCommandVersion(command: string) {
+  return spawnSync(command, ["--version"], {
+    encoding: "utf-8",
+    windowsHide: true,
+  });
+}
+
 export function probeCommand(candidates: string[]): CommandProbe {
   for (const candidate of candidates) {
-    const result = spawnSync(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32",
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
 
     if (result.status === 0) {
       const version =
         `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() || null;
-      const absolutePath = resolveCommandPath(candidate);
-      return { command: absolutePath ?? candidate, version };
+      return { command: resolvedCommand, version };
     }
   }
 
@@ -188,14 +196,12 @@ export function findPreferredBunCommand(): string | null {
   for (const candidate of candidates) {
     if (path.isAbsolute(candidate) && !fs.existsSync(candidate)) continue;
 
-    const result = spawnSync(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32",
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
     if (result.status === 0) {
-      return path.isAbsolute(candidate)
-        ? toForwardSlashPath(candidate)
-        : candidate;
+      return path.isAbsolute(resolvedCommand)
+        ? toForwardSlashPath(resolvedCommand)
+        : resolvedCommand;
     }
   }
 
@@ -207,7 +213,6 @@ export function buildManagedMcpServerSpec(
   instanceId?: string,
 ): ManagedMcpServerSpec {
   const sourcePath = findTapCommsServerEntry(ctx);
-  const bunCommand = findPreferredBunCommand();
   const warnings: string[] = [];
   const issues: string[] = [];
 
@@ -231,7 +236,7 @@ export function buildManagedMcpServerSpec(
   // M201: bundled .mjs uses node; .ts source requires bun
   const isBundled = sourcePath.endsWith(".mjs");
   const isEphemeralSource = isEphemeralPath(sourcePath);
-  let command: string | null = null;
+  let command: string | null;
   let args: string[] = [toForwardSlashPath(sourcePath)];
 
   // Ephemeral source path (npx cache) → always use stable launcher
@@ -250,7 +255,7 @@ export function buildManagedMcpServerSpec(
     command = nodeProbe.command ?? "node";
   } else {
     // .ts source — requires bun for direct execution
-    command = bunCommand;
+    command = findPreferredBunCommand();
   }
 
   if (!command) {

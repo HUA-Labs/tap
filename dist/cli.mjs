@@ -1432,16 +1432,22 @@ import * as os2 from "os";
 import * as path8 from "path";
 import { spawnSync as spawnSync2 } from "child_process";
 import { fileURLToPath as fileURLToPath2 } from "url";
+function resolveProbeCommand(candidate) {
+  return resolveCommandPath(candidate) ?? candidate;
+}
+function probeCommandVersion(command) {
+  return spawnSync2(command, ["--version"], {
+    encoding: "utf-8",
+    windowsHide: true
+  });
+}
 function probeCommand(candidates) {
   for (const candidate of candidates) {
-    const result = spawnSync2(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32"
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
     if (result.status === 0) {
       const version2 = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() || null;
-      const absolutePath = resolveCommandPath(candidate);
-      return { command: absolutePath ?? candidate, version: version2 };
+      return { command: resolvedCommand, version: version2 };
     }
   }
   return { command: null, version: null };
@@ -1543,19 +1549,16 @@ function findPreferredBunCommand() {
   const candidates = process.platform === "win32" ? [path8.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path8.join(home, ".bun", "bin", "bun"), "bun"];
   for (const candidate of candidates) {
     if (path8.isAbsolute(candidate) && !fs9.existsSync(candidate)) continue;
-    const result = spawnSync2(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32"
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
     if (result.status === 0) {
-      return path8.isAbsolute(candidate) ? toForwardSlashPath(candidate) : candidate;
+      return path8.isAbsolute(resolvedCommand) ? toForwardSlashPath(resolvedCommand) : resolvedCommand;
     }
   }
   return null;
 }
 function buildManagedMcpServerSpec(ctx, instanceId) {
   const sourcePath = findTapCommsServerEntry(ctx);
-  const bunCommand = findPreferredBunCommand();
   const warnings = [];
   const issues = [];
   const env = {
@@ -1575,7 +1578,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   const isBundled = sourcePath.endsWith(".mjs");
   const isEphemeralSource = isEphemeralPath(sourcePath);
-  let command = null;
+  let command;
   let args = [toForwardSlashPath(sourcePath)];
   if (isEphemeralSource && isBundled) {
     command = "npx";
@@ -1589,7 +1592,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     );
     command = nodeProbe.command ?? "node";
   } else {
-    command = bunCommand;
+    command = findPreferredBunCommand();
   }
   if (!command) {
     issues.push(
@@ -8463,6 +8466,38 @@ function sameCommandToken(left, right) {
 function sameStringArray(left, right) {
   return left.length === right.length && left.every((value, index) => sameCommandToken(value, right[index] ?? ""));
 }
+function normalizeCommandBasename(command) {
+  const token = command.split(/[\\/]/).pop() ?? command;
+  return token.toLowerCase().replace(/\.(cmd|exe|ps1|bat)$/i, "");
+}
+function findFirstLauncherTarget(args) {
+  for (const arg of args) {
+    if (!arg || arg === "--" || arg.startsWith("-")) {
+      continue;
+    }
+    return arg;
+  }
+  return null;
+}
+function looksLikePackageSpecifier(value) {
+  const normalized = value.trim();
+  if (!normalized || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.startsWith("/") || normalized.startsWith("\\") || normalized.startsWith(".") || /\.(?:[cm]?js|tsx?|json|ps1|cmd|exe)$/i.test(normalized)) {
+    return false;
+  }
+  return /^(?:@[^/\\]+\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._.-]*)?$/.test(
+    normalized
+  );
+}
+function getNpxPackageLauncher(command, args) {
+  if (normalizeCommandBasename(command) !== "npx") {
+    return null;
+  }
+  const packageName = findFirstLauncherTarget(args);
+  if (!packageName || !looksLikePackageSpecifier(packageName)) {
+    return null;
+  }
+  return [command, ...args].join(" ");
+}
 function appendWarningMessage(message, extra) {
   return message.includes(extra) ? message : `${message}; ${extra}`;
 }
@@ -8918,10 +8953,11 @@ function checkMessageLifecycle(commsDir) {
   const total = countFiles(inbox);
   const recent1h = recentFileCount(inbox, 60 * 60 * 1e3);
   const recent10m = recentFileCount(inbox, 10 * 60 * 1e3);
+  const messageSummary = `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`;
   checks.push({
     name: "message flow",
-    status: recent10m > 0 ? PASS : total > 0 ? WARN : FAIL,
-    message: `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`
+    status: recent10m > 0 ? PASS : WARN,
+    message: total === 0 ? `${messageSummary} (expected before first exchange)` : messageSummary
   });
   const receiptsPath = join28(commsDir, "receipts", "receipts.json");
   if (existsSync29(receiptsPath)) {
@@ -9001,15 +9037,7 @@ function checkMcpServer(repoRoot) {
     const cmd = hasTapComms.command;
     let cmdAvailable = existsSync29(cmd);
     if (!cmdAvailable) {
-      try {
-        const result = spawnSync6(cmd, ["--version"], {
-          stdio: "pipe",
-          timeout: 5e3,
-          shell: process.platform === "win32"
-        });
-        cmdAvailable = result.status === 0;
-      } catch {
-      }
+      cmdAvailable = probeCommand([cmd]).command !== null;
     }
     checks.push({
       name: "MCP command binary",
@@ -9017,7 +9045,14 @@ function checkMcpServer(repoRoot) {
       message: cmdAvailable ? cmd : `Not found: ${cmd} (checked PATH and absolute)`
     });
   }
-  if (hasTapComms.args?.[0]) {
+  const npxPackageLauncher = hasTapComms.command && hasTapComms.args ? getNpxPackageLauncher(hasTapComms.command, hasTapComms.args) : null;
+  if (npxPackageLauncher) {
+    checks.push({
+      name: "MCP server script",
+      status: PASS,
+      message: `Package launcher: ${npxPackageLauncher}`
+    });
+  } else if (hasTapComms.args?.[0]) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
@@ -9483,7 +9518,7 @@ async function doctorCommand(args) {
     message: `${passes} passed, ${warns} warnings, ${fails} failures`,
     warnings: finalChecks.filter((c) => c.status === "warn").map((c) => `${c.name}: ${c.message}`),
     data: {
-      checks: finalChecks.map(({ fix, ...rest }) => rest),
+      checks: finalChecks.map(({ fix: _fix, ...rest }) => rest),
       summary: { total: finalChecks.length, passes, warns, fails },
       fixed
     }

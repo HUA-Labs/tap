@@ -1022,16 +1022,22 @@ import * as os3 from "os";
 import * as path10 from "path";
 import { spawnSync as spawnSync2 } from "child_process";
 import { fileURLToPath as fileURLToPath2 } from "url";
+function resolveProbeCommand(candidate) {
+  return resolveCommandPath(candidate) ?? candidate;
+}
+function probeCommandVersion(command) {
+  return spawnSync2(command, ["--version"], {
+    encoding: "utf-8",
+    windowsHide: true
+  });
+}
 function probeCommand(candidates) {
   for (const candidate of candidates) {
-    const result = spawnSync2(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32"
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
     if (result.status === 0) {
       const version2 = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() || null;
-      const absolutePath = resolveCommandPath(candidate);
-      return { command: absolutePath ?? candidate, version: version2 };
+      return { command: resolvedCommand, version: version2 };
     }
   }
   return { command: null, version: null };
@@ -1133,19 +1139,16 @@ function findPreferredBunCommand() {
   const candidates = process.platform === "win32" ? [path10.join(home, ".bun", "bin", "bun.exe"), "bun", "bun.cmd"] : [path10.join(home, ".bun", "bin", "bun"), "bun"];
   for (const candidate of candidates) {
     if (path10.isAbsolute(candidate) && !fs10.existsSync(candidate)) continue;
-    const result = spawnSync2(candidate, ["--version"], {
-      encoding: "utf-8",
-      shell: process.platform === "win32"
-    });
+    const resolvedCommand = resolveProbeCommand(candidate);
+    const result = probeCommandVersion(resolvedCommand);
     if (result.status === 0) {
-      return path10.isAbsolute(candidate) ? toForwardSlashPath(candidate) : candidate;
+      return path10.isAbsolute(resolvedCommand) ? toForwardSlashPath(resolvedCommand) : resolvedCommand;
     }
   }
   return null;
 }
 function buildManagedMcpServerSpec(ctx, instanceId) {
   const sourcePath = findTapCommsServerEntry(ctx);
-  const bunCommand = findPreferredBunCommand();
   const warnings = [];
   const issues = [];
   const env = {
@@ -1165,7 +1168,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
   }
   const isBundled = sourcePath.endsWith(".mjs");
   const isEphemeralSource = isEphemeralPath(sourcePath);
-  let command = null;
+  let command;
   let args = [toForwardSlashPath(sourcePath)];
   if (isEphemeralSource && isBundled) {
     command = "npx";
@@ -1179,7 +1182,7 @@ function buildManagedMcpServerSpec(ctx, instanceId) {
     );
     command = nodeProbe.command ?? "node";
   } else {
-    command = bunCommand;
+    command = findPreferredBunCommand();
   }
   if (!command) {
     issues.push(

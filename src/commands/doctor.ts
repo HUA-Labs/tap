@@ -23,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import {
   buildManagedMcpServerSpec,
   type ManagedMcpServerSpec,
+  probeCommand,
 } from "../adapters/common.js";
 import { loadState, saveState, getInstalledInstances } from "../state.js";
 import {
@@ -114,6 +115,53 @@ function sameStringArray(left: string[], right: string[]): boolean {
     left.length === right.length &&
     left.every((value, index) => sameCommandToken(value, right[index] ?? ""))
   );
+}
+
+function normalizeCommandBasename(command: string): string {
+  const token = command.split(/[\\/]/).pop() ?? command;
+  return token.toLowerCase().replace(/\.(cmd|exe|ps1|bat)$/i, "");
+}
+
+function findFirstLauncherTarget(args: string[]): string | null {
+  for (const arg of args) {
+    if (!arg || arg === "--" || arg.startsWith("-")) {
+      continue;
+    }
+    return arg;
+  }
+
+  return null;
+}
+
+function looksLikePackageSpecifier(value: string): boolean {
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    /^[A-Za-z]:[\\/]/.test(normalized) ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("\\") ||
+    normalized.startsWith(".") ||
+    /\.(?:[cm]?js|tsx?|json|ps1|cmd|exe)$/i.test(normalized)
+  ) {
+    return false;
+  }
+
+  return /^(?:@[^/\\]+\/)?[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9][A-Za-z0-9._.-]*)?$/.test(
+    normalized,
+  );
+}
+
+function getNpxPackageLauncher(command: string, args: string[]): string | null {
+  if (normalizeCommandBasename(command) !== "npx") {
+    return null;
+  }
+
+  const packageName = findFirstLauncherTarget(args);
+  if (!packageName || !looksLikePackageSpecifier(packageName)) {
+    return null;
+  }
+
+  return [command, ...args].join(" ");
 }
 
 function appendWarningMessage(message: string, extra: string): string {
@@ -715,11 +763,15 @@ function checkMessageLifecycle(commsDir: string): Check[] {
   const total = countFiles(inbox);
   const recent1h = recentFileCount(inbox, 60 * 60 * 1000);
   const recent10m = recentFileCount(inbox, 10 * 60 * 1000);
+  const messageSummary = `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`;
 
   checks.push({
     name: "message flow",
-    status: recent10m > 0 ? PASS : total > 0 ? WARN : FAIL,
-    message: `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`,
+    status: recent10m > 0 ? PASS : WARN,
+    message:
+      total === 0
+        ? `${messageSummary} (expected before first exchange)`
+        : messageSummary,
   });
 
   // Receipt coverage
@@ -830,17 +882,8 @@ function checkMcpServer(repoRoot: string): Check[] {
     const cmd = hasTapComms.command;
     let cmdAvailable = existsSync(cmd); // Absolute path check
     if (!cmdAvailable) {
-      // PATH-based command — try running with --version
-      try {
-        const result = spawnSync(cmd, ["--version"], {
-          stdio: "pipe",
-          timeout: 5000,
-          shell: process.platform === "win32",
-        });
-        cmdAvailable = result.status === 0;
-      } catch {
-        // command not found or failed
-      }
+      // PATH-based command — reuse the same direct spawn probe as runtime setup
+      cmdAvailable = probeCommand([cmd]).command !== null;
     }
     checks.push({
       name: "MCP command binary",
@@ -852,7 +895,17 @@ function checkMcpServer(repoRoot: string): Check[] {
   }
 
   // Check if MCP server script/args exist
-  if (hasTapComms.args?.[0]) {
+  const npxPackageLauncher =
+    hasTapComms.command && hasTapComms.args
+      ? getNpxPackageLauncher(hasTapComms.command, hasTapComms.args)
+      : null;
+  if (npxPackageLauncher) {
+    checks.push({
+      name: "MCP server script",
+      status: PASS,
+      message: `Package launcher: ${npxPackageLauncher}`,
+    });
+  } else if (hasTapComms.args?.[0]) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
@@ -1443,7 +1496,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
       .filter((c) => c.status === "warn")
       .map((c) => `${c.name}: ${c.message}`),
     data: {
-      checks: finalChecks.map(({ fix, ...rest }) => rest),
+      checks: finalChecks.map(({ fix: _fix, ...rest }) => rest),
       summary: { total: finalChecks.length, passes, warns, fails },
       fixed,
     },
