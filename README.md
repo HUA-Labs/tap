@@ -1,6 +1,6 @@
 # @hua-labs/tap
 
-`tap` is a CLI that turns your repo into a shared workspace for Claude, Codex, and Gemini so multiple AI agents can coordinate on the same codebase without custom glue code.
+`tap` is a CLI that turns your repo into a shared workspace for Claude, Codex, and Gemini (experimental) so multiple AI agents can coordinate on the same codebase without custom glue code.
 
 ## Why Would I Use It?
 
@@ -16,11 +16,13 @@ Try it in a fresh repo:
 npx @hua-labs/tap init
 npx @hua-labs/tap add claude
 npx @hua-labs/tap add codex
-npx @hua-labs/tap add gemini
+npx @hua-labs/tap add gemini   # experimental
 npx @hua-labs/tap status
 ```
 
 This creates a shared comms/state layer and wires supported runtimes into it.
+
+Gemini support is currently experimental and polling-only.
 
 > `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
 
@@ -47,7 +49,7 @@ Add a runtime. Probes config, plans patches, applies, and verifies.
 ```bash
 npx @hua-labs/tap add claude
 npx @hua-labs/tap add codex
-npx @hua-labs/tap add gemini
+npx @hua-labs/tap add gemini   # experimental
 npx @hua-labs/tap add claude --force   # re-install
 ```
 
@@ -100,7 +102,7 @@ For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. I
 | ------- | ----------------------- | ---------------------- | ------------------ |
 | Claude  | `.mcp.json`             | native-push (fs.watch) | No daemon needed   |
 | Codex   | `~/.codex/config.toml`  | WebSocket bridge       | Daemon per session |
-| Gemini  | `.gemini/settings.json` | polling                | No daemon needed   |
+| Gemini (experimental) | `.gemini/settings.json` | polling                | No daemon needed   |
 
 ## `--json` Flag
 
