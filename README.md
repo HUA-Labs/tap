@@ -1,27 +1,28 @@
 # @hua-labs/tap
 
-Zero-dependency CLI for cross-model AI agent communication setup.
+`tap` is a CLI that turns your repo into a shared workspace for Claude, Codex, and Gemini so multiple AI agents can coordinate on the same codebase without custom glue code.
 
-One command to connect Claude, Codex, and Gemini agents through a shared file-based communication layer.
+## Why Would I Use It?
+
+- You use more than one coding agent and want them to share context without copy-pasting prompts between tools.
+- You want reviews, handoffs, and agent-to-agent messages to live in files inside the repo instead of hidden app state.
+- You want a working multi-agent setup in minutes instead of hand-editing MCP configs and bridge processes yourself.
 
 ## Quick Start
 
-> `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
+Try it in a fresh repo:
 
 ```bash
-# 1. Initialize comms directory and state
 npx @hua-labs/tap init
-
-# 2. Add runtimes
 npx @hua-labs/tap add claude
 npx @hua-labs/tap add codex
 npx @hua-labs/tap add gemini
-
-# 3. Check status
 npx @hua-labs/tap status
 ```
 
-Your agents can now communicate through the shared comms directory.
+This creates a shared comms/state layer and wires supported runtimes into it.
+
+> `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
 
 ## Commands
 
