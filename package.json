@@ -56,7 +56,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HUA-Labs/tap.git"
+    "url": "git+https://github.com/HUA-Labs/tap.git"
   },
   "sideEffects": false,
   "engines": {
