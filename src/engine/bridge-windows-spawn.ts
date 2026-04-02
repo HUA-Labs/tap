@@ -174,6 +174,7 @@ export function startWindowsCodexAppServer(
   url: string,
   repoRoot: string,
   logPath: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): number | null {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startWindowsDetachedProcess(
@@ -181,6 +182,7 @@ export function startWindowsCodexAppServer(
     [...prefixArgs, "app-server", "--listen", url],
     repoRoot,
     logPath,
+    env,
   );
 }
 

@@ -79,6 +79,7 @@ describe("startUnixCodexAppServer", () => {
       "ws://127.0.0.1:4501",
       tmpDir,
       logPath,
+      undefined,
       "linux",
     );
 

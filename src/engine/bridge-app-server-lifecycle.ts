@@ -35,9 +35,12 @@ import { rotateLog } from "./bridge-observability.js";
 export interface EnsureCodexAppServerOptions {
   instanceId: InstanceId;
   stateDir: string;
+  runtimeStateDir: string;
+  commsDir: string;
   repoRoot: string;
   platform: Platform;
   appServerUrl: string;
+  agentName: string;
   existingAppServer?: AppServerState | null;
   noAuth?: boolean;
 }
@@ -45,6 +48,22 @@ export interface EnsureCodexAppServerOptions {
 export const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
 export const APP_SERVER_START_TIMEOUT_MS = 20_000;
 export const APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5_000;
+
+function buildCodexAppServerEnv(
+  options: EnsureCodexAppServerOptions,
+): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    TAP_COMMS_DIR: options.commsDir,
+    TAP_STATE_DIR: options.stateDir,
+    TAP_RUNTIME_STATE_DIR: options.runtimeStateDir,
+    TAP_REPO_ROOT: options.repoRoot,
+    TAP_BRIDGE_INSTANCE_ID: options.instanceId,
+    TAP_AGENT_ID: options.instanceId,
+    TAP_AGENT_NAME: options.agentName,
+    CODEX_TAP_AGENT_NAME: options.agentName,
+  };
+}
 
 /**
  * Check if any OTHER running bridge is using the same managed app-server.
@@ -184,6 +203,7 @@ export async function ensureCodexAppServer(
   const logPath = appServerLogFilePath(options.stateDir, options.instanceId);
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   rotateLog(logPath);
+  const appServerEnv = buildCodexAppServerEnv(options);
 
   // --no-auth: start app-server directly on the public URL (no gateway).
   // TUI and bridge both connect to the same port without token auth.
@@ -198,6 +218,7 @@ export async function ensureCodexAppServer(
           effectiveUrl,
           options.repoRoot,
           logPath,
+          appServerEnv,
         );
       } catch (err) {
         throw new Error(
@@ -212,6 +233,7 @@ export async function ensureCodexAppServer(
           effectiveUrl,
           options.repoRoot,
           logPath,
+          appServerEnv,
           options.platform,
         );
       } catch (err) {
@@ -278,6 +300,7 @@ export async function ensureCodexAppServer(
         auth.upstreamUrl,
         options.repoRoot,
         logPath,
+        appServerEnv,
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -296,6 +319,7 @@ export async function ensureCodexAppServer(
         auth.upstreamUrl,
         options.repoRoot,
         logPath,
+        appServerEnv,
         options.platform,
       );
     } catch (err) {

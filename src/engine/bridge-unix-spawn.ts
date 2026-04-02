@@ -111,6 +111,7 @@ export function startUnixCodexAppServer(
   url: string,
   repoRoot: string,
   logPath: string,
+  env: NodeJS.ProcessEnv = process.env,
   platform: Platform = DEFAULT_UNIX_PLATFORM,
 ): number | null {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
@@ -119,7 +120,7 @@ export function startUnixCodexAppServer(
     [...prefixArgs, "app-server", "--listen", url],
     repoRoot,
     logPath,
-    process.env,
+    env,
     platform,
   );
 }

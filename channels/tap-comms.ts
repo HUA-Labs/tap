@@ -20,6 +20,12 @@ import {
   isPlaceholderAgentValue,
   normalizeRecipientList,
 } from "./tap-identity.js";
+import {
+  checkPeerDmRateLimit,
+  recordPeerDm,
+  type PeerDmHistoryStore,
+  type PeerDmRoute,
+} from "./tap-peer-dm-rate-limit.js";
 
 import {
   INBOX_DIR,
@@ -30,6 +36,7 @@ import {
   debug,
   getAgentId,
   getAgentName,
+  getAgentIdentitySnapshot,
   claimAgentName,
   getRecentSenders,
   getLatestReviewDir,
@@ -80,6 +87,21 @@ seedStartupFiles("findings");
 // ── Onboarding ─────────────────────────────────────────────────────────
 
 const ONBOARDING_TEASER_LINES = 10;
+const peerDmHistory: PeerDmHistoryStore = new Map();
+
+function loadTowerNameFromConfig(): string | null {
+  const repoRoot = process.env.TAP_REPO_ROOT ?? ".";
+  try {
+    const cfgPath = join(repoRoot, "tap-config.json");
+    if (!existsSync(cfgPath)) return null;
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf-8")) as {
+      towerName?: string | null;
+    };
+    return cfg.towerName?.trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 function loadOnboardingTeaser(): string {
   const commsDir = process.env.TAP_COMMS_DIR;
@@ -345,6 +367,12 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         "Get the full onboarding guide for this project. Returns welcome.md + any additional onboarding docs from commsDir/onboarding/.",
       inputSchema: { type: "object" as const, properties: {} },
     },
+    {
+      name: "tap_identity_probe",
+      description:
+        "Dump the current MCP-side identity/runtime env snapshot seen by tap tools.",
+      inputSchema: { type: "object" as const, properties: {} },
+    },
   ],
 }));
 
@@ -607,14 +635,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     // M111: Notify tower on new agent join (first non-placeholder name)
     if (oldName === "unknown" || oldName === "unnamed") {
       try {
-        // Read towerName from tap-config.json (TAP_REPO_ROOT is canonical source)
-        const repoRoot = process.env.TAP_REPO_ROOT ?? ".";
-        let towerName: string | null = null;
-        const cfgPath = join(repoRoot, "tap-config.json");
-        if (existsSync(cfgPath)) {
-          const cfg = JSON.parse(readFileSync(cfgPath, "utf-8"));
-          towerName = cfg.towerName ?? null;
-        }
+        const towerName = loadTowerNameFromConfig();
 
         // Resolve runtime from state.json (works for all runtimes)
         let runtime = process.env.TAP_BRIDGE_RUNTIME ?? null;
@@ -720,7 +741,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const cc = normalizeRecipientList(rawCc, [to]);
 
     const recipientWarnings: string[] = [];
+    const towerName = loadTowerNameFromConfig();
     const store = loadHeartbeats();
+    const resolvedTowerId = towerName
+      ? resolvePreferredRecipient(store, towerName).target
+      : null;
     const knownAgents = new Set<string>();
     for (const [key, hb] of Object.entries(store)) {
       if (!isPlaceholderAgentValue(key)) knownAgents.add(key);
@@ -778,10 +803,66 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
     }
 
+    const resolvedCc = cc?.map((recipient) => ({
+      original: recipient,
+      resolved: isBroadcastRecipient(recipient)
+        ? recipient
+        : resolveRecipient(recipient).target,
+    }));
+
     const now = new Date();
+    const nowMs = now.getTime();
     const date = now.toISOString().slice(0, 10).replace(/-/g, "");
     const fromId = getAgentId();
     const fromName = getAgentName();
+    const rateLimitRoutes = new Map<string, PeerDmRoute>();
+    const primaryRoute: PeerDmRoute = {
+      fromId,
+      fromName,
+      to,
+      resolvedTo,
+      towerName,
+      towerId: resolvedTowerId,
+    };
+    const primaryCheck = checkPeerDmRateLimit(peerDmHistory, primaryRoute, nowMs);
+    if (!primaryCheck.exempt && primaryCheck.key) {
+      rateLimitRoutes.set(primaryCheck.key, primaryRoute);
+    }
+
+    for (const recipient of resolvedCc ?? []) {
+      const route: PeerDmRoute = {
+        fromId,
+        fromName,
+        to: recipient.original,
+        resolvedTo: recipient.resolved,
+        towerName,
+        towerId: resolvedTowerId,
+      };
+      const check = checkPeerDmRateLimit(peerDmHistory, route, nowMs);
+      if (check.exempt || !check.key) continue;
+      rateLimitRoutes.set(check.key, route);
+    }
+
+    for (const route of rateLimitRoutes.values()) {
+      const check = checkPeerDmRateLimit(peerDmHistory, route, nowMs);
+      if (!check.allowed) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Rate limited: too many messages between ${fromId}→${check.target}. ` +
+                "Route through tower instead.",
+            },
+          ],
+        };
+      }
+    }
+
+    for (const route of rateLimitRoutes.values()) {
+      recordPeerDm(peerDmHistory, route, nowMs);
+    }
+
     const filename = `${date}-${fromId}-${resolvedTo}-${subject}.md`;
     const filepath = join(INBOX_DIR, filename);
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}\n\n` : "";
@@ -810,15 +891,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     const sent = [`Sent to ${to}: ${filename}`];
     if (cc?.length) {
       const writtenFiles = new Set<string>([filename]); // Track to prevent overwrite
-      for (const recipient of cc) {
+      for (const recipient of resolvedCc ?? []) {
         try {
-          const resolvedRecipient = isBroadcastRecipient(recipient)
-            ? recipient
-            : resolveRecipient(recipient).target;
+          const resolvedRecipient = recipient.resolved;
           const ccFilename = `${date}-${fromId}-${resolvedRecipient}-${subject}.md`;
           // Skip if resolved filename matches primary or already written CC
           if (writtenFiles.has(ccFilename)) {
-            sent.push(`CC to ${recipient}: skipped (resolves to same target)`);
+            sent.push(
+              `CC to ${recipient.original}: skipped (resolves to same target)`,
+            );
             continue;
           }
           writtenFiles.add(ccFilename);
@@ -828,7 +909,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             `from: ${fromId}`,
             `from_name: ${fromName}`,
             `to: ${resolvedRecipient}`,
-            `to_name: ${recipient}`,
+            `to_name: ${recipient.original}`,
             `subject: ${subject}`,
             `sent_at: ${now.toISOString()}`,
             "---",
@@ -847,10 +928,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             "inbox",
             Date.now(),
           );
-          sent.push(`CC to ${recipient}: ${ccFilename}`);
+          sent.push(`CC to ${recipient.original}: ${ccFilename}`);
         } catch (err) {
           sent.push(
-            `CC to ${recipient}: FAILED (${err instanceof Error ? err.message : String(err)})`,
+            `CC to ${recipient.original}: FAILED (${err instanceof Error ? err.message : String(err)})`,
           );
         }
       }
@@ -1274,6 +1355,18 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     return {
       content: [{ type: "text", text: prefix + docs.join("\n\n---\n\n") }],
+    };
+  }
+
+  // ── tap_identity_probe ──────────────────────────────────────────
+  if (req.params.name === "tap_identity_probe") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(getAgentIdentitySnapshot(), null, 2),
+        },
+      ],
     };
   }
 

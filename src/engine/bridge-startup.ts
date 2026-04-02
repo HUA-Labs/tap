@@ -244,9 +244,12 @@ export async function startBridge(
     appServer = await ensureCodexAppServer({
       instanceId,
       stateDir,
+      runtimeStateDir,
+      commsDir,
       repoRoot,
       platform: options.platform,
       appServerUrl: effectiveAppServerUrl,
+      agentName: resolvedAgent,
       existingAppServer: previousAppServer,
       noAuth: options.noAuth,
     });
@@ -268,7 +271,9 @@ export async function startBridge(
     const bridgeEnv = {
       ...runtimeEnv,
       TAP_COMMS_DIR: commsDir,
-      TAP_STATE_DIR: runtimeStateDir,
+      TAP_STATE_DIR: stateDir,
+      TAP_RUNTIME_STATE_DIR: runtimeStateDir,
+      TAP_REPO_ROOT: repoRoot,
       TAP_BRIDGE_RUNTIME: runtime,
       TAP_BRIDGE_INSTANCE_ID: instanceId,
       TAP_AGENT_ID: instanceId,

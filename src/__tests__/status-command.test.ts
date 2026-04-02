@@ -147,4 +147,203 @@ describe("statusCommand", () => {
       },
     });
   });
+
+  it("marks stopped bridge state as dispatch-live when fresh bridge-dispatch evidence exists", async () => {
+    const commsDir = path.join(tmpDir, "tap-comms");
+    fs.mkdirSync(commsDir, { recursive: true });
+
+    const state = {
+      schemaVersion: 3,
+      createdAt: "2026-03-24T00:00:00.000Z",
+      updatedAt: "2026-03-24T00:00:00.000Z",
+      commsDir,
+      repoRoot: tmpDir,
+      packageVersion: version,
+      instances: {
+        codex: {
+          instanceId: "codex",
+          runtime: "codex",
+          agentName: "솔",
+          port: 4501,
+          installed: true,
+          configPath: "",
+          bridgeMode: "app-server",
+          restartRequired: false,
+          ownedArtifacts: [],
+          backupPath: "",
+          lastAppliedHash: "",
+          lastVerifiedAt: "2026-03-24T00:00:00.000Z",
+          bridge: null,
+          headless: null,
+          warnings: [],
+        },
+      },
+    };
+
+    fs.writeFileSync(
+      path.join(tmpDir, ".tap-comms", "state.json"),
+      JSON.stringify(state, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await statusCommand([]);
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      instances: {
+        codex: {
+          status: "dispatch-live",
+          lifecycle: {
+            status: "stopped",
+          },
+          session: {
+            status: "initializing",
+          },
+          warnings: [
+            expect.stringContaining(
+              "fresh bridge-dispatch heartbeat from PID",
+            ),
+          ],
+        },
+      },
+    });
+  });
+
+  it("prefers live dispatch evidence over stale bridge metadata on the first status call", async () => {
+    const commsDir = path.join(tmpDir, "tap-comms");
+    const bridgeStatePath = path.join(
+      tmpDir,
+      ".tap-comms",
+      "pids",
+      "bridge-codex.json",
+    );
+    const bridgeState = {
+      pid: 999999,
+      statePath: bridgeStatePath,
+      lastHeartbeat: "2026-03-24T00:00:00.000Z",
+      runtimeStateDir: path.join(tmpDir, ".tap-comms", ".tmp", "codex"),
+    };
+    fs.mkdirSync(path.dirname(bridgeStatePath), { recursive: true });
+    fs.mkdirSync(bridgeState.runtimeStateDir, { recursive: true });
+    fs.mkdirSync(commsDir, { recursive: true });
+
+    const state = {
+      schemaVersion: 3,
+      createdAt: "2026-03-24T00:00:00.000Z",
+      updatedAt: "2026-03-24T00:00:00.000Z",
+      commsDir,
+      repoRoot: tmpDir,
+      packageVersion: version,
+      instances: {
+        codex: {
+          instanceId: "codex",
+          runtime: "codex",
+          agentName: "솔",
+          port: 4501,
+          installed: true,
+          configPath: "",
+          bridgeMode: "app-server",
+          restartRequired: false,
+          ownedArtifacts: [],
+          backupPath: "",
+          lastAppliedHash: "",
+          lastVerifiedAt: "2026-03-24T00:00:00.000Z",
+          bridge: bridgeState,
+          headless: null,
+          warnings: [],
+        },
+      },
+    };
+
+    fs.writeFileSync(
+      path.join(tmpDir, ".tap-comms", "state.json"),
+      JSON.stringify(state, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      bridgeStatePath,
+      JSON.stringify(bridgeState, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await statusCommand([]);
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      instances: {
+        codex: {
+          status: "dispatch-live",
+          lifecycle: {
+            status: "stopped",
+          },
+          session: {
+            status: "initializing",
+          },
+          warnings: [
+            expect.stringContaining(
+              "fresh bridge-dispatch heartbeat from PID",
+            ),
+          ],
+        },
+      },
+    });
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, ".tap-comms", "state.json"), "utf-8"),
+    ) as {
+      instances: {
+        codex: {
+          bridge: unknown;
+        };
+      };
+    };
+    expect(persisted.instances.codex.bridge).toBeNull();
+  });
 });

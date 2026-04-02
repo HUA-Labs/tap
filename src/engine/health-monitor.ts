@@ -1,6 +1,13 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { InstanceId } from "../types.js";
-import { isBridgeRunning, loadRuntimeBridgeHeartbeat } from "./bridge-state.js";
+import {
+  isBridgeRunning,
+  loadBridgeState,
+  loadRuntimeBridgeHeartbeat,
+} from "./bridge-state.js";
 import { getHeartbeatAge } from "./bridge-observability.js";
+import { isProcessAlive } from "./bridge-process-control.js";
 
 // ─── Types ─────────────────────────────────────────────────────
 
@@ -25,6 +32,20 @@ export interface HealthCheckResult {
     heartbeatFresh: boolean;
     threadActive: boolean;
   };
+}
+
+type CommsHeartbeatRecord = {
+  timestamp?: string;
+  lastActivity?: string;
+  source?: "bridge-dispatch" | "mcp-direct";
+  instanceId?: string | null;
+  bridgePid?: number | null;
+  connectHash?: string;
+};
+
+export interface LiveDispatchEvidence {
+  bridgePid: number;
+  lastActivity: string;
 }
 
 export interface HealthPolicy {
@@ -56,6 +77,72 @@ export const DEFAULT_HEALTH_POLICY: HealthPolicy = {
 };
 
 const MAX_HISTORY_ENTRIES = 100;
+const DISPATCH_EVIDENCE_FRESH_THRESHOLD_MS = 2 * 60 * 1000;
+
+function getHeartbeatActivityMs(record: CommsHeartbeatRecord): number | null {
+  const timestamp = new Date(record.lastActivity ?? record.timestamp ?? 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isSameInstanceHeartbeat(
+  key: string,
+  heartbeat: CommsHeartbeatRecord,
+  instanceId: InstanceId,
+): boolean {
+  if (heartbeat.instanceId === instanceId) return true;
+  if (heartbeat.connectHash === `instance:${instanceId}`) return true;
+  return (
+    key === instanceId ||
+    key.replace(/_/g, "-") === instanceId ||
+    key.replace(/-/g, "_") === instanceId
+  );
+}
+
+export function loadLiveDispatchEvidence(
+  commsDir: string,
+  instanceId: InstanceId,
+): LiveDispatchEvidence | null {
+  const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+  if (!fs.existsSync(heartbeatsPath)) return null;
+
+  try {
+    const store = JSON.parse(
+      fs.readFileSync(heartbeatsPath, "utf-8"),
+    ) as Record<string, CommsHeartbeatRecord>;
+
+    let best: LiveDispatchEvidence | null = null;
+    let bestActivityMs = -1;
+
+    for (const [key, heartbeat] of Object.entries(store)) {
+      if (!isSameInstanceHeartbeat(key, heartbeat, instanceId)) continue;
+      if (heartbeat.source !== "bridge-dispatch") continue;
+      if (heartbeat.bridgePid == null || !isProcessAlive(heartbeat.bridgePid)) {
+        continue;
+      }
+
+      const activityMs = getHeartbeatActivityMs(heartbeat);
+      if (
+        activityMs == null ||
+        Date.now() - activityMs > DISPATCH_EVIDENCE_FRESH_THRESHOLD_MS
+      ) {
+        continue;
+      }
+
+      if (activityMs > bestActivityMs) {
+        bestActivityMs = activityMs;
+        best = {
+          bridgePid: heartbeat.bridgePid,
+          lastActivity:
+            heartbeat.lastActivity ?? heartbeat.timestamp ?? new Date(activityMs).toISOString(),
+        };
+      }
+    }
+
+    return best;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Health History Management ─────────────────────────────────
 
@@ -170,10 +257,11 @@ export function checkInstanceHealth(
   const heartbeatAgeMs = getHeartbeatAge(stateDir, instanceId);
   const heartbeatFresh =
     heartbeatAgeMs !== null && heartbeatAgeMs < HEARTBEAT_FRESH_THRESHOLD_MS;
+  const bridgeState = loadBridgeState(stateDir, instanceId);
 
   let threadActive = false;
   try {
-    const runtimeHb = loadRuntimeBridgeHeartbeat(stateDir, instanceId);
+    const runtimeHb = loadRuntimeBridgeHeartbeat(bridgeState);
     threadActive = runtimeHb?.threadId != null;
   } catch {
     // runtime heartbeat not available

@@ -1142,6 +1142,12 @@ function buildBridgeScriptArgs(scriptPath, options) {
   }
   return args;
 }
+function buildBridgeDaemonEnv(parentEnv, runtimeEnv) {
+  return {
+    ...parentEnv,
+    ...runtimeEnv
+  };
+}
 async function main() {
   const repoRootHint = findRepoRootFromRunner() ?? void 0;
   const { config } = resolveConfig({}, repoRootHint);
@@ -1156,7 +1162,7 @@ async function main() {
     Number.isFinite(instancePort) ? instancePort : void 0
   );
   const instanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
-  const envStateDir = process.env.TAP_STATE_DIR;
+  const envStateDir = process.env.TAP_RUNTIME_STATE_DIR;
   let stateDir;
   if (envStateDir) {
     stateDir = envStateDir;
@@ -1217,9 +1223,10 @@ Expected a packaged dist/bridges/codex-app-server-bridge.mjs or monorepo bridge 
   if (process.env.TAP_PROCESS_EXISTING === "true")
     args.push("--process-existing-messages");
   const runtimeEnv = buildRuntimeEnv(repoRoot);
+  const daemonEnv = buildBridgeDaemonEnv(process.env, runtimeEnv);
   const child = spawn(command, args, {
     cwd: repoRoot,
-    env: runtimeEnv,
+    env: daemonEnv,
     stdio: "inherit"
   });
   maybeStartHeadlessLoop(repoRoot, commsDir, stateDir);
@@ -1247,6 +1254,7 @@ if (isDirectExecution()) {
   });
 }
 export {
+  buildBridgeDaemonEnv,
   buildBridgeScriptArgs,
   resolveBridgeDaemonScript
 };

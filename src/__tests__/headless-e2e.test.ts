@@ -374,9 +374,12 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
+      runtimeStateDir: tmpDir,
+      commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "win32",
       appServerUrl: "ws://127.0.0.1:4521",
+      agentName: "codex",
     });
 
     // spawn (detached) should NOT be called on win32 — PowerShell handles it
@@ -429,9 +432,12 @@ describe("Scenario 2: App-server auto spawn uses node directly (not codex.cmd) o
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
+      runtimeStateDir: tmpDir,
+      commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "linux",
       appServerUrl: "ws://127.0.0.1:4522",
+      agentName: "codex",
     });
 
     // On linux, spawn routes through nohup instead of PowerShell/cmd wrappers.

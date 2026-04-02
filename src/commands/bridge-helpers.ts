@@ -52,11 +52,35 @@ export function quoteCliArg(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function quoteShellEnvValue(value: string): string {
+  if (process.platform === "win32") {
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export function formatCodexTuiAttachCommand(
   tuiConnectUrl: string,
   cwd: string,
+  env: Record<string, string> = {},
 ): string {
-  return `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+  const base = `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+  const entries = Object.entries(env).filter(([, value]) => value.length > 0);
+  if (entries.length === 0) {
+    return base;
+  }
+
+  if (process.platform === "win32") {
+    const envPrefix = entries
+      .map(([key, value]) => `$env:${key} = ${quoteShellEnvValue(value)}`)
+      .join("; ");
+    return `${envPrefix}; ${base}`;
+  }
+
+  const envPrefix = entries
+    .map(([key, value]) => `${key}=${quoteShellEnvValue(value)}`)
+    .join(" ");
+  return `${envPrefix} ${base}`;
 }
 
 export function resolveTuiAttachCwd(

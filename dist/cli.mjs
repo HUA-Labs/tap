@@ -2930,13 +2930,14 @@ function startWindowsDetachedProcess(command, args, repoRoot, logPath, env = pro
   }
   return pid;
 }
-function startWindowsCodexAppServer(command, url, repoRoot, logPath) {
+function startWindowsCodexAppServer(command, url, repoRoot, logPath, env = process.env) {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startWindowsDetachedProcess(
     exe,
     [...prefixArgs, "app-server", "--listen", url],
     repoRoot,
-    logPath
+    logPath,
+    env
   );
 }
 function findListeningProcessId(url, platform) {
@@ -3046,14 +3047,14 @@ function startUnixDetachedProcess(command, args, repoRoot, logPath, env = proces
     }
   }
 }
-function startUnixCodexAppServer(command, url, repoRoot, logPath, platform = DEFAULT_UNIX_PLATFORM) {
+function startUnixCodexAppServer(command, url, repoRoot, logPath, env = process.env, platform = DEFAULT_UNIX_PLATFORM) {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startUnixDetachedProcess(
     exe,
     [...prefixArgs, "app-server", "--listen", url],
     repoRoot,
     logPath,
-    process.env,
+    env,
     platform
   );
 }
@@ -4022,6 +4023,19 @@ import * as path21 from "path";
 var DEFAULT_APP_SERVER_URL3 = "ws://127.0.0.1:4501";
 var APP_SERVER_START_TIMEOUT_MS = 2e4;
 var APP_SERVER_GATEWAY_START_TIMEOUT_MS = 5e3;
+function buildCodexAppServerEnv(options) {
+  return {
+    ...process.env,
+    TAP_COMMS_DIR: options.commsDir,
+    TAP_STATE_DIR: options.stateDir,
+    TAP_RUNTIME_STATE_DIR: options.runtimeStateDir,
+    TAP_REPO_ROOT: options.repoRoot,
+    TAP_BRIDGE_INSTANCE_ID: options.instanceId,
+    TAP_AGENT_ID: options.instanceId,
+    TAP_AGENT_NAME: options.agentName,
+    CODEX_TAP_AGENT_NAME: options.agentName
+  };
+}
 function isAppServerUsedByOtherBridge(stateDir, excludeInstanceId, appServer) {
   const pidDir = path21.join(stateDir, "pids");
   if (!fs24.existsSync(pidDir)) return false;
@@ -4125,6 +4139,7 @@ Start the app-server manually:
   const logPath = appServerLogFilePath(options.stateDir, options.instanceId);
   fs24.mkdirSync(path21.dirname(logPath), { recursive: true });
   rotateLog(logPath);
+  const appServerEnv = buildCodexAppServerEnv(options);
   if (options.noAuth) {
     const manualCommand2 = formatCodexAppServerCommand("codex", effectiveUrl);
     let pid2;
@@ -4134,7 +4149,8 @@ Start the app-server manually:
           resolvedCommand,
           effectiveUrl,
           options.repoRoot,
-          logPath
+          logPath,
+          appServerEnv
         );
       } catch (err) {
         throw new Error(
@@ -4151,6 +4167,7 @@ Start it manually:
           effectiveUrl,
           options.repoRoot,
           logPath,
+          appServerEnv,
           options.platform
         );
       } catch (err) {
@@ -4211,7 +4228,8 @@ Or start it manually:
         resolvedCommand,
         auth.upstreamUrl,
         options.repoRoot,
-        logPath
+        logPath,
+        appServerEnv
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -4232,6 +4250,7 @@ Start it manually:
         auth.upstreamUrl,
         options.repoRoot,
         logPath,
+        appServerEnv,
         options.platform
       );
     } catch (err) {
@@ -4444,9 +4463,12 @@ async function startBridge(options) {
     appServer = await ensureCodexAppServer({
       instanceId,
       stateDir,
+      runtimeStateDir,
+      commsDir,
       repoRoot,
       platform: options.platform,
       appServerUrl: effectiveAppServerUrl,
+      agentName: resolvedAgent,
       existingAppServer: previousAppServer,
       noAuth: options.noAuth
     });
@@ -4467,7 +4489,9 @@ async function startBridge(options) {
     const bridgeEnv = {
       ...runtimeEnv,
       TAP_COMMS_DIR: commsDir,
-      TAP_STATE_DIR: runtimeStateDir,
+      TAP_STATE_DIR: stateDir,
+      TAP_RUNTIME_STATE_DIR: runtimeStateDir,
+      TAP_REPO_ROOT: repoRoot,
       TAP_BRIDGE_RUNTIME: runtime,
       TAP_BRIDGE_INSTANCE_ID: instanceId,
       TAP_AGENT_ID: instanceId,
@@ -5051,6 +5075,53 @@ async function addCommand(args) {
   };
 }
 
+// src/engine/health-monitor.ts
+import * as fs27 from "fs";
+import * as path24 from "path";
+var DISPATCH_EVIDENCE_FRESH_THRESHOLD_MS = 2 * 60 * 1e3;
+function getHeartbeatActivityMs2(record) {
+  const timestamp = new Date(record.lastActivity ?? record.timestamp ?? 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+function isSameInstanceHeartbeat2(key, heartbeat, instanceId) {
+  if (heartbeat.instanceId === instanceId) return true;
+  if (heartbeat.connectHash === `instance:${instanceId}`) return true;
+  return key === instanceId || key.replace(/_/g, "-") === instanceId || key.replace(/-/g, "_") === instanceId;
+}
+function loadLiveDispatchEvidence(commsDir, instanceId) {
+  const heartbeatsPath = path24.join(commsDir, "heartbeats.json");
+  if (!fs27.existsSync(heartbeatsPath)) return null;
+  try {
+    const store = JSON.parse(
+      fs27.readFileSync(heartbeatsPath, "utf-8")
+    );
+    let best = null;
+    let bestActivityMs = -1;
+    for (const [key, heartbeat] of Object.entries(store)) {
+      if (!isSameInstanceHeartbeat2(key, heartbeat, instanceId)) continue;
+      if (heartbeat.source !== "bridge-dispatch") continue;
+      if (heartbeat.bridgePid == null || !isProcessAlive(heartbeat.bridgePid)) {
+        continue;
+      }
+      const activityMs = getHeartbeatActivityMs2(heartbeat);
+      if (activityMs == null || Date.now() - activityMs > DISPATCH_EVIDENCE_FRESH_THRESHOLD_MS) {
+        continue;
+      }
+      if (activityMs > bestActivityMs) {
+        bestActivityMs = activityMs;
+        best = {
+          bridgePid: heartbeat.bridgePid,
+          lastActivity: heartbeat.lastActivity ?? heartbeat.timestamp ?? new Date(activityMs).toISOString()
+        };
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+var HEARTBEAT_FRESH_THRESHOLD_MS = 2 * 60 * 1e3;
+
 // src/commands/status.ts
 init_config();
 init_utils();
@@ -5064,12 +5135,13 @@ Description:
 Examples:
   npx @hua-labs/tap status
 `.trim();
-function resolveStatus(inst, stateDir) {
+function resolveStatus(inst, stateDir, commsDir) {
   if (!inst.installed) {
     return {
       status: "not installed",
       lifecycle: null,
-      session: null
+      session: null,
+      warnings: []
     };
   }
   switch (inst.bridgeMode) {
@@ -5078,9 +5150,11 @@ function resolveStatus(inst, stateDir) {
       return {
         status: inst.lastVerifiedAt ? "active" : "configured",
         lifecycle: null,
-        session: null
+        session: null,
+        warnings: []
       };
     case "app-server": {
+      let staleLifecycle = null;
       if (inst.bridge) {
         const lifecycle = resolveBridgeLifecycleSnapshot(
           stateDir,
@@ -5088,21 +5162,40 @@ function resolveStatus(inst, stateDir) {
           inst.bridge
         );
         if (lifecycle.status === "bridge-stale") {
+          staleLifecycle = lifecycle;
           inst.bridge = null;
+        } else {
+          const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(inst.bridge);
           return {
-            status: inst.lastVerifiedAt ? "configured" : "installed",
+            status: "active",
             lifecycle,
-            session: null
+            session: deriveCodexSessionState({
+              runtimeHeartbeat,
+              runtimeStateDir: inst.bridge.runtimeStateDir ?? null
+            }),
+            warnings: []
           };
         }
-        const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(inst.bridge);
+      }
+      const liveDispatch = loadLiveDispatchEvidence(commsDir, inst.instanceId);
+      if (liveDispatch) {
         return {
-          status: "active",
-          lifecycle,
-          session: deriveCodexSessionState({
-            runtimeHeartbeat,
-            runtimeStateDir: inst.bridge.runtimeStateDir ?? null
-          })
+          status: "dispatch-live",
+          lifecycle: deriveBridgeLifecycleState({
+            bridgeStatus: "stopped"
+          }),
+          session: deriveCodexSessionState({ runtimeHeartbeat: null }),
+          warnings: [
+            `fresh bridge-dispatch heartbeat from PID ${liveDispatch.bridgePid} without bridge pid state`
+          ]
+        };
+      }
+      if (staleLifecycle) {
+        return {
+          status: inst.lastVerifiedAt ? "configured" : "installed",
+          lifecycle: staleLifecycle,
+          session: null,
+          warnings: []
         };
       }
       return {
@@ -5110,25 +5203,27 @@ function resolveStatus(inst, stateDir) {
         lifecycle: deriveBridgeLifecycleState({
           bridgeStatus: "stopped"
         }),
-        session: deriveCodexSessionState({ runtimeHeartbeat: null })
+        session: deriveCodexSessionState({ runtimeHeartbeat: null }),
+        warnings: []
       };
     }
     default:
       return {
         status: "installed",
         lifecycle: null,
-        session: null
+        session: null,
+        warnings: []
       };
   }
 }
-function instanceStatusLine(inst, status, lifecycle, session) {
+function instanceStatusLine(inst, status, lifecycle, session, warnings) {
   const bridgeInfo = inst.bridge ? ` (pid: ${inst.bridge.pid})` : "";
   const lifecycleStr = lifecycle?.status ?? "-";
   const sessionStr = session?.status ?? "-";
   const mode = inst.bridgeMode;
   const portStr = inst.port ? ` port:${inst.port}` : "";
   const restart = inst.restartRequired ? " [restart required]" : "";
-  const warns = inst.warnings.length > 0 ? ` [${inst.warnings.length} warning(s)]` : "";
+  const warns = warnings.length > 0 ? ` [${warnings.length} warning(s)]` : "";
   return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${lifecycleStr.padEnd(20)} ${sessionStr.padEnd(18)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
 }
 async function statusCommand(args) {
@@ -5181,10 +5276,15 @@ async function statusCommand(args) {
     for (const id of installed) {
       const inst = state.instances[id];
       if (inst) {
-        const { status, lifecycle, session } = resolveStatus(inst, stateDir);
-        log(instanceStatusLine(inst, status, lifecycle, session));
-        if (inst.warnings.length > 0) {
-          for (const w of inst.warnings) {
+        const { status, lifecycle, session, warnings } = resolveStatus(
+          inst,
+          stateDir,
+          state.commsDir
+        );
+        const mergedWarnings = [...inst.warnings, ...warnings];
+        log(instanceStatusLine(inst, status, lifecycle, session, mergedWarnings));
+        if (mergedWarnings.length > 0) {
+          for (const w of mergedWarnings) {
             logWarn(`  ${w}`);
           }
         }
@@ -5196,7 +5296,7 @@ async function statusCommand(args) {
           bridgeMode: inst.bridgeMode,
           bridge: inst.bridge,
           port: inst.port,
-          warnings: inst.warnings
+          warnings: mergedWarnings
         };
       }
     }
@@ -5227,7 +5327,7 @@ async function statusCommand(args) {
 init_utils();
 
 // src/engine/rollback.ts
-import * as fs27 from "fs";
+import * as fs28 from "fs";
 async function rollbackRuntime(_instanceId, runtimeState) {
   const errors = [];
   const restoredFiles = [];
@@ -5256,7 +5356,7 @@ async function rollbackRuntime(_instanceId, runtimeState) {
   };
 }
 function rollbackArtifact(artifact) {
-  if (!fs27.existsSync(artifact.path)) {
+  if (!fs28.existsSync(artifact.path)) {
     return { restored: false, error: `File not found: ${artifact.path}` };
   }
   switch (artifact.kind) {
@@ -5274,7 +5374,7 @@ function rollbackArtifact(artifact) {
   }
 }
 function rollbackJsonPath(artifact) {
-  const raw = fs27.readFileSync(artifact.path, "utf-8");
+  const raw = fs28.readFileSync(artifact.path, "utf-8");
   let config;
   try {
     config = JSON.parse(raw);
@@ -5300,18 +5400,18 @@ function rollbackJsonPath(artifact) {
     cleanEmptyParents(config, artifact.selector);
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs27.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  fs27.renameSync(tmp, artifact.path);
+  fs28.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs28.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackTomlTable(artifact) {
-  const content = fs27.readFileSync(artifact.path, "utf-8");
+  const content = fs28.readFileSync(artifact.path, "utf-8");
   const backup = artifact.backupPath ? readArtifactBackup(artifact.backupPath) : null;
   if (backup?.kind === "toml-table" && backup.selector === artifact.selector) {
     const nextContent = backup.existed ? replaceTomlTable(content, artifact.selector, backup.content ?? "") : removeTomlTable(content, artifact.selector);
     const tmp2 = `${artifact.path}.tmp.${process.pid}`;
-    fs27.writeFileSync(tmp2, nextContent, "utf-8");
-    fs27.renameSync(tmp2, artifact.path);
+    fs28.writeFileSync(tmp2, nextContent, "utf-8");
+    fs28.renameSync(tmp2, artifact.path);
     return { restored: true };
   }
   if (!extractTomlTable(content, artifact.selector)) {
@@ -5321,13 +5421,13 @@ function rollbackTomlTable(artifact) {
     };
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs27.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
-  fs27.renameSync(tmp, artifact.path);
+  fs28.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
+  fs28.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackFile(artifact) {
-  if (fs27.existsSync(artifact.path)) {
-    fs27.unlinkSync(artifact.path);
+  if (fs28.existsSync(artifact.path)) {
+    fs28.unlinkSync(artifact.path);
     return { restored: true };
   }
   return { restored: false, error: `File not found: ${artifact.path}` };
@@ -5502,13 +5602,13 @@ async function removeCommand(args) {
 init_utils();
 
 // src/commands/bridge-start.ts
-import * as path26 from "path";
+import * as path27 from "path";
 init_instance_config();
 init_config();
 init_utils();
 
 // src/commands/bridge-helpers.ts
-import * as path24 from "path";
+import * as path25 from "path";
 function formatAge(seconds) {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
@@ -5538,8 +5638,24 @@ function resolveTuiConnectUrl(appServer) {
 function quoteCliArg(value) {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
-function formatCodexTuiAttachCommand(tuiConnectUrl, cwd) {
-  return `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+function quoteShellEnvValue(value) {
+  if (process.platform === "win32") {
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+function formatCodexTuiAttachCommand(tuiConnectUrl, cwd, env = {}) {
+  const base = `codex --enable tui_app_server --remote ${quoteCliArg(tuiConnectUrl)} --cd ${quoteCliArg(cwd)}`;
+  const entries = Object.entries(env).filter(([, value]) => value.length > 0);
+  if (entries.length === 0) {
+    return base;
+  }
+  if (process.platform === "win32") {
+    const envPrefix2 = entries.map(([key, value]) => `$env:${key} = ${quoteShellEnvValue(value)}`).join("; ");
+    return `${envPrefix2}; ${base}`;
+  }
+  const envPrefix = entries.map(([key, value]) => `${key}=${quoteShellEnvValue(value)}`).join(" ");
+  return `${envPrefix} ${base}`;
 }
 function resolveTuiAttachCwd(repoRoot, stateRepoRoot, runtimeThreadCwd, savedThreadCwd) {
   return runtimeThreadCwd ?? savedThreadCwd ?? stateRepoRoot ?? repoRoot;
@@ -5554,7 +5670,7 @@ function formatThreadSummary(threadId, cwd) {
   return cwd ? `${threadId} (${cwd})` : threadId;
 }
 function normalizeComparablePath(value) {
-  return path24.resolve(value).replace(/\\/g, "/").toLowerCase();
+  return path25.resolve(value).replace(/\\/g, "/").toLowerCase();
 }
 function sameOptionalPath(left, right) {
   if (!left || !right) {
@@ -5626,22 +5742,22 @@ function transferManagedAppServerOwnership(state, stateDir, recipientId, appServ
 }
 
 // src/commands/bridge-heartbeat.ts
-import { existsSync as existsSync25, readFileSync as readFileSync21, renameSync as renameSync13, writeFileSync as writeFileSync14 } from "fs";
-import * as path25 from "path";
+import { existsSync as existsSync26, readFileSync as readFileSync22, renameSync as renameSync13, writeFileSync as writeFileSync14 } from "fs";
+import * as path26 from "path";
 var BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1e3;
 var BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1e3;
 var BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1e3;
 function loadBridgeHeartbeatStore(commsDir) {
-  const heartbeatsPath = path25.join(commsDir, "heartbeats.json");
-  if (!existsSync25(heartbeatsPath)) return {};
+  const heartbeatsPath = path26.join(commsDir, "heartbeats.json");
+  if (!existsSync26(heartbeatsPath)) return {};
   try {
-    return JSON.parse(readFileSync21(heartbeatsPath, "utf-8"));
+    return JSON.parse(readFileSync22(heartbeatsPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveBridgeHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = path25.join(commsDir, "heartbeats.json");
+  const heartbeatsPath = path26.join(commsDir, "heartbeats.json");
   const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
   writeFileSync14(tmp, JSON.stringify(store, null, 2), "utf-8");
   renameSync13(tmp, heartbeatsPath);
@@ -5948,7 +6064,7 @@ async function bridgeStart(identifier, agentName, flags = {}) {
       }
     }
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
-    log(`Log: ${path26.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
+    log(`Log: ${path27.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
     if (bridge.appServer) {
       log(`App server:   ${formatAppServerState(bridge.appServer)}`);
       if (bridge.appServer.logPath) {
@@ -6073,7 +6189,7 @@ async function bridgeStartAll(flags = {}) {
       warnings.push(msg);
       continue;
     }
-    const stateDir = path26.join(repoRoot, ".tap-comms");
+    const stateDir = path27.join(repoRoot, ".tap-comms");
     const currentBridgeState = loadBridgeState(stateDir, instanceId);
     const { manageAppServer, noAuth } = inferRestartMode(
       currentBridgeState,
@@ -6492,7 +6608,7 @@ async function bridgeWatch(_intervalSeconds, stuckThresholdSeconds) {
 }
 
 // src/commands/bridge-status.ts
-import * as path27 from "path";
+import * as path28 from "path";
 init_config();
 init_utils();
 function bridgeStatusAll() {
@@ -6543,23 +6659,26 @@ function bridgeStatusAll() {
       };
       continue;
     }
-    const status = getBridgeStatus(stateDir, instanceId);
+    const rawStatus = getBridgeStatus(stateDir, instanceId);
     const bridgeState = loadBridgeState(stateDir, instanceId) ?? inst.bridge;
-    const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
-    const savedThread = loadRuntimeBridgeThreadState(bridgeState);
-    const lifecycle = deriveBridgeLifecycleState({
-      bridgeStatus: status,
+    const liveDispatch = rawStatus === "running" ? null : loadLiveDispatchEvidence(state.commsDir, instanceId);
+    const surfaceBridgeState = liveDispatch ? null : bridgeState;
+    const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(surfaceBridgeState);
+    const savedThread = loadRuntimeBridgeThreadState(surfaceBridgeState);
+    const status = liveDispatch ? "dispatch-live" : rawStatus;
+    const lifecycle = liveDispatch ? deriveBridgeLifecycleState({ bridgeStatus: "stopped" }) : deriveBridgeLifecycleState({
+      bridgeStatus: rawStatus,
       bridgeState,
       runtimeHeartbeat,
       savedThread,
       persistedLifecycle: inst.bridgeLifecycle ?? bridgeState?.lifecycle ?? null
     });
-    const session = status === "running" ? deriveCodexSessionState({
+    const session = rawStatus === "running" || liveDispatch ? deriveCodexSessionState({
       runtimeHeartbeat,
-      runtimeStateDir: bridgeState?.runtimeStateDir ?? null
+      runtimeStateDir: surfaceBridgeState?.runtimeStateDir ?? null
     }) : null;
-    const age = getHeartbeatAge(stateDir, instanceId);
-    if (lifecycle.status === "bridge-stale" && inst.bridge) {
+    const age = liveDispatch ? null : getHeartbeatAge(stateDir, instanceId);
+    if (rawStatus === "stale" && inst.bridge) {
       state.instances[instanceId] = {
         ...inst,
         bridge: null,
@@ -6571,22 +6690,22 @@ function bridgeStatusAll() {
       };
       stateChanged = true;
     }
-    const pid = bridgeState?.pid ?? null;
-    const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
+    const pid = surfaceBridgeState?.pid ?? null;
+    const heartbeat = liveDispatch ? null : getBridgeHeartbeatTimestamp(stateDir, instanceId);
     const pidStr = pid ? String(pid) : "-";
     const portStr = inst.port ? String(inst.port) : "-";
     const ageStr = age !== null ? formatAge(age) : "-";
     log(
       `${instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(10)} ${lifecycle.status.padEnd(20)} ${(session?.status ?? "-").padEnd(18)} ${pidStr.padEnd(8)} ${portStr.padEnd(6)} ${ageStr}`
     );
-    if (bridgeState?.appServer) {
-      log(`  App server: ${formatAppServerState(bridgeState.appServer)}`);
-      if (bridgeState.appServer.logPath) {
-        log(`  Server log: ${bridgeState.appServer.logPath}`);
+    if (surfaceBridgeState?.appServer) {
+      log(`  App server: ${formatAppServerState(surfaceBridgeState.appServer)}`);
+      if (surfaceBridgeState.appServer.logPath) {
+        log(`  Server log: ${surfaceBridgeState.appServer.logPath}`);
       }
-      if (bridgeState.appServer.auth) {
+      if (surfaceBridgeState.appServer.auth) {
         log(
-          `  Protected: ${redactProtectedUrl(bridgeState.appServer.auth.protectedUrl)}`
+          `  Protected: ${redactProtectedUrl(surfaceBridgeState.appServer.auth.protectedUrl)}`
         );
       }
     }
@@ -6603,6 +6722,11 @@ function bridgeStatusAll() {
     const transition = formatLifecycleTransition(lifecycle);
     if (transition) {
       log(`  Transition: ${transition}`);
+    }
+    if (liveDispatch) {
+      log(
+        `  Drift:      fresh bridge-dispatch heartbeat from PID ${liveDispatch.bridgePid} without bridge pid state`
+      );
     }
     const turnInfo = getTurnInfo(stateDir, instanceId);
     if (turnInfo?.activeTurnId) {
@@ -6629,7 +6753,7 @@ function bridgeStatusAll() {
       threadCwd: runtimeHeartbeat?.threadCwd ?? null,
       savedThreadId: savedThread?.threadId ?? null,
       savedThreadCwd: savedThread?.cwd ?? null,
-      appServer: bridgeState?.appServer ?? null
+      appServer: surfaceBridgeState?.appServer ?? null
     };
   }
   if (instanceIds.length === 0) {
@@ -6726,14 +6850,17 @@ function bridgeStatusOne(identifier) {
   }
   const { config: resolvedCfg2 } = resolveConfig({}, repoRoot);
   const stateDir = resolvedCfg2.stateDir;
-  const status = getBridgeStatus(stateDir, instanceId);
+  const rawStatus = getBridgeStatus(stateDir, instanceId);
   const bridgeState = loadBridgeState(stateDir, instanceId) ?? inst.bridge;
-  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
-  const savedThread = loadRuntimeBridgeThreadState(bridgeState);
-  const age = getHeartbeatAge(stateDir, instanceId);
-  const heartbeat = getBridgeHeartbeatTimestamp(stateDir, instanceId);
-  const lifecycle = deriveBridgeLifecycleState({
-    bridgeStatus: status,
+  const liveDispatch = rawStatus === "running" ? null : loadLiveDispatchEvidence(state.commsDir, instanceId);
+  const surfaceBridgeState = liveDispatch ? null : bridgeState;
+  const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(surfaceBridgeState);
+  const savedThread = loadRuntimeBridgeThreadState(surfaceBridgeState);
+  const age = liveDispatch ? null : getHeartbeatAge(stateDir, instanceId);
+  const heartbeat = liveDispatch ? null : getBridgeHeartbeatTimestamp(stateDir, instanceId);
+  const status = liveDispatch ? "dispatch-live" : rawStatus;
+  const lifecycle = liveDispatch ? deriveBridgeLifecycleState({ bridgeStatus: "stopped" }) : deriveBridgeLifecycleState({
+    bridgeStatus: rawStatus,
     bridgeState,
     runtimeHeartbeat,
     savedThread,
@@ -6741,13 +6868,25 @@ function bridgeStatusOne(identifier) {
   });
   const session = deriveCodexSessionState({
     runtimeHeartbeat,
-    runtimeStateDir: bridgeState?.runtimeStateDir ?? null
+    runtimeStateDir: surfaceBridgeState?.runtimeStateDir ?? null
   });
   log(`Status:      ${status}`);
   log(`Lifecycle:   ${lifecycle.summary}`);
   log(`Session:     ${session.summary}`);
-  if (bridgeState) {
-    log(`PID:         ${bridgeState.pid}`);
+  if (rawStatus === "stale" && inst.bridge) {
+    state.instances[instanceId] = {
+      ...inst,
+      bridge: null,
+      bridgeLifecycle: transitionBridgeLifecycle(
+        inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null,
+        "crashed",
+        "bridge pid not alive"
+      )
+    };
+    saveState(repoRoot, state);
+  }
+  if (surfaceBridgeState) {
+    log(`PID:         ${surfaceBridgeState.pid}`);
     log(
       `Heartbeat:   ${heartbeat ?? "-"}${age !== null ? ` (${formatAge(age)})` : ""}`
     );
@@ -6762,41 +6901,46 @@ function bridgeStatusOne(identifier) {
       );
     }
     log(
-      `Log:         ${path27.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
+      `Log:         ${path28.join(stateDir, "logs", `bridge-${instanceId}.log`)}`
     );
-    if (bridgeState.appServer) {
-      log(`App server:  ${bridgeState.appServer.url}`);
-      log(`Server PID:  ${bridgeState.appServer.pid ?? "-"}`);
+    if (surfaceBridgeState.appServer) {
+      log(`App server:  ${surfaceBridgeState.appServer.url}`);
+      log(`Server PID:  ${surfaceBridgeState.appServer.pid ?? "-"}`);
       log(
-        `Server mode: ${bridgeState.appServer.managed ? "managed" : "external"}`
+        `Server mode: ${surfaceBridgeState.appServer.managed ? "managed" : "external"}`
       );
       log(
-        `Health:      ${bridgeState.appServer.healthy ? "healthy" : "unhealthy"}`
+        `Health:      ${surfaceBridgeState.appServer.healthy ? "healthy" : "unhealthy"}`
       );
-      log(`Checked:     ${bridgeState.appServer.lastCheckedAt}`);
-      if (bridgeState.appServer.logPath) {
-        log(`Server log:  ${bridgeState.appServer.logPath}`);
+      log(`Checked:     ${surfaceBridgeState.appServer.lastCheckedAt}`);
+      if (surfaceBridgeState.appServer.logPath) {
+        log(`Server log:  ${surfaceBridgeState.appServer.logPath}`);
       }
-      if (bridgeState.appServer.auth) {
-        log(`Auth:        ${bridgeState.appServer.auth.mode}`);
+      if (surfaceBridgeState.appServer.auth) {
+        log(`Auth:        ${surfaceBridgeState.appServer.auth.mode}`);
         log(
-          `Protected:   ${redactProtectedUrl(bridgeState.appServer.auth.protectedUrl)}`
+          `Protected:   ${redactProtectedUrl(surfaceBridgeState.appServer.auth.protectedUrl)}`
         );
-        log(`Upstream:    ${bridgeState.appServer.auth.upstreamUrl}`);
-        log(`TUI connect: ${bridgeState.appServer.auth.upstreamUrl}`);
-        log(`Gateway PID: ${bridgeState.appServer.auth.gatewayPid ?? "-"}`);
-        if (bridgeState.appServer.auth.gatewayLogPath) {
-          log(`Gateway log: ${bridgeState.appServer.auth.gatewayLogPath}`);
+        log(`Upstream:    ${surfaceBridgeState.appServer.auth.upstreamUrl}`);
+        log(`TUI connect: ${surfaceBridgeState.appServer.auth.upstreamUrl}`);
+        log(`Gateway PID: ${surfaceBridgeState.appServer.auth.gatewayPid ?? "-"}`);
+        if (surfaceBridgeState.appServer.auth.gatewayLogPath) {
+          log(`Gateway log: ${surfaceBridgeState.appServer.auth.gatewayLogPath}`);
         }
-      } else if (bridgeState.appServer.managed) {
+      } else if (surfaceBridgeState.appServer.managed) {
         log(`Auth:        none (--no-auth)`);
-        log(`TUI connect: ${bridgeState.appServer.url}`);
+        log(`TUI connect: ${surfaceBridgeState.appServer.url}`);
       }
     }
   }
   const transition = formatLifecycleTransition(lifecycle);
   if (transition) {
     log(`Transition:  ${transition}`);
+  }
+  if (liveDispatch) {
+    log(
+      `Drift:       fresh bridge-dispatch heartbeat from PID ${liveDispatch.bridgePid} without bridge pid state`
+    );
   }
   log("");
   return {
@@ -6827,14 +6971,14 @@ function bridgeStatusOne(identifier) {
         lastDispatchAt: session.lastDispatchAt
       },
       bridgeMode: inst.bridgeMode,
-      pid: bridgeState?.pid ?? null,
+      pid: surfaceBridgeState?.pid ?? null,
       port: inst.port,
       lastHeartbeat: heartbeat,
       threadId: runtimeHeartbeat?.threadId ?? null,
       threadCwd: runtimeHeartbeat?.threadCwd ?? null,
       savedThreadId: savedThread?.threadId ?? null,
       savedThreadCwd: savedThread?.cwd ?? null,
-      appServer: bridgeState?.appServer ?? null
+      appServer: surfaceBridgeState?.appServer ?? null
     }
   };
 }
@@ -6929,7 +7073,23 @@ function bridgeTuiOne(identifier) {
     runtimeHeartbeat?.threadCwd,
     savedThread?.cwd
   );
-  const attachCommand = formatCodexTuiAttachCommand(tuiConnectUrl, attachCwd);
+  const attachEnv = {
+    TAP_BRIDGE_INSTANCE_ID: instanceId,
+    TAP_AGENT_ID: instanceId,
+    TAP_COMMS_DIR: resolvedConfig.commsDir,
+    TAP_STATE_DIR: stateDir,
+    TAP_RUNTIME_STATE_DIR: bridgeState?.runtimeStateDir ?? getBridgeRuntimeStateDir(repoRoot, instanceId),
+    TAP_REPO_ROOT: repoRoot
+  };
+  if (typeof inst.agentName === "string" && inst.agentName.trim()) {
+    attachEnv.TAP_AGENT_NAME = inst.agentName;
+    attachEnv.CODEX_TAP_AGENT_NAME = inst.agentName;
+  }
+  const attachCommand = formatCodexTuiAttachCommand(
+    tuiConnectUrl,
+    attachCwd,
+    attachEnv
+  );
   const warnings = appServer.auth != null ? [
     "Use the upstream TUI URL, not the protected gateway URL. The protected URL is bridge-only."
   ] : [];
@@ -6954,6 +7114,7 @@ function bridgeTuiOne(identifier) {
       tuiConnectUrl,
       attachCwd,
       attachCommand,
+      attachEnv,
       appServer
     }
   };
@@ -7266,8 +7427,8 @@ async function bridgeCommand(args) {
 
 // src/engine/dashboard.ts
 init_config();
-import * as fs28 from "fs";
-import * as path28 from "path";
+import * as fs29 from "fs";
+import * as path29 from "path";
 import { execSync as execSync4 } from "child_process";
 function formatAgentLabel(agentIdOrName, displayName) {
   const normalizedId = agentIdOrName.trim();
@@ -7300,10 +7461,10 @@ function resolveHeartbeatInstanceId(heartbeatId, displayName, state) {
   return matches.length === 1 ? matches[0].instanceId : null;
 }
 function collectAgents(commsDir, state, bridges) {
-  const heartbeatsPath = path28.join(commsDir, "heartbeats.json");
-  if (!fs28.existsSync(heartbeatsPath)) return [];
+  const heartbeatsPath = path29.join(commsDir, "heartbeats.json");
+  if (!fs29.existsSync(heartbeatsPath)) return [];
   try {
-    const raw = fs28.readFileSync(heartbeatsPath, "utf-8");
+    const raw = fs29.readFileSync(heartbeatsPath, "utf-8");
     const data = JSON.parse(raw);
     return Object.entries(data).map(([agentId, info]) => {
       const instanceId = resolveHeartbeatInstanceId(
@@ -7363,22 +7524,22 @@ function collectBridges(repoRoot) {
       });
     }
   }
-  const tmpDir = path28.join(repoRoot, ".tmp");
-  if (fs28.existsSync(tmpDir)) {
+  const tmpDir = path29.join(repoRoot, ".tmp");
+  if (fs29.existsSync(tmpDir)) {
     try {
-      const dirs = fs28.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
+      const dirs = fs29.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
       for (const dir of dirs) {
-        const daemonPath = path28.join(tmpDir, dir, "bridge-daemon.json");
-        if (!fs28.existsSync(daemonPath)) continue;
+        const daemonPath = path29.join(tmpDir, dir, "bridge-daemon.json");
+        if (!fs29.existsSync(daemonPath)) continue;
         try {
-          const raw = fs28.readFileSync(daemonPath, "utf-8");
+          const raw = fs29.readFileSync(daemonPath, "utf-8");
           const daemon = JSON.parse(raw);
           const alreadyCovered = bridges.some(
             (b) => b.pid === daemon.pid && b.pid !== null
           );
           if (alreadyCovered) continue;
-          const agentFile = path28.join(tmpDir, dir, "agent-name.txt");
-          const agentName = fs28.existsSync(agentFile) ? fs28.readFileSync(agentFile, "utf-8").trim() : dir;
+          const agentFile = path29.join(tmpDir, dir, "agent-name.txt");
+          const agentName = fs29.existsSync(agentFile) ? fs29.readFileSync(agentFile, "utf-8").trim() : dir;
           const running = daemon.pid ? isProcessAlive(daemon.pid) : false;
           const portMatch = daemon.appServerUrl?.match(/:(\d+)/);
           const port = portMatch ? parseInt(portMatch[1], 10) : null;
@@ -7613,7 +7774,7 @@ async function downCommand(args) {
 }
 
 // src/commands/serve.ts
-import * as path29 from "path";
+import * as path30 from "path";
 import { spawn as spawn2 } from "child_process";
 init_utils();
 init_config();
@@ -7649,10 +7810,10 @@ async function serveCommand(args) {
   let commsDir;
   const commsDirIdx = args.indexOf("--comms-dir");
   if (commsDirIdx !== -1 && args[commsDirIdx + 1]) {
-    commsDir = path29.resolve(normalizeTapPath(args[commsDirIdx + 1]));
+    commsDir = path30.resolve(normalizeTapPath(args[commsDirIdx + 1]));
   }
   if (!commsDir && process.env.TAP_COMMS_DIR) {
-    commsDir = path29.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
+    commsDir = path30.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
   }
   if (!commsDir) {
     const state = loadState(repoRoot);
@@ -7719,8 +7880,8 @@ async function serveCommand(args) {
 // src/commands/init-worktree.ts
 init_config();
 init_utils();
-import * as fs29 from "fs";
-import * as path30 from "path";
+import * as fs30 from "fs";
+import * as path31 from "path";
 import { execSync as execSync5 } from "child_process";
 var INIT_WORKTREE_HELP = `
 Usage:
@@ -7757,7 +7918,7 @@ function run(cmd, opts) {
   }
 }
 function toAbsolute(p) {
-  const resolved = path30.resolve(p);
+  const resolved = path31.resolve(p);
   return resolved.replace(/\\/g, "/");
 }
 function probeBun(candidate) {
@@ -7788,18 +7949,18 @@ function findBun() {
     }
   }
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const bunHome = path30.join(
+  const bunHome = path31.join(
     home,
     ".bun",
     "bin",
     process.platform === "win32" ? "bun.exe" : "bun"
   );
-  if (fs29.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
+  if (fs30.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
   return null;
 }
 function step1CreateWorktree(opts) {
   log("Step 1/9: Creating worktree...");
-  if (fs29.existsSync(opts.worktreePath)) {
+  if (fs30.existsSync(opts.worktreePath)) {
     logWarn(`Directory already exists: ${opts.worktreePath}`);
     try {
       run("git rev-parse --git-dir", { cwd: opts.worktreePath });
@@ -7861,22 +8022,22 @@ function step2MergeMain(opts, warnings) {
 }
 function step3CopyPermissions(opts, warnings) {
   log("Step 3/9: Copying permissions...");
-  const srcSettings = path30.join(
+  const srcSettings = path31.join(
     opts.repoRoot,
     ".claude",
     "settings.local.json"
   );
-  const destDir = path30.join(opts.worktreePath, ".claude");
-  const destSettings = path30.join(destDir, "settings.local.json");
-  if (!fs29.existsSync(srcSettings)) {
+  const destDir = path31.join(opts.worktreePath, ".claude");
+  const destSettings = path31.join(destDir, "settings.local.json");
+  if (!fs30.existsSync(srcSettings)) {
     warn(
       warnings,
       "No .claude/settings.local.json found in main repo. Skipping."
     );
     return;
   }
-  fs29.mkdirSync(destDir, { recursive: true });
-  fs29.copyFileSync(srcSettings, destSettings);
+  fs30.mkdirSync(destDir, { recursive: true });
+  fs30.copyFileSync(srcSettings, destSettings);
   logSuccess("Copied settings.local.json");
   try {
     run("git update-index --skip-worktree .claude/settings.local.json", {
@@ -7901,7 +8062,7 @@ function step4GenerateMcpJson(opts, warnings) {
   const wtAbs = toAbsolute(opts.worktreePath);
   const bunAbs = toAbsolute(bunPath);
   const commsAbs = toAbsolute(opts.commsDir);
-  const channelEntry = path30.join(
+  const channelEntry = path31.join(
     wtAbs,
     "packages/tap-plugin/channels/tap-comms.ts"
   );
@@ -7918,8 +8079,8 @@ function step4GenerateMcpJson(opts, warnings) {
       }
     }
   };
-  const mcpPath = path30.join(opts.worktreePath, ".mcp.json");
-  fs29.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
+  const mcpPath = path31.join(opts.worktreePath, ".mcp.json");
+  fs30.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
   logSuccess(`.mcp.json generated (absolute paths + cwd)`);
   log(`  bun: ${bunAbs}`);
   log(`  comms: ${commsAbs}`);
@@ -7957,16 +8118,16 @@ function step6BuildEslintPlugin(opts, warnings) {
 }
 function step7VerifyComms(opts, warnings) {
   log("Step 7/9: Verifying comms directory...");
-  if (!fs29.existsSync(opts.commsDir)) {
+  if (!fs30.existsSync(opts.commsDir)) {
     warn(warnings, `Comms directory not found: ${opts.commsDir}`);
     warn(warnings, "Create it or run: npx @hua-labs/tap init");
     return;
   }
   const requiredDirs = ["inbox", "findings", "reviews", "letters"];
   for (const dir of requiredDirs) {
-    const dirPath = path30.join(opts.commsDir, dir);
-    if (!fs29.existsSync(dirPath)) {
-      fs29.mkdirSync(dirPath, { recursive: true });
+    const dirPath = path31.join(opts.commsDir, dir);
+    if (!fs30.existsSync(dirPath)) {
+      fs30.mkdirSync(dirPath, { recursive: true });
       logSuccess(`Created ${dir}/`);
     }
   }
@@ -8025,17 +8186,17 @@ async function initWorktreeCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path30.basename(path30.resolve(worktreePath));
+  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path31.basename(path31.resolve(worktreePath));
   const base = typeof flags["base"] === "string" ? flags["base"] : "origin/main";
   const mission = typeof flags["mission"] === "string" ? flags["mission"] : void 0;
   const commsDir = typeof flags["comms-dir"] === "string" ? flags["comms-dir"] : config.commsDir;
   const skipInstall = flags["skip-install"] === true;
   const opts = {
-    worktreePath: path30.resolve(worktreePath),
+    worktreePath: path31.resolve(worktreePath),
     branch,
     base,
     mission,
-    commsDir: path30.resolve(commsDir),
+    commsDir: path31.resolve(commsDir),
     skipInstall,
     repoRoot
   };
@@ -8260,10 +8421,10 @@ async function dashboardCommand(args) {
 
 // src/commands/doctor.ts
 import {
-  existsSync as existsSync28,
+  existsSync as existsSync29,
   mkdirSync as mkdirSync14,
   readdirSync as readdirSync8,
-  readFileSync as readFileSync23,
+  readFileSync as readFileSync24,
   renameSync as renameSync14,
   statSync as statSync3,
   unlinkSync as unlinkSync8,
@@ -8271,7 +8432,7 @@ import {
 } from "fs";
 import { homedir as homedir3 } from "os";
 import { spawnSync as spawnSync6 } from "child_process";
-import { dirname as dirname15, join as join27, resolve as resolve14 } from "path";
+import { dirname as dirname15, join as join28, resolve as resolve14 } from "path";
 init_config();
 init_drift_detector();
 init_utils();
@@ -8306,7 +8467,7 @@ function appendWarningMessage(message, extra) {
   return message.includes(extra) ? message : `${message}; ${extra}`;
 }
 function findCodexConfigPath3() {
-  return join27(homedir3(), ".codex", "config.toml");
+  return join28(homedir3(), ".codex", "config.toml");
 }
 function canonicalizeTrustPath3(targetPath) {
   let resolved = resolve14(targetPath).replace(/\//g, "\\");
@@ -8376,7 +8537,7 @@ function repairCodexConfig(repoRoot, commsDir) {
       spec.managed.issues[0] ?? "Unable to resolve the managed tap MCP server for Codex."
     );
   }
-  const existingContent = existsSync28(spec.configPath) ? readFileSync23(spec.configPath, "utf-8") : "";
+  const existingContent = existsSync29(spec.configPath) ? readFileSync24(spec.configPath, "utf-8") : "";
   const existingTapEnvTable = extractTomlTable(
     existingContent,
     "mcp_servers.tap.env"
@@ -8443,7 +8604,7 @@ function repairCodexConfig(repoRoot, commsDir) {
   return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
 }
 function countFiles(dir, ext = ".md") {
-  if (!existsSync28(dir)) return 0;
+  if (!existsSync29(dir)) return 0;
   try {
     return readdirSync8(dir).filter((f) => f.endsWith(ext)).length;
   } catch {
@@ -8451,14 +8612,14 @@ function countFiles(dir, ext = ".md") {
   }
 }
 function recentFileCount(dir, withinMs) {
-  if (!existsSync28(dir)) return 0;
+  if (!existsSync29(dir)) return 0;
   const cutoff = Date.now() - withinMs;
   let count = 0;
   try {
     for (const f of readdirSync8(dir)) {
       if (!f.endsWith(".md")) continue;
       try {
-        if (statSync3(join27(dir, f)).mtimeMs > cutoff) count++;
+        if (statSync3(join28(dir, f)).mtimeMs > cutoff) count++;
       } catch {
       }
     }
@@ -8467,16 +8628,16 @@ function recentFileCount(dir, withinMs) {
   return count;
 }
 function loadDoctorHeartbeatStore(commsDir) {
-  const heartbeatsPath = join27(commsDir, "heartbeats.json");
-  if (!existsSync28(heartbeatsPath)) return null;
+  const heartbeatsPath = join28(commsDir, "heartbeats.json");
+  if (!existsSync29(heartbeatsPath)) return null;
   try {
-    return JSON.parse(readFileSync23(heartbeatsPath, "utf-8"));
+    return JSON.parse(readFileSync24(heartbeatsPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveDoctorHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = join27(commsDir, "heartbeats.json");
+  const heartbeatsPath = join28(commsDir, "heartbeats.json");
   const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
   writeFileSync16(tmp, JSON.stringify(store, null, 2), "utf-8");
   renameSync14(tmp, heartbeatsPath);
@@ -8542,9 +8703,9 @@ function checkComms(commsDir) {
   const checks = [];
   checks.push({
     name: "comms directory",
-    status: existsSync28(commsDir) ? PASS : FAIL,
-    message: existsSync28(commsDir) ? commsDir : `Not found: ${commsDir}`,
-    fix: existsSync28(commsDir) ? void 0 : () => {
+    status: existsSync29(commsDir) ? PASS : FAIL,
+    message: existsSync29(commsDir) ? commsDir : `Not found: ${commsDir}`,
+    fix: existsSync29(commsDir) ? void 0 : () => {
       mkdirSync14(commsDir, { recursive: true });
       return `Created ${commsDir}`;
     }
@@ -8554,8 +8715,8 @@ function checkComms(commsDir) {
     ["reviews", false],
     ["findings", false]
   ]) {
-    const dir = join27(commsDir, subdir);
-    const exists = existsSync28(dir);
+    const dir = join28(commsDir, subdir);
+    const exists = existsSync29(dir);
     checks.push({
       name: `${subdir} directory`,
       status: exists ? PASS : required ? FAIL : WARN,
@@ -8566,10 +8727,10 @@ function checkComms(commsDir) {
       }
     });
   }
-  const heartbeats = join27(commsDir, "heartbeats.json");
-  if (existsSync28(heartbeats)) {
+  const heartbeats = join28(commsDir, "heartbeats.json");
+  if (existsSync29(heartbeats)) {
     try {
-      const store = JSON.parse(readFileSync23(heartbeats, "utf-8"));
+      const store = JSON.parse(readFileSync24(heartbeats, "utf-8"));
       const agents = Object.keys(store);
       const now = Date.now();
       const active = agents.filter((a) => {
@@ -8683,7 +8844,7 @@ function checkInstances(repoRoot, stateDir, commsDir) {
               }
             }
           }
-          const pidPath = join27(stateDir, "pids", `bridge-${id}.json`);
+          const pidPath = join28(stateDir, "pids", `bridge-${id}.json`);
           try {
             unlinkSync8(pidPath);
           } catch {
@@ -8745,8 +8906,8 @@ function checkInstances(repoRoot, stateDir, commsDir) {
 }
 function checkMessageLifecycle(commsDir) {
   const checks = [];
-  const inbox = join27(commsDir, "inbox");
-  if (!existsSync28(inbox)) {
+  const inbox = join28(commsDir, "inbox");
+  if (!existsSync29(inbox)) {
     checks.push({
       name: "message flow",
       status: FAIL,
@@ -8762,10 +8923,10 @@ function checkMessageLifecycle(commsDir) {
     status: recent10m > 0 ? PASS : total > 0 ? WARN : FAIL,
     message: `${total} total, ${recent1h} in last 1h, ${recent10m} in last 10m`
   });
-  const receiptsPath = join27(commsDir, "receipts", "receipts.json");
-  if (existsSync28(receiptsPath)) {
+  const receiptsPath = join28(commsDir, "receipts", "receipts.json");
+  if (existsSync29(receiptsPath)) {
     try {
-      const receipts = JSON.parse(readFileSync23(receiptsPath, "utf-8"));
+      const receipts = JSON.parse(readFileSync24(receiptsPath, "utf-8"));
       const receiptCount = Object.keys(receipts).length;
       checks.push({
         name: "read receipts",
@@ -8784,8 +8945,8 @@ function checkMessageLifecycle(commsDir) {
 }
 function checkMcpServer(repoRoot) {
   const checks = [];
-  const mcpJson = join27(repoRoot, ".mcp.json");
-  if (!existsSync28(mcpJson)) {
+  const mcpJson = join28(repoRoot, ".mcp.json");
+  if (!existsSync29(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
@@ -8795,7 +8956,7 @@ function checkMcpServer(repoRoot) {
   }
   let config;
   try {
-    config = JSON.parse(readFileSync23(mcpJson, "utf-8"));
+    config = JSON.parse(readFileSync24(mcpJson, "utf-8"));
   } catch {
     checks.push({
       name: "MCP config (.mcp.json)",
@@ -8838,7 +8999,7 @@ function checkMcpServer(repoRoot) {
   });
   if (hasTapComms.command) {
     const cmd = hasTapComms.command;
-    let cmdAvailable = existsSync28(cmd);
+    let cmdAvailable = existsSync29(cmd);
     if (!cmdAvailable) {
       try {
         const result = spawnSync6(cmd, ["--version"], {
@@ -8860,8 +9021,8 @@ function checkMcpServer(repoRoot) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
-      status: existsSync28(mcpScript) ? PASS : FAIL,
-      message: existsSync28(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
+      status: existsSync29(mcpScript) ? PASS : FAIL,
+      message: existsSync29(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
     });
     if (mcpScript.endsWith(".mjs") && hasTapComms.command && !hasTapComms.command.includes("bun")) {
       checks.push({
@@ -8894,8 +9055,8 @@ function checkMcpServer(repoRoot) {
   } else {
     checks.push({
       name: "MCP TAP_COMMS_DIR",
-      status: existsSync28(envCommsDir) ? PASS : FAIL,
-      message: existsSync28(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
+      status: existsSync29(envCommsDir) ? PASS : FAIL,
+      message: existsSync29(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
     });
   }
   checks.push({
@@ -8912,7 +9073,7 @@ function checkCodexConfig(repoRoot, commsDir) {
   }
   const checks = [];
   const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
-  if (!existsSync28(spec.configPath)) {
+  if (!existsSync29(spec.configPath)) {
     checks.push({
       name: "MCP config (~/.codex/config.toml)",
       status: WARN,
@@ -8921,7 +9082,7 @@ function checkCodexConfig(repoRoot, commsDir) {
     });
     return checks;
   }
-  const content = readFileSync23(spec.configPath, "utf-8");
+  const content = readFileSync24(spec.configPath, "utf-8");
   const tapTable = extractTomlTable(content, "mcp_servers.tap");
   const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
   const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
@@ -9005,8 +9166,8 @@ function checkCodexConfig(repoRoot, commsDir) {
 }
 function checkBridgeTurnHealth(repoRoot) {
   const checks = [];
-  const tmpDir = join27(repoRoot, ".tmp");
-  if (!existsSync28(tmpDir)) return checks;
+  const tmpDir = join28(repoRoot, ".tmp");
+  if (!existsSync29(tmpDir)) return checks;
   const state = loadState(repoRoot);
   const activeMatchers = /* @__PURE__ */ new Set();
   if (state) {
@@ -9032,11 +9193,11 @@ function checkBridgeTurnHealth(repoRoot) {
     return checks;
   }
   for (const dir of dirs) {
-    const heartbeatPath = join27(tmpDir, dir, "heartbeat.json");
-    if (!existsSync28(heartbeatPath)) continue;
+    const heartbeatPath = join28(tmpDir, dir, "heartbeat.json");
+    if (!existsSync29(heartbeatPath)) continue;
     let heartbeat;
     try {
-      heartbeat = JSON.parse(readFileSync23(heartbeatPath, "utf-8"));
+      heartbeat = JSON.parse(readFileSync24(heartbeatPath, "utf-8"));
     } catch {
       checks.push({
         name: `turn: ${dir}`,
@@ -9209,9 +9370,9 @@ async function doctorCommand(args) {
             inst.agentName = instConfig.agentName;
             inst.port = instConfig.port;
             inst.configHash = instConfig.configHash;
-            inst.configSourceFile = inst.configSourceFile || join27(config.stateDir, "instances", `${result.instanceId}.json`);
+            inst.configSourceFile = inst.configSourceFile || join28(config.stateDir, "instances", `${result.instanceId}.json`);
             saveState(repoRoot, state);
-            if (inst.configPath && existsSync28(inst.configPath)) {
+            if (inst.configPath && existsSync29(inst.configPath)) {
               const currentHash = hashFile(inst.configPath);
               if (instConfig.runtimeConfigHash !== currentHash) {
                 instConfig.runtimeConfigHash = currentHash;
@@ -9332,8 +9493,8 @@ async function doctorCommand(args) {
 // src/commands/comms.ts
 init_utils();
 import { execSync as execSync6, spawnSync as spawnSync7 } from "child_process";
-import * as fs30 from "fs";
-import * as path31 from "path";
+import * as fs31 from "fs";
+import * as path32 from "path";
 var COMMS_HELP = `
 Usage:
   tap comms <subcommand>
@@ -9347,7 +9508,7 @@ Examples:
   npx @hua-labs/tap comms push
 `.trim();
 function isGitRepo(dir) {
-  return fs30.existsSync(path31.join(dir, ".git"));
+  return fs31.existsSync(path32.join(dir, ".git"));
 }
 function commsPull(commsDir) {
   logHeader("tap comms pull");
@@ -9606,8 +9767,8 @@ async function watchCommand(args) {
 import * as http from "http";
 
 // src/engine/missions.ts
-import * as fs31 from "fs";
-import * as path32 from "path";
+import * as fs32 from "fs";
+import * as path33 from "path";
 function parseStatus(raw) {
   const trimmed = raw.trim();
   if (trimmed.includes("active")) return "active";
@@ -9633,10 +9794,10 @@ function parseRow(line) {
   return { id: id.toUpperCase(), title, branch, status, owner };
 }
 function parseMissionsFile(repoRoot) {
-  const missionsPath = path32.join(repoRoot, "docs", "missions", "MISSIONS.md");
+  const missionsPath = path33.join(repoRoot, "docs", "missions", "MISSIONS.md");
   let content;
   try {
-    content = fs31.readFileSync(missionsPath, "utf-8");
+    content = fs32.readFileSync(missionsPath, "utf-8");
   } catch {
     return [];
   }

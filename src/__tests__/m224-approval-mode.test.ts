@@ -13,7 +13,10 @@ import {
   saveInstanceConfig,
   loadInstanceConfig,
 } from "../config/instance-config.js";
-import { checkInstanceDrift, computeFileHash } from "../config/drift-detector.js";
+import {
+  checkInstanceDrift,
+  computeFileHash,
+} from "../config/drift-detector.js";
 import type { TapState, InstanceState } from "../types.js";
 
 // ─── patchCodexApprovalMode tests ─────────────────────────────
@@ -257,9 +260,7 @@ describe("M224: hash resync after approval_mode patch", () => {
 describe("M224: adapter bun→node for bundled .mjs", () => {
   it.skip("buildManagedMcpServerSpec uses node for .mjs source (requires PR #943)", async () => {
     // Import the real function (not mocked)
-    const { buildManagedMcpServerSpec } = await import(
-      "../adapters/common.js"
-    );
+    const { buildManagedMcpServerSpec } = await import("../adapters/common.js");
 
     // Create a fake .mjs file to be found
     const mjsPath = path.join(tmpDir, "mcp-server.mjs");
@@ -274,7 +275,6 @@ describe("M224: adapter bun→node for bundled .mjs", () => {
 
     // Mock findTapCommsServerEntry to return our .mjs
     const common = await import("../adapters/common.js");
-    const origFind = common.findTapCommsServerEntry;
     vi.spyOn(common, "findTapCommsServerEntry").mockReturnValue(mjsPath);
 
     try {

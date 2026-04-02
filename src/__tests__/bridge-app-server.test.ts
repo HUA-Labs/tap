@@ -179,9 +179,12 @@ describe("ensureCodexAppServer", () => {
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
+      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "win32",
       appServerUrl: "ws://127.0.0.1:4510",
+      agentName: "덱",
     });
 
     expect(appServer.auth?.protectedUrl).toBe("ws://127.0.0.1:4510");
@@ -195,9 +198,12 @@ describe("ensureCodexAppServer", () => {
       ensureCodexAppServer({
         instanceId: "codex",
         stateDir: tmpDir,
+        runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+        commsDir: path.join(tmpDir, "comms"),
         repoRoot: tmpDir,
         platform: "win32",
         appServerUrl: "ws://127.0.0.1:4510",
+        agentName: "덱",
       }),
     ).rejects.toThrow(/cannot insert the auth gateway/i);
     expect(spawnMock).not.toHaveBeenCalled();
@@ -220,9 +226,12 @@ describe("ensureCodexAppServer", () => {
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
+      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "linux",
       appServerUrl: "ws://127.0.0.1:4511",
+      agentName: "덱",
     });
 
     expect(spawnMock).toHaveBeenNthCalledWith(
@@ -256,6 +265,20 @@ describe("ensureCodexAppServer", () => {
       expect.objectContaining({
         cwd: tmpDir,
         detached: true,
+        env: expect.objectContaining({
+          TAP_COMMS_DIR: path.join(tmpDir, "comms"),
+          TAP_STATE_DIR: tmpDir,
+          TAP_RUNTIME_STATE_DIR: path.join(
+            tmpDir,
+            ".tmp",
+            "codex-app-server-bridge-codex",
+          ),
+          TAP_REPO_ROOT: tmpDir,
+          TAP_BRIDGE_INSTANCE_ID: "codex",
+          TAP_AGENT_ID: "codex",
+          TAP_AGENT_NAME: "덱",
+          CODEX_TAP_AGENT_NAME: "덱",
+        }),
         windowsHide: true,
       }),
     );
@@ -298,9 +321,12 @@ describe("ensureCodexAppServer", () => {
       ensureCodexAppServer({
         instanceId: "codex",
         stateDir: tmpDir,
+        runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+        commsDir: path.join(tmpDir, "comms"),
         repoRoot: tmpDir,
         platform: "win32",
         appServerUrl: "ws://127.0.0.1:4513",
+        agentName: "덱",
       }),
     ).rejects.toThrow(/gateway/i);
 
@@ -345,9 +371,16 @@ describe("ensureCodexAppServer", () => {
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: quotedRoot,
+      runtimeStateDir: path.join(
+        quotedRoot,
+        ".tmp",
+        "codex-app-server-bridge-codex",
+      ),
+      commsDir: path.join(quotedRoot, "comms"),
       repoRoot: quotedRoot,
       platform: "win32",
       appServerUrl: "ws://127.0.0.1:4512",
+      agentName: "덱",
     });
 
     // Windows path uses spawnSync(powershell) for hidden spawn, NOT spawn({ detached })
@@ -446,9 +479,12 @@ describe("ensureCodexAppServer", () => {
     await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
+      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "win32",
       appServerUrl: "ws://127.0.0.1:4513",
+      agentName: "덱",
     });
 
     expect(fs.existsSync(staleWrapperPath)).toBe(false);

@@ -196,7 +196,7 @@ describe("multiple instances coexist", () => {
 describe("runtime state dir", () => {
   it("derives an instance-specific daemon state dir", () => {
     expect(getBridgeRuntimeStateDir("D:/repo", "codex-reviewer")).toBe(
-      path.join("D:/repo", ".tmp", "codex-app-server-bridge-codex-reviewer"),
+      path.resolve("D:/repo", ".tmp", "codex-app-server-bridge-codex-reviewer"),
     );
   });
 });
@@ -326,6 +326,13 @@ describe("startBridge agent name requirement", () => {
     delete process.env.TAP_AGENT_NAME;
     delete process.env.CODEX_TAP_AGENT_NAME;
 
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
     // With agentName provided, should NOT throw "No agent name"
     // (spawn may succeed even with nonexistent script — node process starts then fails)
     const result = await startBridge({
@@ -334,7 +341,7 @@ describe("startBridge agent name requirement", () => {
       stateDir,
       commsDir: tmpDir,
       bridgeScript: "/nonexistent/bridge.js",
-      platform: "win32",
+      platform,
       agentName: "testAgent",
       repoRoot: tmpDir,
     });
@@ -420,6 +427,77 @@ describe("startBridge agent name requirement", () => {
     }
   });
 
+  it("exports TAP_RUNTIME_STATE_DIR alongside the daemon runtime dir", async () => {
+    const outputPath = path.join(tmpDir, "runtime-state-env.json");
+    const bridgeScript = path.join(tmpDir, "record-runtime-state-env.js");
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    fs.writeFileSync(
+      bridgeScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({`,
+        "  stateDir: process.env.TAP_STATE_DIR ?? null,",
+        "  runtimeStateDir: process.env.TAP_RUNTIME_STATE_DIR ?? null,",
+        "}));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pid: number | null = null;
+
+    try {
+      const result = await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (fs.existsSync(outputPath)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      expect(fs.existsSync(outputPath)).toBe(true);
+      expect(
+        JSON.parse(fs.readFileSync(outputPath, "utf-8")) as {
+          stateDir: string | null;
+          runtimeStateDir: string | null;
+        },
+      ).toEqual({
+        stateDir,
+        runtimeStateDir: path.join(
+          tmpDir,
+          ".tmp",
+          "codex-app-server-bridge-codex",
+        ),
+      });
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex");
+    }
+  });
+
   it("cleans stale same-instance heartbeats before spawning", async () => {
     const heartbeatsPath = path.join(tmpDir, "heartbeats.json");
     fs.writeFileSync(
@@ -464,11 +542,7 @@ describe("startBridge agent name requirement", () => {
     );
 
     const bridgeScript = path.join(tmpDir, "hold-open.js");
-    fs.writeFileSync(
-      bridgeScript,
-      "setInterval(() => {}, 1000);\n",
-      "utf-8",
-    );
+    fs.writeFileSync(bridgeScript, "setInterval(() => {}, 1000);\n", "utf-8");
 
     const platform =
       process.platform === "win32"
@@ -516,11 +590,7 @@ describe("startBridge agent name requirement", () => {
     fs.writeFileSync(lockPath, "someone-else", "utf-8");
 
     const bridgeScript = path.join(tmpDir, "hold-open.js");
-    fs.writeFileSync(
-      bridgeScript,
-      "setInterval(() => {}, 1000);\n",
-      "utf-8",
-    );
+    fs.writeFileSync(bridgeScript, "setInterval(() => {}, 1000);\n", "utf-8");
 
     const platform =
       process.platform === "win32"
@@ -564,6 +634,69 @@ describe("startBridge agent name requirement", () => {
       } catch {
         /* already removed */
       }
+    }
+  });
+
+  it("forwards shared state separately from runtime state dir", async () => {
+    const outputPath = path.join(tmpDir, "state-env.json");
+    const bridgeScript = path.join(tmpDir, "record-state-env.js");
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    fs.writeFileSync(
+      bridgeScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({ stateDir: process.env.TAP_STATE_DIR ?? null, runtimeStateDir: process.env.TAP_RUNTIME_STATE_DIR ?? null }), 'utf8');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pid: number | null = null;
+
+    try {
+      const result = await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (fs.existsSync(outputPath)) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      expect(fs.existsSync(outputPath)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(outputPath, "utf-8"))).toEqual({
+        stateDir,
+        runtimeStateDir: path.join(
+          tmpDir,
+          ".tmp",
+          "codex-app-server-bridge-codex",
+        ),
+      });
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex");
     }
   });
 });

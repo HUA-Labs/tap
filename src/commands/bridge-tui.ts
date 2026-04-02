@@ -1,6 +1,7 @@
 import { loadState } from "../state.js";
 import {
   getBridgeStatus,
+  getBridgeRuntimeStateDir,
   loadBridgeState,
   loadRuntimeBridgeHeartbeat,
   loadRuntimeBridgeThreadState,
@@ -110,7 +111,25 @@ export function bridgeTuiOne(identifier: string): CommandResult {
     runtimeHeartbeat?.threadCwd,
     savedThread?.cwd,
   );
-  const attachCommand = formatCodexTuiAttachCommand(tuiConnectUrl, attachCwd);
+  const attachEnv: Record<string, string> = {
+    TAP_BRIDGE_INSTANCE_ID: instanceId,
+    TAP_AGENT_ID: instanceId,
+    TAP_COMMS_DIR: resolvedConfig.commsDir,
+    TAP_STATE_DIR: stateDir,
+    TAP_RUNTIME_STATE_DIR:
+      bridgeState?.runtimeStateDir ??
+      getBridgeRuntimeStateDir(repoRoot, instanceId),
+    TAP_REPO_ROOT: repoRoot,
+  };
+  if (typeof inst.agentName === "string" && inst.agentName.trim()) {
+    attachEnv.TAP_AGENT_NAME = inst.agentName;
+    attachEnv.CODEX_TAP_AGENT_NAME = inst.agentName;
+  }
+  const attachCommand = formatCodexTuiAttachCommand(
+    tuiConnectUrl,
+    attachCwd,
+    attachEnv,
+  );
   const warnings =
     appServer.auth != null
       ? [
@@ -140,6 +159,7 @@ export function bridgeTuiOne(identifier: string): CommandResult {
       tuiConnectUrl,
       attachCwd,
       attachCommand,
+      attachEnv,
       appServer,
     },
   };

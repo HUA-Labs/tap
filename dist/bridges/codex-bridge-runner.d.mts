@@ -8,5 +8,6 @@ interface BridgeScriptArgsOptions {
 }
 declare function resolveBridgeDaemonScript(repoRoot: string, runnerUrl?: string, fileExists?: (candidate: string) => boolean): string | null;
 declare function buildBridgeScriptArgs(scriptPath: string, options: BridgeScriptArgsOptions): string[];
+declare function buildBridgeDaemonEnv(parentEnv: NodeJS.ProcessEnv, runtimeEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 
-export { buildBridgeScriptArgs, resolveBridgeDaemonScript };
+export { buildBridgeDaemonEnv, buildBridgeScriptArgs, resolveBridgeDaemonScript };

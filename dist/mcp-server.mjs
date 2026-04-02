@@ -128,6 +128,7 @@ __export(tap_utils_exports, {
   debug: () => debug,
   demoteAgentName: () => demoteAgentName,
   getAgentId: () => getAgentId,
+  getAgentIdentitySnapshot: () => getAgentIdentitySnapshot,
   getAgentName: () => getAgentName,
   getLastActivityTime: () => getLastActivityTime,
   getLatestReviewDir: () => getLatestReviewDir,
@@ -137,6 +138,7 @@ __export(tap_utils_exports, {
   isForMe: () => isForMe,
   isIdLocked: () => isIdLocked,
   isNameConfirmed: () => isNameConfirmed,
+  loadStateInstances: () => loadStateInstances,
   normalizeSources: () => normalizeSources,
   parseFilename: () => parseFilename,
   parseFrontmatter: () => parseFrontmatter,
@@ -149,7 +151,7 @@ __export(tap_utils_exports, {
   updateActivityTime: () => updateActivityTime
 });
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 function isConcreteIdentity(value) {
   return !isPlaceholderAgentValue(value);
 }
@@ -181,9 +183,70 @@ function resolveSingleCodexBootstrap() {
     agentName: typeof instance.agentName === "string" && !isPlaceholderAgentValue(instance.agentName) ? instance.agentName : null
   };
 }
-function resolveInitialId(stateBootstrap2) {
+function resolveRuntimeInstanceId() {
+  const bridgeInstanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
+  if (isConcreteIdentity(bridgeInstanceId)) {
+    return normalizeAgentId(bridgeInstanceId);
+  }
   const envId = process.env.TAP_AGENT_ID;
-  if (isConcreteIdentity(envId)) return normalizeAgentId(envId);
+  if (isConcreteIdentity(envId)) {
+    return normalizeAgentId(envId);
+  }
+  return null;
+}
+function resolveRuntimeStateDir() {
+  const runtimeStateDir = process.env.TAP_RUNTIME_STATE_DIR;
+  if (!runtimeStateDir) return null;
+  return resolve(runtimeStateDir);
+}
+function resolveRuntimeStateInstanceId() {
+  const runtimeStateDir = resolveRuntimeStateDir();
+  if (!runtimeStateDir) return null;
+  const dirName = basename(runtimeStateDir);
+  if (!dirName.startsWith(BRIDGE_RUNTIME_STATE_DIR_PREFIX)) {
+    return null;
+  }
+  const instanceId = dirName.slice(BRIDGE_RUNTIME_STATE_DIR_PREFIX.length).trim();
+  if (!instanceId) return null;
+  return normalizeAgentId(instanceId);
+}
+function resolveRuntimeStateDisplayName() {
+  const runtimeStateDir = resolveRuntimeStateDir();
+  if (!runtimeStateDir) return null;
+  try {
+    const heartbeatPath = join(runtimeStateDir, "heartbeat.json");
+    if (existsSync(heartbeatPath)) {
+      const heartbeat = JSON.parse(readFileSync(heartbeatPath, "utf-8"));
+      const heartbeatAgent = heartbeat.agent ?? void 0;
+      if (isConcreteIdentity(heartbeatAgent)) {
+        return heartbeatAgent;
+      }
+    }
+  } catch {
+  }
+  try {
+    const agentNamePath = join(runtimeStateDir, "agent-name.txt");
+    if (!existsSync(agentNamePath)) return null;
+    const agentName = readFileSync(agentNamePath, "utf-8").trim();
+    return isConcreteIdentity(agentName) ? agentName : null;
+  } catch {
+    return null;
+  }
+}
+function resolveRuntimeDisplayName() {
+  const envName = process.env.TAP_AGENT_NAME;
+  if (isConcreteIdentity(envName)) return envName;
+  const codexName = process.env.CODEX_TAP_AGENT_NAME;
+  if (isConcreteIdentity(codexName)) return codexName;
+  const runtimeName = resolveRuntimeStateDisplayName();
+  if (runtimeName) return runtimeName;
+  return null;
+}
+function resolveInitialId(stateBootstrap2) {
+  const runtimeInstanceId = resolveRuntimeInstanceId();
+  if (runtimeInstanceId) return runtimeInstanceId;
+  const runtimeStateInstanceId = resolveRuntimeStateInstanceId();
+  if (runtimeStateInstanceId) return runtimeStateInstanceId;
   const envName = process.env.TAP_AGENT_NAME;
   if (isConcreteIdentity(envName)) return normalizeAgentId(envName);
   return stateBootstrap2?.agentId ?? "unknown";
@@ -202,10 +265,25 @@ function resolveNameFromState(agentId, stateBootstrap2) {
     return null;
   }
 }
+function refreshUnknownIdentity() {
+  if (_idLocked) return;
+  const nextBootstrap = resolveSingleCodexBootstrap();
+  const nextId = resolveInitialId(nextBootstrap);
+  if (nextId === "unknown") return;
+  _agentId = nextId;
+  _idLocked = true;
+  const nextName = resolveNameFromState(nextId, nextBootstrap) ?? resolveRuntimeDisplayName();
+  if (nextName && !isPlaceholderAgentValue(nextName)) {
+    _agentName = nextName;
+    _nameConfirmed = true;
+  }
+}
 function getAgentId() {
+  refreshUnknownIdentity();
   return _agentId;
 }
 function getAgentName() {
+  refreshUnknownIdentity();
   return _agentName;
 }
 function resolveKnownInstanceId(agentId, displayName) {
@@ -226,7 +304,30 @@ function resolveKnownInstanceId(agentId, displayName) {
   return matches.length === 1 ? matches[0][0] : null;
 }
 function resolveCurrentInstanceId() {
+  refreshUnknownIdentity();
   return resolveKnownInstanceId(_agentId, _agentName);
+}
+function getAgentIdentitySnapshot() {
+  refreshUnknownIdentity();
+  const bootstrap = resolveSingleCodexBootstrap();
+  return {
+    agentId: _agentId,
+    agentName: _agentName,
+    idLocked: _idLocked,
+    nameConfirmed: _nameConfirmed,
+    runtimeEnv: {
+      bridgeInstanceId: process.env.TAP_BRIDGE_INSTANCE_ID ?? null,
+      agentId: process.env.TAP_AGENT_ID ?? null,
+      agentName: process.env.TAP_AGENT_NAME ?? null,
+      codexTapAgentName: process.env.CODEX_TAP_AGENT_NAME ?? null,
+      commsDir: process.env.TAP_COMMS_DIR ?? null,
+      stateDir: process.env.TAP_STATE_DIR ?? null,
+      runtimeStateDir: process.env.TAP_RUNTIME_STATE_DIR ?? null,
+      repoRoot: process.env.TAP_REPO_ROOT ?? null
+    },
+    bootstrap,
+    resolvedCurrentInstanceId: resolveKnownInstanceId(_agentId, _agentName)
+  };
 }
 function buildHeartbeatConnectHash(instanceId, agentId) {
   return instanceId ? `instance:${instanceId}` : `session:${agentId}`;
@@ -333,6 +434,7 @@ function canonicalizeAgentId2(id) {
   return canonicalizeAgentId(id);
 }
 function isForMe(to) {
+  refreshUnknownIdentity();
   return matchesAgentRecipient(to, _agentId, _agentName);
 }
 function normalizeSources(value) {
@@ -375,7 +477,7 @@ function getRecentSenders() {
   }
   return senders;
 }
-var RAW_COMMS_DIR, COMMS_DIR, INBOX_DIR, REVIEWS_DIR, FINDINGS_DIR, RECEIPTS_DIR, RECEIPTS_PATH, RECEIPTS_LOCK, HEARTBEATS_PATH, HEARTBEATS_LOCK, ARCHIVE_DIR, DB_PATH, SERVER_START, stateBootstrap, _agentId, _agentName, _idLocked, _nameConfirmed, _lastActivityTime;
+var RAW_COMMS_DIR, COMMS_DIR, INBOX_DIR, REVIEWS_DIR, FINDINGS_DIR, RECEIPTS_DIR, RECEIPTS_PATH, RECEIPTS_LOCK, HEARTBEATS_PATH, HEARTBEATS_LOCK, ARCHIVE_DIR, DB_PATH, SERVER_START, BRIDGE_RUNTIME_STATE_DIR_PREFIX, stateBootstrap, _agentId, _agentName, _idLocked, _nameConfirmed, _lastActivityTime;
 var init_tap_utils = __esm({
   "packages/tap-plugin/channels/tap-utils.ts"() {
     "use strict";
@@ -399,9 +501,10 @@ var init_tap_utils = __esm({
     ARCHIVE_DIR = join(COMMS_DIR, "archive");
     DB_PATH = join(COMMS_DIR, "tap.db");
     SERVER_START = Date.now();
+    BRIDGE_RUNTIME_STATE_DIR_PREFIX = "codex-app-server-bridge-";
     stateBootstrap = resolveSingleCodexBootstrap();
     _agentId = resolveInitialId(stateBootstrap);
-    _agentName = resolveNameFromState(_agentId, stateBootstrap) ?? (isConcreteIdentity(process.env.TAP_AGENT_NAME) ? process.env.TAP_AGENT_NAME : "unknown");
+    _agentName = resolveNameFromState(_agentId, stateBootstrap) ?? resolveRuntimeDisplayName() ?? "unknown";
     _idLocked = _agentId !== "unknown";
     _nameConfirmed = !isPlaceholderAgentValue(_agentName);
     _lastActivityTime = (/* @__PURE__ */ new Date()).toISOString();
@@ -661,7 +764,6 @@ var init_tap_io = __esm({
 
 // packages/tap-plugin/channels/tap-comms.ts
 init_tap_identity();
-init_tap_utils();
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -670,6 +772,80 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { existsSync as existsSync8, mkdirSync as mkdirSync3, readFileSync as readFileSync7, writeFileSync as writeFileSync3 } from "fs";
 import { join as join7 } from "path";
+
+// packages/tap-plugin/channels/tap-peer-dm-rate-limit.ts
+init_tap_identity();
+var PEER_DM_WINDOW_MS = 5 * 60 * 1e3;
+var PEER_DM_MAX_MESSAGES = 3;
+function normalizeAddress(value) {
+  return value?.trim() ?? "";
+}
+function matchesTowerAddress(value, towerName, towerId) {
+  const normalizedValue = normalizeAddress(value);
+  const normalizedTower = normalizeAddress(towerName);
+  const normalizedTowerId = normalizeAddress(towerId);
+  if (!normalizedValue) return false;
+  return !!normalizedTower && (normalizedValue === normalizedTower || sameRoutingAddress(normalizedValue, normalizedTower)) || !!normalizedTowerId && (normalizedValue === normalizedTowerId || sameRoutingAddress(normalizedValue, normalizedTowerId));
+}
+function resolveTargetAddress(route) {
+  const candidate = normalizeAddress(route.resolvedTo) || normalizeAddress(route.to);
+  return isBroadcastRecipient(candidate) ? "broadcast" : canonicalizeAgentId(candidate);
+}
+function isPeerDmRateLimitExempt(route) {
+  if (isBroadcastRecipient(normalizeAddress(route.to)) || isBroadcastRecipient(normalizeAddress(route.resolvedTo))) {
+    return true;
+  }
+  const towerName = normalizeAddress(route.towerName);
+  const towerId = normalizeAddress(route.towerId);
+  if (!towerName && !towerId) return false;
+  return matchesTowerAddress(route.fromId, towerName, towerId) || matchesTowerAddress(route.fromName, towerName, towerId) || matchesTowerAddress(route.to, towerName, towerId) || matchesTowerAddress(route.resolvedTo, towerName, towerId);
+}
+function pruneHistory(entries, nowMs, windowMs) {
+  if (!entries?.length) return [];
+  return entries.filter((timestamp) => nowMs - timestamp <= windowMs);
+}
+function getPeerDmRateLimitKey(route) {
+  if (isPeerDmRateLimitExempt(route)) {
+    return null;
+  }
+  const from = canonicalizeAgentId(normalizeAddress(route.fromId));
+  const to = resolveTargetAddress(route);
+  if (!from || !to || to === "broadcast") {
+    return null;
+  }
+  return `${from}->${to}`;
+}
+function checkPeerDmRateLimit(store, route, nowMs = Date.now(), maxMessages = PEER_DM_MAX_MESSAGES, windowMs = PEER_DM_WINDOW_MS) {
+  const key = getPeerDmRateLimitKey(route);
+  const target = resolveTargetAddress(route);
+  if (!key) {
+    return {
+      allowed: true,
+      exempt: true,
+      key: null,
+      target,
+      recentCount: 0
+    };
+  }
+  const recent = pruneHistory(store.get(key), nowMs, windowMs);
+  return {
+    allowed: recent.length < maxMessages,
+    exempt: false,
+    key,
+    target,
+    recentCount: recent.length
+  };
+}
+function recordPeerDm(store, route, nowMs = Date.now(), windowMs = PEER_DM_WINDOW_MS) {
+  const key = getPeerDmRateLimitKey(route);
+  if (!key) return;
+  const recent = pruneHistory(store.get(key), nowMs, windowMs);
+  recent.push(nowMs);
+  store.set(key, recent);
+}
+
+// packages/tap-plugin/channels/tap-comms.ts
+init_tap_utils();
 
 // packages/tap-plugin/channels/tap-claims.ts
 init_tap_utils();
@@ -1555,6 +1731,18 @@ seedStartupFiles("inbox");
 seedStartupFiles("reviews");
 seedStartupFiles("findings");
 var ONBOARDING_TEASER_LINES = 10;
+var peerDmHistory = /* @__PURE__ */ new Map();
+function loadTowerNameFromConfig() {
+  const repoRoot = process.env.TAP_REPO_ROOT ?? ".";
+  try {
+    const cfgPath = join7(repoRoot, "tap-config.json");
+    if (!existsSync8(cfgPath)) return null;
+    const cfg = JSON.parse(readFileSync7(cfgPath, "utf-8"));
+    return cfg.towerName?.trim() || null;
+  } catch {
+    return null;
+  }
+}
 function loadOnboardingTeaser() {
   const commsDir = process.env.TAP_COMMS_DIR;
   if (!commsDir) return "";
@@ -1782,6 +1970,11 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "tap_onboard",
       description: "Get the full onboarding guide for this project. Returns welcome.md + any additional onboarding docs from commsDir/onboarding/.",
       inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "tap_identity_probe",
+      description: "Dump the current MCP-side identity/runtime env snapshot seen by tap tools.",
+      inputSchema: { type: "object", properties: {} }
     }
   ]
 }));
@@ -1974,13 +2167,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
     if (oldName === "unknown" || oldName === "unnamed") {
       try {
-        const repoRoot = process.env.TAP_REPO_ROOT ?? ".";
-        let towerName = null;
-        const cfgPath = join7(repoRoot, "tap-config.json");
-        if (existsSync8(cfgPath)) {
-          const cfg = JSON.parse(readFileSync7(cfgPath, "utf-8"));
-          towerName = cfg.towerName ?? null;
-        }
+        const towerName = loadTowerNameFromConfig();
         let runtime = process.env.TAP_BRIDGE_RUNTIME ?? null;
         if (!runtime && stateDir) {
           try {
@@ -2082,7 +2269,9 @@ Recent active names: ${activeList}`;
     }
     const cc = normalizeRecipientList(rawCc, [to]);
     const recipientWarnings = [];
+    const towerName = loadTowerNameFromConfig();
     const store = loadHeartbeats();
+    const resolvedTowerId = towerName ? resolvePreferredRecipient(store, towerName).target : null;
     const knownAgents = /* @__PURE__ */ new Set();
     for (const [key, hb] of Object.entries(store)) {
       if (!isPlaceholderAgentValue(key)) knownAgents.add(key);
@@ -2112,10 +2301,57 @@ Recent active names: ${activeList}`;
         }
       }
     }
+    const resolvedCc = cc?.map((recipient) => ({
+      original: recipient,
+      resolved: isBroadcastRecipient(recipient) ? recipient : resolveRecipient2(recipient).target
+    }));
     const now = /* @__PURE__ */ new Date();
+    const nowMs = now.getTime();
     const date = now.toISOString().slice(0, 10).replace(/-/g, "");
     const fromId = getAgentId();
     const fromName = getAgentName();
+    const rateLimitRoutes = /* @__PURE__ */ new Map();
+    const primaryRoute = {
+      fromId,
+      fromName,
+      to,
+      resolvedTo,
+      towerName,
+      towerId: resolvedTowerId
+    };
+    const primaryCheck = checkPeerDmRateLimit(peerDmHistory, primaryRoute, nowMs);
+    if (!primaryCheck.exempt && primaryCheck.key) {
+      rateLimitRoutes.set(primaryCheck.key, primaryRoute);
+    }
+    for (const recipient of resolvedCc ?? []) {
+      const route = {
+        fromId,
+        fromName,
+        to: recipient.original,
+        resolvedTo: recipient.resolved,
+        towerName,
+        towerId: resolvedTowerId
+      };
+      const check = checkPeerDmRateLimit(peerDmHistory, route, nowMs);
+      if (check.exempt || !check.key) continue;
+      rateLimitRoutes.set(check.key, route);
+    }
+    for (const route of rateLimitRoutes.values()) {
+      const check = checkPeerDmRateLimit(peerDmHistory, route, nowMs);
+      if (!check.allowed) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Rate limited: too many messages between ${fromId}\u2192${check.target}. Route through tower instead.`
+            }
+          ]
+        };
+      }
+    }
+    for (const route of rateLimitRoutes.values()) {
+      recordPeerDm(peerDmHistory, route, nowMs);
+    }
     const filename = `${date}-${fromId}-${resolvedTo}-${subject}.md`;
     const filepath = join7(INBOX_DIR, filename);
     const ccHeader = cc?.length ? `> CC: ${cc.join(", ")}
@@ -2145,12 +2381,14 @@ Recent active names: ${activeList}`;
     const sent = [`Sent to ${to}: ${filename}`];
     if (cc?.length) {
       const writtenFiles = /* @__PURE__ */ new Set([filename]);
-      for (const recipient of cc) {
+      for (const recipient of resolvedCc ?? []) {
         try {
-          const resolvedRecipient = isBroadcastRecipient(recipient) ? recipient : resolveRecipient2(recipient).target;
+          const resolvedRecipient = recipient.resolved;
           const ccFilename = `${date}-${fromId}-${resolvedRecipient}-${subject}.md`;
           if (writtenFiles.has(ccFilename)) {
-            sent.push(`CC to ${recipient}: skipped (resolves to same target)`);
+            sent.push(
+              `CC to ${recipient.original}: skipped (resolves to same target)`
+            );
             continue;
           }
           writtenFiles.add(ccFilename);
@@ -2160,7 +2398,7 @@ Recent active names: ${activeList}`;
             `from: ${fromId}`,
             `from_name: ${fromName}`,
             `to: ${resolvedRecipient}`,
-            `to_name: ${recipient}`,
+            `to_name: ${recipient.original}`,
             `subject: ${subject}`,
             `sent_at: ${now.toISOString()}`,
             "---",
@@ -2181,10 +2419,10 @@ ${content}`,
             "inbox",
             Date.now()
           );
-          sent.push(`CC to ${recipient}: ${ccFilename}`);
+          sent.push(`CC to ${recipient.original}: ${ccFilename}`);
         } catch (err) {
           sent.push(
-            `CC to ${recipient}: FAILED (${err instanceof Error ? err.message : String(err)})`
+            `CC to ${recipient.original}: FAILED (${err instanceof Error ? err.message : String(err)})`
           );
         }
       }
@@ -2532,6 +2770,16 @@ ${content}`);
     const prefix = alreadyOnboarded ? "(You have already been onboarded. Showing docs again for reference.)\n\n" : "";
     return {
       content: [{ type: "text", text: prefix + docs.join("\n\n---\n\n") }]
+    };
+  }
+  if (req.params.name === "tap_identity_probe") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(getAgentIdentitySnapshot(), null, 2)
+        }
+      ]
     };
   }
   throw new Error(`unknown tool: ${req.params.name}`);

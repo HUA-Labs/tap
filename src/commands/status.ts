@@ -5,6 +5,7 @@ import {
   deriveCodexSessionState,
   loadRuntimeBridgeHeartbeat,
 } from "../engine/bridge.js";
+import { loadLiveDispatchEvidence } from "../engine/health-monitor.js";
 import { resolveConfig } from "../config/index.js";
 import { findRepoRoot, log, logHeader, logWarn } from "../utils.js";
 import { version } from "../version.js";
@@ -29,14 +30,20 @@ interface ResolvedStatus {
   status: string;
   lifecycle: BridgeLifecycleSnapshot | null;
   session: CodexSessionSnapshot | null;
+  warnings: string[];
 }
 
-function resolveStatus(inst: InstanceState, stateDir: string): ResolvedStatus {
+function resolveStatus(
+  inst: InstanceState,
+  stateDir: string,
+  commsDir: string,
+): ResolvedStatus {
   if (!inst.installed) {
     return {
       status: "not installed",
       lifecycle: null,
       session: null,
+      warnings: [],
     };
   }
 
@@ -47,9 +54,11 @@ function resolveStatus(inst: InstanceState, stateDir: string): ResolvedStatus {
         status: inst.lastVerifiedAt ? "active" : "configured",
         lifecycle: null,
         session: null,
+        warnings: [],
       };
 
     case "app-server": {
+      let staleLifecycle: BridgeLifecycleSnapshot | null = null;
       if (inst.bridge) {
         const lifecycle = resolveBridgeLifecycleSnapshot(
           stateDir,
@@ -57,21 +66,40 @@ function resolveStatus(inst: InstanceState, stateDir: string): ResolvedStatus {
           inst.bridge,
         );
         if (lifecycle.status === "bridge-stale") {
+          staleLifecycle = lifecycle;
           inst.bridge = null;
+        } else {
+          const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(inst.bridge);
           return {
-            status: inst.lastVerifiedAt ? "configured" : "installed",
+            status: "active",
             lifecycle,
-            session: null,
+            session: deriveCodexSessionState({
+              runtimeHeartbeat,
+              runtimeStateDir: inst.bridge.runtimeStateDir ?? null,
+            }),
+            warnings: [],
           };
         }
-        const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(inst.bridge);
+      }
+      const liveDispatch = loadLiveDispatchEvidence(commsDir, inst.instanceId);
+      if (liveDispatch) {
         return {
-          status: "active",
-          lifecycle,
-          session: deriveCodexSessionState({
-            runtimeHeartbeat,
-            runtimeStateDir: inst.bridge.runtimeStateDir ?? null,
+          status: "dispatch-live",
+          lifecycle: deriveBridgeLifecycleState({
+            bridgeStatus: "stopped",
           }),
+          session: deriveCodexSessionState({ runtimeHeartbeat: null }),
+          warnings: [
+            `fresh bridge-dispatch heartbeat from PID ${liveDispatch.bridgePid} without bridge pid state`,
+          ],
+        };
+      }
+      if (staleLifecycle) {
+        return {
+          status: inst.lastVerifiedAt ? "configured" : "installed",
+          lifecycle: staleLifecycle,
+          session: null,
+          warnings: [],
         };
       }
       return {
@@ -80,6 +108,7 @@ function resolveStatus(inst: InstanceState, stateDir: string): ResolvedStatus {
           bridgeStatus: "stopped",
         }),
         session: deriveCodexSessionState({ runtimeHeartbeat: null }),
+        warnings: [],
       };
     }
 
@@ -88,6 +117,7 @@ function resolveStatus(inst: InstanceState, stateDir: string): ResolvedStatus {
         status: "installed",
         lifecycle: null,
         session: null,
+        warnings: [],
       };
   }
 }
@@ -97,6 +127,7 @@ function instanceStatusLine(
   status: string,
   lifecycle: BridgeLifecycleSnapshot | null,
   session: CodexSessionSnapshot | null,
+  warnings: string[],
 ): string {
   const bridgeInfo = inst.bridge ? ` (pid: ${inst.bridge.pid})` : "";
   const lifecycleStr = lifecycle?.status ?? "-";
@@ -104,8 +135,7 @@ function instanceStatusLine(
   const mode = inst.bridgeMode;
   const portStr = inst.port ? ` port:${inst.port}` : "";
   const restart = inst.restartRequired ? " [restart required]" : "";
-  const warns =
-    inst.warnings.length > 0 ? ` [${inst.warnings.length} warning(s)]` : "";
+  const warns = warnings.length > 0 ? ` [${warnings.length} warning(s)]` : "";
 
   return `${inst.instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(14)} ${lifecycleStr.padEnd(20)} ${sessionStr.padEnd(18)} ${mode.padEnd(14)}${bridgeInfo}${portStr}${restart}${warns}`;
 }
@@ -183,10 +213,15 @@ export async function statusCommand(args: string[]): Promise<CommandResult> {
       const inst = state.instances[id];
       if (inst) {
         // resolveStatus may clear inst.bridge if stale
-        const { status, lifecycle, session } = resolveStatus(inst, stateDir);
-        log(instanceStatusLine(inst, status, lifecycle, session));
-        if (inst.warnings.length > 0) {
-          for (const w of inst.warnings) {
+        const { status, lifecycle, session, warnings } = resolveStatus(
+          inst,
+          stateDir,
+          state.commsDir,
+        );
+        const mergedWarnings = [...inst.warnings, ...warnings];
+        log(instanceStatusLine(inst, status, lifecycle, session, mergedWarnings));
+        if (mergedWarnings.length > 0) {
+          for (const w of mergedWarnings) {
             logWarn(`  ${w}`);
           }
         }
@@ -198,7 +233,7 @@ export async function statusCommand(args: string[]): Promise<CommandResult> {
           bridgeMode: inst.bridgeMode,
           bridge: inst.bridge,
           port: inst.port,
-          warnings: inst.warnings,
+          warnings: mergedWarnings,
         };
       }
     }

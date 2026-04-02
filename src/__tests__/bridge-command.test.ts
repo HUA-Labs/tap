@@ -293,7 +293,9 @@ describe("bridgeCommand with initialized state", () => {
       },
       savedThreadId: "thread-saved",
     });
-    expect(result.data.lifecycle.summary).toContain("saved thread only");
+    expect(
+      (result.data as { lifecycle: { summary: string } }).lifecycle.summary,
+    ).toContain("saved thread only");
     vi.restoreAllMocks();
   });
 
@@ -331,6 +333,229 @@ describe("bridgeCommand with initialized state", () => {
         status: "initializing",
       },
     });
+    vi.restoreAllMocks();
+  });
+
+  it("status reports dispatch-live when bridge pid state is missing but bridge-dispatch evidence is fresh", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      status: "dispatch-live",
+      lifecycle: {
+        status: "stopped",
+      },
+    });
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) =>
+          typeof line === "string" &&
+          line.includes("fresh bridge-dispatch heartbeat from PID"),
+      ),
+    ).toBe(true);
+    vi.restoreAllMocks();
+  });
+
+  it("status reports dispatch-live on the first call when stale bridge metadata and fresh dispatch evidence coexist", async () => {
+    const stateFile = path.join(tmpDir, ".tap-comms", "state.json");
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    const bridgeStatePath = path.join(pidDir, "bridge-codex.json");
+    fs.mkdirSync(pidDir, { recursive: true });
+    state.instances.codex.bridge = {
+      pid: 999999,
+      statePath: bridgeStatePath,
+      lastHeartbeat: "2026-03-27T00:00:00.000Z",
+    };
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf-8");
+    fs.writeFileSync(
+      bridgeStatePath,
+      JSON.stringify(state.instances.codex.bridge, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status", "codex"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      status: "dispatch-live",
+      lifecycle: {
+        status: "stopped",
+      },
+      session: {
+        status: "initializing",
+      },
+      pid: null,
+      lastHeartbeat: null,
+    });
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) =>
+          typeof line === "string" &&
+          line.includes("fresh bridge-dispatch heartbeat from PID"),
+      ),
+    ).toBe(true);
+    const persisted = JSON.parse(fs.readFileSync(stateFile, "utf-8")) as {
+      instances: {
+        codex: {
+          bridge: unknown;
+        };
+      };
+    };
+    expect(persisted.instances.codex.bridge).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  it("aggregate status keeps dispatch-live session aligned with instance status", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      bridges: {
+        codex: {
+          status: "dispatch-live",
+          lifecycle: {
+            status: "stopped",
+          },
+          session: {
+            status: "initializing",
+          },
+        },
+      },
+    });
+    vi.restoreAllMocks();
+  });
+
+  it("aggregate status reports dispatch-live on the first call when stale bridge metadata and fresh dispatch evidence coexist", async () => {
+    const stateFile = path.join(tmpDir, ".tap-comms", "state.json");
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+    const pidDir = path.join(tmpDir, ".tap-comms", "pids");
+    const bridgeStatePath = path.join(pidDir, "bridge-codex.json");
+    fs.mkdirSync(pidDir, { recursive: true });
+    state.instances.codex.bridge = {
+      pid: 999999,
+      statePath: bridgeStatePath,
+      lastHeartbeat: "2026-03-27T00:00:00.000Z",
+    };
+    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), "utf-8");
+    fs.writeFileSync(
+      bridgeStatePath,
+      JSON.stringify(state.instances.codex.bridge, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "comms", "heartbeats.json"),
+      JSON.stringify(
+        {
+          codex: {
+            id: "codex",
+            agent: "솔",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "codex",
+            bridgePid: process.pid,
+            connectHash: "instance:codex",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const result = await bridgeCommand(["status"]);
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      bridges: {
+        codex: {
+          status: "dispatch-live",
+          lifecycle: {
+            status: "stopped",
+          },
+          session: {
+            status: "initializing",
+          },
+          pid: null,
+          lastHeartbeat: null,
+        },
+      },
+    });
+    const persisted = JSON.parse(fs.readFileSync(stateFile, "utf-8")) as {
+      instances: {
+        codex: {
+          bridge: unknown;
+        };
+      };
+    };
+    expect(persisted.instances.codex.bridge).toBeNull();
     vi.restoreAllMocks();
   });
 
@@ -445,12 +670,21 @@ describe("bridgeCommand with initialized state", () => {
   it("tui uses the upstream app-server URL when auth gateway is enabled", async () => {
     const pidDir = path.join(tmpDir, ".tap-comms", "pids");
     fs.mkdirSync(pidDir, { recursive: true });
+    const statePath = path.join(tmpDir, ".tap-comms", "state.json");
+    const state = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    state.instances.codex.agentName = "덱";
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf-8");
     fs.writeFileSync(
       path.join(pidDir, "bridge-codex.json"),
       JSON.stringify({
         pid: process.pid,
         statePath: path.join(pidDir, "bridge-codex.json"),
         lastHeartbeat: "2026-03-27T00:00:00.000Z",
+        runtimeStateDir: path.join(
+          tmpDir,
+          ".tmp",
+          "codex-app-server-bridge-codex",
+        ),
         appServer: {
           url: "ws://127.0.0.1:4501",
           pid: 4510,
@@ -481,6 +715,20 @@ describe("bridgeCommand with initialized state", () => {
       '--remote "ws://127.0.0.1:7785"',
     );
     expect(result.data.attachCommand).toContain(`--cd "${tmpDir}"`);
+    expect(result.data.attachCommand).toContain("TAP_BRIDGE_INSTANCE_ID");
+    expect(result.data.attachCommand).toContain("TAP_RUNTIME_STATE_DIR");
+    expect(result.data.attachCommand).toContain("CODEX_TAP_AGENT_NAME");
+    expect(result.data.attachEnv).toMatchObject({
+      TAP_BRIDGE_INSTANCE_ID: "codex",
+      TAP_AGENT_ID: "codex",
+      TAP_AGENT_NAME: "덱",
+      CODEX_TAP_AGENT_NAME: "덱",
+      TAP_RUNTIME_STATE_DIR: path.join(
+        tmpDir,
+        ".tmp",
+        "codex-app-server-bridge-codex",
+      ),
+    });
     expect(result.warnings).toHaveLength(1);
     vi.restoreAllMocks();
   });

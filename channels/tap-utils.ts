@@ -2,7 +2,7 @@
  * tap-comms shared utilities: types, config, parsing, helpers.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
 import {
   canonicalizeAgentId as canonicalizeIdentityId,
   isPlaceholderAgentValue,
@@ -37,10 +37,11 @@ export const SERVER_START = Date.now();
 // name = session display label. Once a real name is confirmed, only
 // idempotent tap_set_name calls are allowed until an explicit rename flow exists.
 
-type TapBootstrapInstance = {
+export type TapBootstrapInstance = {
   runtime?: string;
   installed?: boolean;
   agentName?: string | null;
+  bridgeMode?: string;
 };
 
 function isConcreteIdentity(value: string | undefined): value is string {
@@ -51,7 +52,7 @@ function normalizeAgentId(value: string): string {
   return canonicalizeIdentityId(value);
 }
 
-function loadStateInstances(): Record<string, TapBootstrapInstance> | null {
+export function loadStateInstances(): Record<string, TapBootstrapInstance> | null {
   const stateDir = process.env.TAP_STATE_DIR;
   if (!stateDir) return null;
   try {
@@ -69,6 +70,27 @@ function loadStateInstances(): Record<string, TapBootstrapInstance> | null {
 type StateBootstrapIdentity = {
   agentId: string;
   agentName: string | null;
+};
+
+const BRIDGE_RUNTIME_STATE_DIR_PREFIX = "codex-app-server-bridge-";
+
+export type AgentIdentitySnapshot = {
+  agentId: string;
+  agentName: string;
+  idLocked: boolean;
+  nameConfirmed: boolean;
+  runtimeEnv: {
+    bridgeInstanceId: string | null;
+    agentId: string | null;
+    agentName: string | null;
+    codexTapAgentName: string | null;
+    commsDir: string | null;
+    stateDir: string | null;
+    runtimeStateDir: string | null;
+    repoRoot: string | null;
+  };
+  bootstrap: StateBootstrapIdentity | null;
+  resolvedCurrentInstanceId: string | null;
 };
 
 function resolveSingleCodexBootstrap(): StateBootstrapIdentity | null {
@@ -91,11 +113,86 @@ function resolveSingleCodexBootstrap(): StateBootstrapIdentity | null {
   };
 }
 
+function resolveRuntimeInstanceId(): string | null {
+  const bridgeInstanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
+  if (isConcreteIdentity(bridgeInstanceId)) {
+    return normalizeAgentId(bridgeInstanceId);
+  }
+  const envId = process.env.TAP_AGENT_ID;
+  if (isConcreteIdentity(envId)) {
+    return normalizeAgentId(envId);
+  }
+  return null;
+}
+
+function resolveRuntimeStateDir(): string | null {
+  const runtimeStateDir = process.env.TAP_RUNTIME_STATE_DIR;
+  if (!runtimeStateDir) return null;
+  return resolve(runtimeStateDir);
+}
+
+function resolveRuntimeStateInstanceId(): string | null {
+  const runtimeStateDir = resolveRuntimeStateDir();
+  if (!runtimeStateDir) return null;
+
+  const dirName = basename(runtimeStateDir);
+  if (!dirName.startsWith(BRIDGE_RUNTIME_STATE_DIR_PREFIX)) {
+    return null;
+  }
+
+  const instanceId = dirName
+    .slice(BRIDGE_RUNTIME_STATE_DIR_PREFIX.length)
+    .trim();
+  if (!instanceId) return null;
+  return normalizeAgentId(instanceId);
+}
+
+function resolveRuntimeStateDisplayName(): string | null {
+  const runtimeStateDir = resolveRuntimeStateDir();
+  if (!runtimeStateDir) return null;
+
+  try {
+    const heartbeatPath = join(runtimeStateDir, "heartbeat.json");
+    if (existsSync(heartbeatPath)) {
+      const heartbeat = JSON.parse(readFileSync(heartbeatPath, "utf-8")) as {
+        agent?: string | null;
+      };
+      const heartbeatAgent = heartbeat.agent ?? undefined;
+      if (isConcreteIdentity(heartbeatAgent)) {
+        return heartbeatAgent;
+      }
+    }
+  } catch {
+    // Fall through to the persisted agent-name hint below.
+  }
+
+  try {
+    const agentNamePath = join(runtimeStateDir, "agent-name.txt");
+    if (!existsSync(agentNamePath)) return null;
+    const agentName = readFileSync(agentNamePath, "utf-8").trim();
+    return isConcreteIdentity(agentName) ? agentName : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveRuntimeDisplayName(): string | null {
+  const envName = process.env.TAP_AGENT_NAME;
+  if (isConcreteIdentity(envName)) return envName;
+  const codexName = process.env.CODEX_TAP_AGENT_NAME;
+  if (isConcreteIdentity(codexName)) return codexName;
+  const runtimeName = resolveRuntimeStateDisplayName();
+  if (runtimeName) return runtimeName;
+  return null;
+}
+
 function resolveInitialId(
   stateBootstrap: StateBootstrapIdentity | null,
 ): string {
-  const envId = process.env.TAP_AGENT_ID;
-  if (isConcreteIdentity(envId)) return normalizeAgentId(envId);
+  const runtimeInstanceId = resolveRuntimeInstanceId();
+  if (runtimeInstanceId) return runtimeInstanceId;
+  const runtimeStateInstanceId = resolveRuntimeStateInstanceId();
+  if (runtimeStateInstanceId) return runtimeStateInstanceId;
   const envName = process.env.TAP_AGENT_NAME;
   if (isConcreteIdentity(envName)) return normalizeAgentId(envName);
   return stateBootstrap?.agentId ?? "unknown";
@@ -130,20 +227,39 @@ let _agentId = resolveInitialId(stateBootstrap);
 // but managed MCP config env may still hold a stale name from tap add time.
 let _agentName =
   resolveNameFromState(_agentId, stateBootstrap) ??
-  (isConcreteIdentity(process.env.TAP_AGENT_NAME)
-    ? process.env.TAP_AGENT_NAME
-    : "unknown");
+  resolveRuntimeDisplayName() ??
+  "unknown";
 let _idLocked = _agentId !== "unknown";
 // M185: Name confirmation — once confirmed, only idempotent calls allowed.
 // Prevents subagents from overwriting parent's display name.
 // If booted with a real name (from state or env), consider it pre-confirmed.
 let _nameConfirmed = !isPlaceholderAgentValue(_agentName);
 
+function refreshUnknownIdentity(): void {
+  if (_idLocked) return;
+
+  const nextBootstrap = resolveSingleCodexBootstrap();
+  const nextId = resolveInitialId(nextBootstrap);
+  if (nextId === "unknown") return;
+
+  _agentId = nextId;
+  _idLocked = true;
+
+  const nextName =
+    resolveNameFromState(nextId, nextBootstrap) ?? resolveRuntimeDisplayName();
+  if (nextName && !isPlaceholderAgentValue(nextName)) {
+    _agentName = nextName;
+    _nameConfirmed = true;
+  }
+}
+
 export function getAgentId(): string {
+  refreshUnknownIdentity();
   return _agentId;
 }
 
 export function getAgentName(): string {
+  refreshUnknownIdentity();
   return _agentName;
 }
 
@@ -171,7 +287,31 @@ export function resolveKnownInstanceId(
 }
 
 export function resolveCurrentInstanceId(): string | null {
+  refreshUnknownIdentity();
   return resolveKnownInstanceId(_agentId, _agentName);
+}
+
+export function getAgentIdentitySnapshot(): AgentIdentitySnapshot {
+  refreshUnknownIdentity();
+  const bootstrap = resolveSingleCodexBootstrap();
+  return {
+    agentId: _agentId,
+    agentName: _agentName,
+    idLocked: _idLocked,
+    nameConfirmed: _nameConfirmed,
+    runtimeEnv: {
+      bridgeInstanceId: process.env.TAP_BRIDGE_INSTANCE_ID ?? null,
+      agentId: process.env.TAP_AGENT_ID ?? null,
+      agentName: process.env.TAP_AGENT_NAME ?? null,
+      codexTapAgentName: process.env.CODEX_TAP_AGENT_NAME ?? null,
+      commsDir: process.env.TAP_COMMS_DIR ?? null,
+      stateDir: process.env.TAP_STATE_DIR ?? null,
+      runtimeStateDir: process.env.TAP_RUNTIME_STATE_DIR ?? null,
+      repoRoot: process.env.TAP_REPO_ROOT ?? null,
+    },
+    bootstrap,
+    resolvedCurrentInstanceId: resolveKnownInstanceId(_agentId, _agentName),
+  };
 }
 
 export function buildHeartbeatConnectHash(
@@ -405,6 +545,7 @@ export function canonicalizeAgentId(id: string): string {
 }
 
 export function isForMe(to: string): boolean {
+  refreshUnknownIdentity();
   return matchesAgentRecipient(to, _agentId, _agentName);
 }
 

@@ -149,6 +149,16 @@ export function buildBridgeScriptArgs(
   return args;
 }
 
+export function buildBridgeDaemonEnv(
+  parentEnv: NodeJS.ProcessEnv,
+  runtimeEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return {
+    ...parentEnv,
+    ...runtimeEnv,
+  };
+}
+
 async function main(): Promise<void> {
   const repoRootHint = findRepoRootFromRunner() ?? undefined;
   const { config } = resolveConfig({}, repoRootHint);
@@ -168,10 +178,11 @@ async function main(): Promise<void> {
       Number.isFinite(instancePort) ? instancePort : undefined,
     );
 
-  // Multi-instance: derive instance-specific state dir
-  // Honor TAP_STATE_DIR env (set by config resolver) before falling back to .tmp/
+  // Multi-instance: derive instance-specific runtime state dir.
+  // TAP_STATE_DIR points to shared state.json for MCP bootstrap/rebind.
+  // TAP_RUNTIME_STATE_DIR is the bridge-only heartbeat/thread directory.
   const instanceId = process.env.TAP_BRIDGE_INSTANCE_ID;
-  const envStateDir = process.env.TAP_STATE_DIR;
+  const envStateDir = process.env.TAP_RUNTIME_STATE_DIR;
   let stateDir: string | undefined;
   if (envStateDir) {
     stateDir = envStateDir;
@@ -254,10 +265,11 @@ async function main(): Promise<void> {
 
   // Spawn with fnm-aware PATH so any further child spawns also find the right Node
   const runtimeEnv = buildRuntimeEnv(repoRoot);
+  const daemonEnv = buildBridgeDaemonEnv(process.env, runtimeEnv);
 
   const child = spawn(command, args, {
     cwd: repoRoot,
-    env: runtimeEnv,
+    env: daemonEnv,
     stdio: "inherit",
   });
 
