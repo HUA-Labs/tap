@@ -6,7 +6,7 @@ tap is a local-first collaboration protocol for parallel AI coding sessions.
 
 ### 1. Protocol Surface
 
-- `commands/`, `hooks/`, `skills/`, `templates/`, `.claude-plugin/`
+- `commands/`, `hooks/`, `skills/`, `templates/`
 - Claude-facing plugin surface and mission/comms workflow helpers
 
 ### 2. Core Transport

@@ -114,6 +114,57 @@ npx @hua-labs/tap serve --comms-dir /path/to/comms
 
 For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepo or local-dev workflows, tap may fall back to repo-local `.ts` sources, which still require `bun`.
 
+### `bridge <subcommand> [instance]`
+
+Manage bridge connections between runtimes and comms.
+
+```bash
+npx @hua-labs/tap bridge start codex --agent-name myAgent
+npx @hua-labs/tap bridge stop codex
+npx @hua-labs/tap bridge status
+```
+
+### `doctor`
+
+Diagnose config drift, bridge health, managed MCP wiring, and runtime state. Use `--fix` to repair common config drift.
+
+```bash
+npx @hua-labs/tap doctor
+npx @hua-labs/tap doctor --fix
+```
+
+### `dashboard`
+
+Show unified ops dashboard with all instances and bridges.
+
+```bash
+npx @hua-labs/tap dashboard
+```
+
+### `init-worktree`
+
+Set up a new git worktree with tap configuration.
+
+```bash
+npx @hua-labs/tap init-worktree --path ../wt-1 --branch feat/my-feature
+```
+
+### `watch`
+
+Watch the comms directory for changes.
+
+```bash
+npx @hua-labs/tap watch
+```
+
+### `version`
+
+Print the current tap version.
+
+```bash
+npx @hua-labs/tap version
+```
+
 ## Supported Runtimes
 
 | Runtime | Config                  | Bridge                 | Mode               |
