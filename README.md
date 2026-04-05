@@ -124,15 +124,6 @@ npx @hua-labs/tap bridge stop codex
 npx @hua-labs/tap bridge status
 ```
 
-### `doctor`
-
-Diagnose config drift, bridge health, managed MCP wiring, and runtime state. Use `--fix` to repair common config drift.
-
-```bash
-npx @hua-labs/tap doctor
-npx @hua-labs/tap doctor --fix
-```
-
 ### `dashboard`
 
 Show unified ops dashboard with all instances and bridges.
