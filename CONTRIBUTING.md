@@ -27,8 +27,8 @@ This project and everyone participating in it is governed by our commitment to:
 
 Before you begin, ensure you have the following installed:
 
-- **Node.js** (v18 or higher recommended)
-- **npm** or **bun** (bun is preferred for faster installs)
+- **Node.js** (`>=22.6.0`, as specified in `package.json` engines)
+- **pnpm** (used by the project) or **npm**
 - **Git**
 
 ### Installation
@@ -41,23 +41,17 @@ Before you begin, ensure you have the following installed:
 
 2. **Install dependencies**:
    ```bash
-   npm install
-   # or
-   bun install
+   pnpm install
    ```
 
 3. **Build the project**:
    ```bash
-   npm run build
-   # or
-   bun run build
+   pnpm run build
    ```
 
 4. **Verify installation**:
    ```bash
-   npm test
-   # or
-   bun test
+   pnpm test
    ```
 
 ## Development Workflow
@@ -75,12 +69,12 @@ Before you begin, ensure you have the following installed:
 
 Compile TypeScript to JavaScript:
 ```bash
-npm run build
+pnpm run build
 ```
 
 Watch mode for development:
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 ### Code Quality
@@ -89,17 +83,12 @@ Before submitting changes, ensure:
 
 1. **Type checking passes**:
    ```bash
-   npm run type-check
+   pnpm run type-check
    ```
 
 2. **All tests pass**:
    ```bash
-   npm test
-   ```
-
-3. **Code is properly formatted** (if using a formatter like Prettier):
-   ```bash
-   npm run format
+   pnpm test
    ```
 
 ## Submitting Changes
@@ -165,9 +154,18 @@ custom locations for the communication directory.
 ```
 src/
 ├── index.ts          # Main entry point
+├── cli.ts            # CLI entry point
+├── types.ts          # TypeScript type definitions
+├── __tests__/        # Test files
+├── adapters/         # Model/provider adapters
+├── api/              # API layer
+├── bridges/          # Bridge implementations
 ├── commands/         # CLI command implementations
-├── utils/            # Utility functions
-└── types/            # TypeScript type definitions
+├── config/           # Configuration handling
+├── engine/           # Core engine logic
+├── permissions/      # Permission system
+├── routing/          # Message routing
+└── runtime/          # Runtime environment
 ```
 
 ### Error Handling
@@ -183,15 +181,15 @@ src/
 
 ```bash
 # Run all tests
-npm test
+pnpm test
 
 # Run tests in watch mode
-npm run test:watch
+pnpm run test:watch
 ```
 
 ### Writing Tests
 
-We use **Vitest** for testing. Tests should be placed in `test/` directory or co-located with source files as `*.test.ts`.
+We use **Vitest** for testing. Tests should be placed in the `src/__tests__/` directory or co-located with source files as `*.test.ts`.
 
 Example test structure:
 ```typescript
@@ -222,17 +220,16 @@ Aim for high test coverage on:
 ### Communication Channels
 
 - **GitHub Issues**: For bug reports and feature requests
-- **GitHub Discussions**: For questions and ideas
-- **Discord**: Join our community (link in README)
+
+TAP is a growing project currently maintained by a small team. We plan to start with **GitHub Discussions** as the first community channel, then expand to other platforms (such as Discord) as the project grows.
 
 ### Getting Help
 
 If you need help:
 
 1. Check existing documentation and README
-2. Search closed issues and discussions
-3. Ask in Discord community channel
-4. Open a discussion for complex questions
+2. Search closed issues for similar questions
+3. Open a new GitHub issue for bugs or specific questions
 
 ### Reporting Bugs
 
