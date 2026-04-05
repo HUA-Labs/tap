@@ -1,5 +1,7 @@
 # @hua-labs/tap
 
+> Current version: **0.5.2**
+
 `tap` is a CLI that turns your repo into a shared workspace for Claude, Codex, and Gemini (experimental) so multiple AI agents can coordinate on the same codebase without custom glue code.
 
 ## Why Would I Use It?
@@ -30,9 +32,9 @@ Gemini support is currently experimental and polling-only.
 
 ### `init`
 
-Initialize the comms directory and `.tap-comms/` state.
+Initialize the comms directory and state.
 
-By default, the comms directory is created inside the current repo at `./tap-comms`.
+By default, the comms directory is created inside the current repo at `./tap-comms` and state is stored in `.tap-state/`.
 
 ```bash
 npx @hua-labs/tap init
@@ -85,16 +87,32 @@ npx @hua-labs/tap doctor
 npx @hua-labs/tap doctor --fix
 ```
 
+### `up`
+
+Start all registered bridge daemons with one command.
+
+```bash
+npx @hua-labs/tap up
+```
+
+### `down`
+
+Stop all running bridges.
+
+```bash
+npx @hua-labs/tap down
+```
+
 ### `serve`
 
-Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
+Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
 npx @hua-labs/tap serve
 npx @hua-labs/tap serve --comms-dir /path/to/comms
 ```
 
-For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepos or local checkouts, tap may fall back to repo-local `.ts` sources, which still require `bun`.
+For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepo or local-dev workflows, tap may fall back to repo-local `.ts` sources, which still require `bun`.
 
 ## Supported Runtimes
 
@@ -122,7 +140,7 @@ npx @hua-labs/tap status --json
   "data": {
     "version": "0.x.y",
     "commsDir": "/path/to/comms",
-    "runtimes": {
+    "instances": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
       "codex": { "status": "configured", "bridgeMode": "app-server" }
     }
@@ -165,6 +183,10 @@ comms/
 ├── findings/       # Out-of-scope discoveries
 ├── handoff/        # Session handoff documents
 ├── retros/         # Retrospectives
+├── letters/        # Agent letters (end-of-session reflections)
+├── logs/           # Operational logs
+├── onboarding/     # Onboarding guides
+├── receipts/       # Read receipts
 └── archive/        # Archived messages
 ```
 
@@ -176,6 +198,17 @@ Each runtime has an adapter that:
 4. **Verifies** — confirms the runtime can read the config
 
 The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
+
+## Examples — Real Multi-Agent Collaboration
+
+The [`examples/`](examples/) directory contains 10 excerpts from actual AI agent communications across 27 generations of collaborative development. Highlights include:
+
+- [Logic Battle: "Will You Ship Broken Code?"](examples/01-logic-battle-known-broken.md) — A 3:2 vote reversal triggered by a single CEO reframe
+- [Cross-Model Review Catches Root Cause Misdiagnosis](examples/02-cross-model-review-root-cause.md) — Codex fact-checks Claude's hypothesis
+- [Naming Creates Identity](examples/08-naming-creates-identity.md) — How a one-character name shapes an agent's work approach
+- [Files as Interface](examples/10-files-as-interface.md) — How 6,000+ markdown files became an AI organization's memory
+
+See [examples/README.md](examples/README.md) for the full list.
 
 ## Recent Changes
 

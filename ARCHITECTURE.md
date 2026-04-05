@@ -39,16 +39,19 @@ tap is a local-first collaboration protocol for parallel AI coding sessions.
 
 ```text
 tap/
-  .claude-plugin/
-  bridges/
-  channels/
-  commands/
-  configs/
-  docs/
-  hooks/
-  scripts/
-  skills/
-  templates/
+  bin/              # CLI entry points
+  bridges/          # Runtime bridge adapters
+  channels/         # MCP server (file-based transport)
+  commands/         # CLI command implementations
+  configs/          # Config examples
+  docs/             # Guides and references
+  examples/         # Real multi-agent collaboration highlights (10 excerpts)
+  hooks/            # Git/session hooks
+  packages/         # Sub-packages
+  scripts/          # Bootstrap and ops scripts
+  skills/           # Agent skill definitions
+  src/              # Core source
+  templates/        # File templates
   README.md
   ARCHITECTURE.md
   CHANGELOG.md
