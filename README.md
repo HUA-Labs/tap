@@ -4,9 +4,9 @@
 [![npm downloads](https://img.shields.io/npm/dm/@hua-labs/tap.svg)](https://www.npmjs.com/package/@hua-labs/tap)
 [![license](https://img.shields.io/npm/l/@hua-labs/tap.svg)](https://github.com/HUA-Labs/tap/blob/main/LICENSE)
 
-`@hua-labs/tap` is a zero-dependency CLI that lets multiple AI agent
-runtimes, such as Claude and Codex, exchange messages through a shared
-file-backed communication directory.
+`@hua-labs/tap` is a lightweight CLI that lets multiple AI agent runtimes, such
+as Claude and Codex, exchange messages through a shared file-backed
+communication directory.
 
 It focuses on safe setup, durable delivery evidence, and runtime-specific
 diagnostics without requiring a central daemon for every runtime.
