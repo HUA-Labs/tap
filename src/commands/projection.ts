@@ -26,8 +26,8 @@ Modes:
   watch   Poll central source until eligible records appear or --max-iterations is reached.
 
 Options:
-  --source-comms-dir <path>   Canonical/central comms dir, e.g. /home/devin/hua-comms.
-  --target-comms-dir <path>   Device-local comms dir, e.g. /Users/devin/HUA/hua-comms.
+  --source-comms-dir <path>   Canonical/central comms dir, e.g. /path/to/central-comms.
+  --target-comms-dir <path>   Device-local comms dir, e.g. ./tap-comms.
   --target-ssh <host>         Treat --target-comms-dir as a remote path on this SSH host.
   --agent <name>              Local agent display/routing name, e.g. agent-a.
   --alias <name[,name...]>    Additional routing aliases. Repeatable/comma-separated.

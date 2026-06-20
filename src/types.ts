@@ -6,7 +6,7 @@ export type Platform = "win32" | "darwin" | "linux";
 
 // ─── Instance ID ───────────────────────────────────────────────
 
-/** Unique, immutable identifier for a runtime instance. e.g. "codex", "codex-reviewer" */
+/** Unique, immutable identifier for a runtime instance. e.g. "codex", "codex-agent-a" */
 export type InstanceId = string;
 
 // ─── Adapter Context ────────────────────────────────────────────
@@ -178,7 +178,7 @@ export interface BridgeState {
   lifecycle?: BridgeLifecycleRecord | null;
 }
 
-/** Runtime instance state. Supports multiple instances per runtime (e.g. codex-reviewer, codex-builder). */
+/** Runtime instance state. Supports multiple instances per runtime (e.g. codex-agent-a, codex-builder). */
 export interface InstanceState {
   instanceId: InstanceId;
   runtime: RuntimeName;

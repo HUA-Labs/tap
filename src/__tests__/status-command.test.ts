@@ -7,13 +7,13 @@ import {
   __setHeadlessRunnerStatusRunnerForTests,
   __setProfileLocalPathExistsForTests,
   __setProfileProbeRunnerForTests,
-  __setSumBackLocalHostCheckerForTests,
   statusCommand,
 } from "../commands/status.js";
 import { version } from "../version.js";
 
 let tmpDir: string;
 let originalCwd: string;
+let profilePackPath: string;
 
 function probeResult(
   stdout: string,
@@ -32,8 +32,129 @@ function probeResult(
   };
 }
 
+function writeProfilePack(filePath: string): void {
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify(
+      {
+        schemaVersion: "tap-profile-pack.v0",
+        profiles: [
+          {
+            id: "sumback-yoon",
+            label: "sum-back 윤 CLI/TUI receiver",
+            agent: "윤",
+            runtimeSurface: "codex-cli",
+            sshTarget: "sum-back",
+            paths: {
+              repoRoot: "/home/devin/hua-platform",
+              commsDir: "/home/devin/hua-comms",
+            },
+            capabilities: { status: true, ready: false, apply: false },
+            status: {
+              expectedPermissionMode: "full",
+              receiverSession: "tap-receiver-yoon",
+              receiverLogPath:
+                "/home/devin/hua-platform/.tap-comms/logs/tap-receiver-yoon.log",
+              supervisorStateName: "sumback-yoon",
+              appServerUrl: "ws://127.0.0.1:4501",
+              headlessRunner: {
+                profile: "sumback-yoon",
+                tmuxSession: "tap-headless-sumback-yoon",
+                startCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --tmux",
+                stopCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --stop",
+                statusCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --status",
+              },
+            },
+          },
+          {
+            id: "mac-jun-ssh-tui",
+            label: "Mac 준 SSH/TUI receiver",
+            agent: "준",
+            runtimeSurface: "codex-cli",
+            sshTarget: "sum-mac",
+            paths: {
+              repoRoot: "/Users/devin/HUA/hua-platform",
+              commsDir: "/Users/devin/HUA/hua-comms",
+            },
+            capabilities: { status: true, ready: false, apply: false },
+            status: {
+              expectedPermissionMode: "full",
+              receiverSession: "tap-receiver-jun-ssh-tui",
+              receiverLogPath:
+                "/Users/devin/HUA/hua-platform/.tap-comms/logs/tap-receiver-jun-ssh-tui.log",
+              supervisorStateName: "mac-jun-ssh-tui",
+              appServerUrl: "ws://127.0.0.1:4501",
+              flowSupervisors: [
+                {
+                  id: "mac-jun-projection",
+                  label: "sum-back -> Mac 준 projection",
+                  host: "sum-back",
+                  tmuxSession: "tap-projection-jun",
+                  startCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-projection --start'",
+                  statusCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-projection --status'",
+                },
+                {
+                  id: "mac-jun-uplink",
+                  label: "Mac 준 -> sum-back uplink",
+                  host: "sum-back",
+                  tmuxSession: "tap-uplink-jun",
+                  startCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-uplink --start'",
+                  statusCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-uplink --status'",
+                },
+              ],
+              headlessRunner: {
+                profile: "mac-jun-ssh-tui",
+                tmuxSession: "tap-headless-mac-jun-ssh-tui",
+                startCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --tmux",
+                stopCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --stop",
+                statusCommand:
+                  "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --status",
+              },
+            },
+          },
+          {
+            id: "remote-panel-yoon",
+            label: "sum-back 윤 remote phone panel",
+            agent: "윤",
+            runtimeSurface: "remote-panel",
+            paths: {
+              repoRoot: "/home/devin/hua-platform",
+              commsDir: "/home/devin/hua-comms",
+            },
+            capabilities: { status: true, ready: false, apply: false },
+            status: {
+              host: "100.121.45.22",
+              port: 8765,
+              readOnly: true,
+              sendEnabled: false,
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+function profileArgs(profileId: string): string[] {
+  return ["--profile", profileId, "--profile-pack", profilePackPath];
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-status-test-"));
+  profilePackPath = path.join(tmpDir, "tap-profile-pack.json");
+  writeProfilePack(profilePackPath);
   fs.writeFileSync(path.join(tmpDir, "package.json"), "{}", "utf-8");
   fs.mkdirSync(path.join(tmpDir, ".tap-comms"), { recursive: true });
   __setHeadlessRunnerStatusRunnerForTests((runner) =>
@@ -51,7 +172,6 @@ afterEach(() => {
   __setProfileLocalPathExistsForTests(null);
   __setFlowSupervisorStatusRunnerForTests(null);
   __setHeadlessRunnerStatusRunnerForTests(null);
-  __setSumBackLocalHostCheckerForTests(null);
   vi.restoreAllMocks();
 });
 
@@ -81,7 +201,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "sumback-yoon"]);
+    const result = await statusCommand(profileArgs("sumback-yoon"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_READY");
@@ -192,7 +312,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "mac-jun-ssh-tui"]);
+    const result = await statusCommand(profileArgs("mac-jun-ssh-tui"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_BLOCKED");
@@ -272,7 +392,6 @@ describe("statusCommand", () => {
     __setProfileLocalPathExistsForTests(
       (profile) => profile.id === "mac-jun-ssh-tui",
     );
-    __setSumBackLocalHostCheckerForTests(() => false);
     __setFlowSupervisorStatusRunnerForTests((supervisor) =>
       probeResult(`running: ${supervisor.tmuxSession}`),
     );
@@ -300,7 +419,7 @@ describe("statusCommand", () => {
       );
     });
 
-    const result = await statusCommand(["--profile", "mac-jun-ssh-tui"]);
+    const result = await statusCommand(profileArgs("mac-jun-ssh-tui"));
 
     expect(observedHosts).toEqual(["local"]);
     expect(result.ok).toBe(true);
@@ -372,7 +491,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "sumback-yoon"]);
+    const result = await statusCommand(profileArgs("sumback-yoon"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_BLOCKED");
@@ -405,13 +524,11 @@ describe("statusCommand", () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe("TAP_STATUS_UNKNOWN_PROFILE");
     expect(result.data).toMatchObject({
-      knownProfiles: [
-        "sumback-yoon",
-        "sumback-sol",
-        "mac-jun-ssh-tui",
-        "remote-panel-yoon",
-      ],
+      knownProfiles: [],
     });
+    expect(result.warnings).toContain(
+      "Use a reviewed local status profile id.",
+    );
   });
 
   it("reports the remote panel profile as blocked when the panel is not listening", async () => {
@@ -439,7 +556,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "remote-panel-yoon"]);
+    const result = await statusCommand(profileArgs("remote-panel-yoon"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_BLOCKED");
@@ -509,7 +626,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "remote-panel-yoon"]);
+    const result = await statusCommand(profileArgs("remote-panel-yoon"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_READY");
@@ -559,7 +676,7 @@ describe("statusCommand", () => {
       ),
     );
 
-    const result = await statusCommand(["--profile", "remote-panel-yoon"]);
+    const result = await statusCommand(profileArgs("remote-panel-yoon"));
 
     expect(result.ok).toBe(true);
     expect(result.code).toBe("TAP_STATUS_PROFILE_BLOCKED");

@@ -198,7 +198,7 @@ describe("permissionsCommand", () => {
 
     expect(result.ok).toBe(true);
     expect(reloadRunner).toHaveBeenCalledTimes(1);
-    expect(reloadRunner).toHaveBeenCalledWith("sumback-yoon-appserver");
+    expect(reloadRunner).toHaveBeenCalledWith("sumback-yoon-appserver", null);
     expect(result.data).toMatchObject({
       restored: true,
       runtimeReloadRequired: true,
@@ -346,7 +346,7 @@ describe("permissionsCommand", () => {
     expect(result.message).toContain("--target is not supported");
   });
 
-  it("rejects unknown restore guidance profiles", async () => {
+  it("accepts local restore guidance profile ids as operator-provided labels", async () => {
     const backupPath = writeManagedBackup(
       '[sandbox]\nmode = "workspace-write"\n',
     );
@@ -360,12 +360,15 @@ describe("permissionsCommand", () => {
       "--apply",
     ]);
 
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe("TAP_INVALID_ARGUMENT");
-    expect(result.message).toContain("Invalid --profile");
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_PERMISSIONS_RESTORE_OK");
+    expect(result.data).toMatchObject({
+      profile: "someone-else",
+      runtimeReloadRequired: true,
+    });
   });
 
-  it("rejects unknown reload profiles", async () => {
+  it("passes local reload profile ids through to ready and reports failures", async () => {
     const backupPath = writeManagedBackup(
       '[sandbox]\nmode = "workspace-write"\n',
     );
@@ -380,7 +383,7 @@ describe("permissionsCommand", () => {
     ]);
 
     expect(result.ok).toBe(false);
-    expect(result.code).toBe("TAP_INVALID_ARGUMENT");
-    expect(result.message).toContain("Invalid --reload-profile");
+    expect(result.code).toBe("TAP_VERIFY_FAILED");
+    expect(result.message).toContain("reload profile sumback-yoon failed");
   });
 });

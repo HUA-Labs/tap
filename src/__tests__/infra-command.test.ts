@@ -8,7 +8,10 @@ import {
   infraCommand,
 } from "../commands/infra.js";
 import type { AgentProfileReport } from "../commands/status.js";
-import type { ProfileConfig } from "../commands/status-profiles.js";
+import {
+  AGENT_PROFILES,
+  type ProfileConfig,
+} from "../commands/status-profiles.js";
 
 let tmpDir: string;
 let commsDir: string;
@@ -87,12 +90,12 @@ function writeFreshnessState(record: Record<string, unknown>): void {
   const freshnessDir = path.join(stateDir, "app-route-freshness");
   fs.mkdirSync(freshnessDir, { recursive: true });
   fs.writeFileSync(
-    path.join(freshnessDir, "windows-app-sol.json"),
+    path.join(freshnessDir, "windows-app-agent-a.json"),
     JSON.stringify(
       {
         schemaVersion: 1,
-        profile: "windows-app-sol",
-        agent: "솔",
+        profile: "windows-app-agent-a",
+        agent: "agent-a",
         updatedAt: new Date().toISOString(),
         lastRunAt: new Date().toISOString(),
         ...record,
@@ -104,6 +107,93 @@ function writeFreshnessState(record: Record<string, unknown>): void {
   );
 }
 
+function installStatusProfileFixtures(): void {
+  Object.assign(AGENT_PROFILES, {
+    "sumback-yoon": {
+      kind: "codex-cli",
+      id: "sumback-yoon",
+      label: "sum-back 윤 CLI/TUI receiver",
+      agent: "윤",
+      runtimeSurface: "codex-cli",
+      expectedPermissionMode: "full",
+      repoRoot: "/home/devin/hua-platform",
+      commsDir: "/home/devin/hua-comms",
+      receiverSession: "tap-receiver-yoon",
+      receiverLogPath:
+        "/home/devin/hua-platform/.tap-comms/logs/receiver-supervisor-sumback-yoon.log",
+      supervisorStateName: "m463-live-sumback-yoon-main-supervisor",
+      appServerUrl: "ws://127.0.0.1:35089",
+      headlessRunner: {
+        profile: "sumback-yoon",
+        tmuxSession: "tap-headless-sumback-yoon",
+        startCommand:
+          "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --tmux",
+        stopCommand:
+          "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --stop",
+        statusCommand:
+          "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --status",
+      },
+    },
+    "mac-jun-ssh-tui": {
+      kind: "codex-cli",
+      id: "mac-jun-ssh-tui",
+      label: "sum-mac 준 SSH TUI receiver",
+      agent: "준",
+      runtimeSurface: "codex-cli",
+      expectedPermissionMode: "full",
+      repoRoot: "/Users/devin/HUA/hua-platform",
+      commsDir: "/Users/devin/HUA/hua-comms",
+      receiverSession: "tap-receiver-jun-ssh-tui",
+      receiverLogPath:
+        "/Users/devin/HUA/hua-platform/.tap-comms/logs/receiver-supervisor-mac-jun-ssh-tui.log",
+      sshTarget: "sum-mac",
+      supervisorStateName: "m463-mac-jun-ssh-tui-supervisor",
+      appServerUrl: "ws://127.0.0.1:35089",
+      flowSupervisors: [
+        {
+          id: "mac-jun-projection",
+          label: "sum-back -> Mac 준 projection",
+          host: "sum-back",
+          tmuxSession: "tap-projection-jun",
+          statusCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --status",
+          startCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --tmux",
+        },
+        {
+          id: "mac-jun-uplink",
+          label: "Mac 준 -> sum-back uplink",
+          host: "sum-back",
+          tmuxSession: "tap-uplink-jun",
+          statusCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --status",
+          startCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --tmux",
+        },
+      ],
+    },
+    "remote-panel-yoon": {
+      kind: "remote-panel",
+      id: "remote-panel-yoon",
+      label: "sum-back 윤 remote phone panel",
+      agent: "윤",
+      runtimeSurface: "remote-panel",
+      repoRoot: "/home/devin/hua-platform",
+      commsDir: "/home/devin/hua-comms",
+      host: "100.121.45.22",
+      port: 8765,
+      readOnly: true,
+      sendEnabled: false,
+    },
+  } satisfies Record<string, ProfileConfig>);
+}
+
+function resetStatusProfileFixtures(): void {
+  for (const key of Object.keys(AGENT_PROFILES)) {
+    delete AGENT_PROFILES[key];
+  }
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-infra-"));
   commsDir = path.join(tmpDir, "hua-comms");
@@ -113,6 +203,7 @@ beforeEach(() => {
   fs.mkdirSync(path.join(commsDir, "inbox"), { recursive: true });
   fs.writeFileSync(path.join(tmpDir, "package.json"), "{}", "utf8");
   vi.spyOn(console, "log").mockImplementation(() => {});
+  installStatusProfileFixtures();
   __setInfraProfileReportBuilderForTests((profile) => profileReport(profile));
   __setInfraHeadlessRunnerStatusRunnerForTests((profileId) => ({
     ok: true,
@@ -130,6 +221,7 @@ afterEach(() => {
     process.env.TAP_APP_ROUTE_FRESHNESS_STATE_DIR = previousFreshnessStateDir;
   }
   vi.restoreAllMocks();
+  resetStatusProfileFixtures();
   __setInfraProfileReportBuilderForTests(null);
   __setInfraHeadlessRunnerStatusRunnerForTests(null);
 });
@@ -158,7 +250,7 @@ describe("infraCommand", () => {
           }),
         }),
         expect.objectContaining({
-          id: "windows-app-sol",
+          id: "windows-app-agent-a",
           status: "not-observed",
           source: expect.objectContaining({ kind: "presence" }),
         }),
@@ -205,7 +297,7 @@ describe("infraCommand", () => {
   });
 
   it("reports stale Windows App route presence as blocked", async () => {
-    writePresence("솔", {
+    writePresence("agent-a", {
       timestamp: "2026-06-13T00:00:00.000Z",
       conversationId: "thread-old",
       ownerClientId: "owner-old",
@@ -215,7 +307,7 @@ describe("infraCommand", () => {
     const result = await infraCommand([
       "status",
       "--profile",
-      "windows-app-sol",
+      "windows-app-agent-a",
       "--fresh-minutes",
       "1",
       "--comms-dir",
@@ -225,7 +317,7 @@ describe("infraCommand", () => {
     expect(result.ok).toBe(true);
     expect(result.data.status).toBe("blocked");
     expect(result.data.profiles[0]).toMatchObject({
-      id: "windows-app-sol",
+      id: "windows-app-agent-a",
       status: "blocked",
       workerOfRecord: expect.objectContaining({
         expected: "consent-drive-ipc",
@@ -246,11 +338,11 @@ describe("infraCommand", () => {
   });
 
   it("reads Windows App route tuple from nested address metadata", async () => {
-    writePresence("솔", {
+    writePresence("agent-a", {
       timestamp: new Date().toISOString(),
       receiveTransports: ["consent-drive"],
       address: {
-        routingAddress: "솔",
+        routingAddress: "agent-a",
         conversationId: "thread-nested",
         ownerClientId: "owner-nested",
       },
@@ -263,7 +355,7 @@ describe("infraCommand", () => {
     const result = await infraCommand([
       "status",
       "--profile",
-      "windows-app-sol",
+      "windows-app-agent-a",
       "--fresh-minutes",
       "30",
       "--comms-dir",
@@ -273,7 +365,7 @@ describe("infraCommand", () => {
     expect(result.ok).toBe(true);
     expect(result.data.status).toBe("ready");
     expect(result.data.profiles[0]).toMatchObject({
-      id: "windows-app-sol",
+      id: "windows-app-agent-a",
       status: "ready",
       workerOfRecord: expect.objectContaining({
         expected: "consent-drive-ipc",
@@ -291,7 +383,7 @@ describe("infraCommand", () => {
   });
 
   it("includes App route freshness scheduler state in Windows App infra status", async () => {
-    writePresence("솔", {
+    writePresence("agent-a", {
       timestamp: new Date().toISOString(),
       conversationId: "thread-live",
       ownerClientId: "owner-live",
@@ -309,13 +401,13 @@ describe("infraCommand", () => {
       sourceHostStatus: "resolved",
       configuredHostDrift: true,
       nextAction:
-        "run tap app-route-freshness --agent 솔 --apply --json before TTL expiry",
+        "run tap app-route-freshness --agent agent-a --apply --json before TTL expiry",
     });
 
     const result = await infraCommand([
       "status",
       "--profile",
-      "windows-app-sol",
+      "windows-app-agent-a",
       "--fresh-minutes",
       "30",
       "--comms-dir",
@@ -325,10 +417,10 @@ describe("infraCommand", () => {
     expect(result.ok).toBe(true);
     expect(result.data.status).toBe("degraded");
     expect(result.data.profiles[0]).toMatchObject({
-      id: "windows-app-sol",
+      id: "windows-app-agent-a",
       status: "degraded",
       summary:
-        "Windows App 솔 route tuple is fresh but scheduled refresh is due.",
+        "Windows App agent-a route tuple is fresh but scheduled refresh is due.",
       checks: expect.arrayContaining([
         expect.objectContaining({
           name: "app-route-freshness-state",
@@ -353,19 +445,19 @@ describe("infraCommand", () => {
           name: "app-route-next-action",
           status: "warn",
           message:
-            "run tap app-route-freshness --agent 솔 --apply --json before TTL expiry",
+            "run tap app-route-freshness --agent agent-a --apply --json before TTL expiry",
         }),
       ]),
       nextActions: expect.arrayContaining([
         expect.objectContaining({
-          command: "tap app-route-freshness --agent 솔 --apply --json",
+          command: "tap app-route-freshness --agent agent-a --apply --json",
         }),
       ]),
     });
   });
 
   it("does not treat non-ready consent-drive status as a live Windows worker", async () => {
-    writePresence("솔", {
+    writePresence("agent-a", {
       timestamp: new Date().toISOString(),
       conversationId: "thread-live",
       ownerClientId: "owner-live",
@@ -375,7 +467,7 @@ describe("infraCommand", () => {
     const result = await infraCommand([
       "status",
       "--profile",
-      "windows-app-sol",
+      "windows-app-agent-a",
       "--fresh-minutes",
       "30",
       "--comms-dir",
@@ -385,7 +477,7 @@ describe("infraCommand", () => {
     expect(result.ok).toBe(true);
     expect(result.data.status).toBe("blocked");
     expect(result.data.profiles[0]).toMatchObject({
-      id: "windows-app-sol",
+      id: "windows-app-agent-a",
       status: "blocked",
       workerOfRecord: expect.objectContaining({
         expected: "consent-drive-ipc",

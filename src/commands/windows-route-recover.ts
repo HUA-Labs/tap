@@ -17,10 +17,10 @@ Usage:
   tap windows-route-recover --agent <name> [options]
 
 Options:
-  --agent <name>              Target Windows App agent. Default: 솔.
+  --agent <name>              Target Windows App agent. Default: agent-a.
   --apply                     Apply guarded refresh/publish steps.
   --dry-run                   With --apply, preview recovery without mutation.
-  --source-host <host>        Source host key or alias. Default: devin.
+  --source-host <host>        Source host key or alias. Default: windows-app.
   --source-comms-dir <path>   Override Windows source comms directory.
   --source-platform-dir <path>
                               Override Windows source repo/platform directory.
@@ -145,7 +145,7 @@ interface Proof {
 }
 interface RecoverReport extends Record<string, unknown> {
   generatedAt: string;
-  profile: "windows-app-sol";
+  profile: string;
   agent: string;
   status: RecoverStatus;
   classification: RecoverClass;
@@ -184,20 +184,7 @@ export function __setWindowsRouteRecoverCommandRunnerForTests(
   runnerForTests = runner;
 }
 
-const DEFAULT_HOSTS: Record<string, unknown> = {
-  "D:\\HUA\\hua-comms": {
-    ssh: "devin-win-ts",
-    repo: "D:\\HUA\\hua-platform",
-    commsDir: "D:\\HUA\\hua-comms",
-    hostAliases: [
-      "DEVIN",
-      "devin",
-      "devin-win-ts",
-      "windows-app",
-      "windows-app-sol",
-    ],
-  },
-};
+const DEFAULT_HOSTS: Record<string, unknown> = {};
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -364,7 +351,7 @@ function resolveHost(
       configSource: "profile-default",
       config: defaultConfig,
       message:
-        "source host resolved from windows-app-sol profile defaults; active MCP env still controls structured delivery proof",
+        "source host resolved from package defaults; active MCP env still controls structured delivery proof",
     };
   }
   return {
@@ -838,11 +825,11 @@ export async function windowsRouteRecoverCommand(
   }
 
   const parsed = parseArgs(args);
-  const agent = getStringFlag(parsed.flags.agent, "솔", "--agent");
+  const agent = getStringFlag(parsed.flags.agent, "agent-a", "--agent");
   if (!agent.ok) return invalid(agent.message);
   const sourceHost = getStringFlag(
     parsed.flags["source-host"],
-    "devin",
+    "windows-app",
     "--source-host",
   );
   if (!sourceHost.ok) return invalid(sourceHost.message);
@@ -1113,10 +1100,10 @@ export async function windowsRouteRecoverCommand(
 
   const shouldPublish = Boolean(
     hostConfig &&
-    sourceEndpoint &&
-    targetReady(routeHealth) &&
-    presence.source?.freshForRouting &&
-    (!presence.central?.freshForRouting || routeRefreshApplied),
+      sourceEndpoint &&
+      targetReady(routeHealth) &&
+      presence.source?.freshForRouting &&
+      (!presence.central?.freshForRouting || routeRefreshApplied),
   );
   if (apply && shouldPublish && sourceEndpoint) {
     const command = presenceCommand({
@@ -1273,7 +1260,7 @@ export async function windowsRouteRecoverCommand(
   const status = statusFor(classification, apply, dryRun, routeProof, actions);
   const report: RecoverReport = {
     generatedAt: new Date().toISOString(),
-    profile: "windows-app-sol",
+    profile: `windows-app-${agent.value}`,
     agent: agent.value,
     status,
     classification,

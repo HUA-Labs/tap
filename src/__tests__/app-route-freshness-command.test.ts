@@ -82,7 +82,7 @@ function recoveryResult(options: {
 function baseArgs(...extra: string[]): string[] {
   return [
     "--agent",
-    "솔",
+    "agent-a",
     "--central",
     centralDir,
     "--state-dir",
@@ -98,7 +98,7 @@ function baseArgs(...extra: string[]): string[] {
 function readState(): Record<string, unknown> {
   return JSON.parse(
     fs.readFileSync(
-      path.join(stateDir, "app-route-freshness", "windows-app-sol.json"),
+      path.join(stateDir, "app-route-freshness", "windows-app-agent-a.json"),
       "utf8",
     ),
   ) as Record<string, unknown>;
@@ -254,11 +254,11 @@ describe("appRouteFreshnessCommand", () => {
     const lockDir = path.join(stateDir, "app-route-freshness");
     fs.mkdirSync(lockDir, { recursive: true });
     fs.writeFileSync(
-      path.join(lockDir, "windows-app-sol.lock.json"),
+      path.join(lockDir, "windows-app-agent-a.lock.json"),
       JSON.stringify({
         pid: 1234,
-        agent: "솔",
-        profile: "windows-app-sol",
+        agent: "agent-a",
+        profile: "windows-app-agent-a",
         startedAt: new Date().toISOString(),
       }),
       "utf8",

@@ -6,6 +6,10 @@ import {
   __setCommsDoctorAppRouteFreshnessRunnerForTests,
   commsDoctorCommand,
 } from "../commands/comms-doctor.js";
+import {
+  AGENT_PROFILES,
+  type ProfileConfig,
+} from "../commands/status-profiles.js";
 import type { CommandResult } from "../types.js";
 
 let tmpDir: string;
@@ -112,7 +116,7 @@ function appResult(options: {
 function writeSchedulerLock(startedAt = new Date().toISOString()): string {
   const schedulerDir = path.join(stateDir, "app-route-freshness");
   fs.mkdirSync(schedulerDir, { recursive: true });
-  const lockPath = path.join(schedulerDir, "windows-app-sol.lock.json");
+  const lockPath = path.join(schedulerDir, "windows-app-솔.lock.json");
   fs.writeFileSync(
     lockPath,
     JSON.stringify(
@@ -133,17 +137,17 @@ function writeSchedulerLock(startedAt = new Date().toISOString()): string {
 function writeSchedulerState(overrides: Record<string, unknown> = {}): void {
   const schedulerDir = path.join(stateDir, "app-route-freshness");
   fs.mkdirSync(schedulerDir, { recursive: true });
-  const lockPath = path.join(schedulerDir, "windows-app-sol.lock.json");
+  const lockPath = path.join(schedulerDir, "windows-app-솔.lock.json");
   const workerOverride =
     overrides.worker && typeof overrides.worker === "object"
       ? (overrides.worker as Record<string, unknown>)
       : {};
   fs.writeFileSync(
-    path.join(schedulerDir, "windows-app-sol.json"),
+    path.join(schedulerDir, "windows-app-솔.json"),
     JSON.stringify(
       {
         schemaVersion: 1,
-        profile: "windows-app-sol",
+        profile: "windows-app-솔",
         agent: "솔",
         updatedAt: new Date().toISOString(),
         lastRunAt: new Date().toISOString(),
@@ -160,7 +164,7 @@ function writeSchedulerState(overrides: Record<string, unknown> = {}): void {
           owner: {
             pid: 1234,
             agent: "솔",
-            profile: "windows-app-sol",
+            profile: "windows-app-솔",
           },
           message: "worker-of-record lock acquired",
           ...workerOverride,
@@ -190,17 +194,110 @@ function baseArgs(...extra: string[]): string[] {
   ];
 }
 
+function installStatusProfileFixtures(): void {
+  Object.assign(AGENT_PROFILES, {
+    "sumback-yoon": {
+      kind: "codex-cli",
+      id: "sumback-yoon",
+      label: "sum-back 윤 CLI/TUI receiver",
+      agent: "윤",
+      runtimeSurface: "codex-cli",
+      expectedPermissionMode: "full",
+      repoRoot: "/home/devin/hua-platform",
+      commsDir: "/home/devin/hua-comms",
+      receiverSession: "tap-receiver-yoon",
+      receiverLogPath:
+        "/home/devin/hua-platform/.tap-comms/logs/receiver-supervisor-sumback-yoon.log",
+      supervisorStateName: "m463-live-sumback-yoon-main-supervisor",
+      appServerUrl: "ws://127.0.0.1:35089",
+    },
+    "sumback-sol": {
+      kind: "codex-cli",
+      id: "sumback-sol",
+      label: "sum-back 솔 CLI/TUI receiver",
+      agent: "솔",
+      runtimeSurface: "codex-cli",
+      expectedPermissionMode: "full",
+      repoRoot: "/home/devin/hua-platform",
+      commsDir: "/home/devin/hua-comms",
+      receiverSession: "tap-receiver-sol",
+      receiverLogPath:
+        "/home/devin/hua-platform/.tap-comms/logs/receiver-supervisor-sumback-sol.log",
+      supervisorStateName: "m463-sumback-sol-supervisor",
+      appServerUrl: "ws://127.0.0.1:44587",
+    },
+    "mac-jun-ssh-tui": {
+      kind: "codex-cli",
+      id: "mac-jun-ssh-tui",
+      label: "sum-mac 준 SSH TUI receiver",
+      agent: "준",
+      runtimeSurface: "codex-cli",
+      expectedPermissionMode: "full",
+      repoRoot: "/Users/devin/HUA/hua-platform",
+      commsDir: "/Users/devin/HUA/hua-comms",
+      receiverSession: "tap-receiver-jun-ssh-tui",
+      receiverLogPath:
+        "/Users/devin/HUA/hua-platform/.tap-comms/logs/receiver-supervisor-mac-jun-ssh-tui.log",
+      supervisorStateName: "m463-mac-jun-ssh-tui-supervisor",
+      appServerUrl: "ws://127.0.0.1:35089",
+      flowSupervisors: [
+        {
+          id: "mac-jun-projection",
+          label: "sum-back -> Mac 준 projection",
+          host: "sum-back",
+          tmuxSession: "tap-projection-jun",
+          statusCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --status",
+          startCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --tmux",
+        },
+        {
+          id: "mac-jun-uplink",
+          label: "Mac 준 -> sum-back uplink",
+          host: "sum-back",
+          tmuxSession: "tap-uplink-jun",
+          statusCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --status",
+          startCommand:
+            "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --tmux",
+        },
+      ],
+    },
+    "remote-panel-yoon": {
+      kind: "remote-panel",
+      id: "remote-panel-yoon",
+      label: "sum-back 윤 remote phone panel",
+      agent: "윤",
+      runtimeSurface: "remote-panel",
+      repoRoot: "/home/devin/hua-platform",
+      commsDir: "/home/devin/hua-comms",
+      host: "100.121.45.22",
+      port: 8765,
+      readOnly: true,
+      sendEnabled: false,
+    },
+  } satisfies Record<string, ProfileConfig>);
+}
+
+function resetStatusProfileFixtures(): void {
+  for (const key of Object.keys(AGENT_PROFILES)) {
+    delete AGENT_PROFILES[key];
+  }
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-comms-doctor-"));
   commsDir = path.join(tmpDir, "hua-comms");
   stateDir = path.join(tmpDir, ".tap-comms");
   fs.mkdirSync(path.join(commsDir, "inbox"), { recursive: true });
   vi.spyOn(console, "log").mockImplementation(() => {});
+  installStatusProfileFixtures();
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  resetStatusProfileFixtures();
   __setCommsDoctorAppRouteFreshnessRunnerForTests(null);
 });
 

@@ -86,7 +86,7 @@ function readMcpJson(repoRoot: string): CommsPathSource {
 function readCodexConfigToml(repoRoot: string): CommsPathSource {
   // getCodexConfigPath() respects CODEX_HOME, falling back to
   // os.homedir()/.codex when unset. Hardcoding os.homedir() here missed
-  // isolated Codex installs and caused false drift warnings (윤 PR #1161 P2).
+  // isolated Codex installs and caused false drift warnings in packaged use.
   const filePath = getCodexConfigPath();
   const raw = tryTomlMcpTapEnvValue(filePath, "TAP_COMMS_DIR");
   return {

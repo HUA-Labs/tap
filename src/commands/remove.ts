@@ -20,11 +20,11 @@ Description:
   Remove a registered instance, stop its bridge, and rollback config changes.
 
 Arguments:
-  <instance>    Instance ID or runtime name (e.g. claude, codex-reviewer)
+  <instance>    Instance ID or runtime name (e.g. claude, codex-agent-a)
 
 Examples:
   npx @hua-labs/tap remove claude
-  npx @hua-labs/tap remove codex-reviewer
+  npx @hua-labs/tap remove codex-agent-a
 `.trim();
 
 export async function removeCommand(args: string[]): Promise<CommandResult> {

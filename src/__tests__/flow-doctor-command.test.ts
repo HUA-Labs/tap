@@ -98,6 +98,59 @@ function agedConsentPresence(
   };
 }
 
+function writeLaneProfilePack(): string {
+  const profilePackPath = path.join(root, "tap-profile-pack.json");
+  fs.writeFileSync(
+    profilePackPath,
+    JSON.stringify(
+      {
+        schemaVersion: "tap-profile-pack.v0",
+        profiles: [
+          {
+            id: "mac-jun-ssh-tui",
+            label: "Mac 준 SSH/TUI receiver",
+            agent: "준",
+            runtimeSurface: "codex-cli",
+            paths: {
+              repoRoot: ".",
+              commsDir: "./hua-comms",
+            },
+            capabilities: { status: true, ready: false, apply: false },
+            status: {
+              flowSupervisors: [
+                {
+                  id: "mac-jun-projection",
+                  label: "sum-back -> Mac 준 projection",
+                  host: "sum-back",
+                  tmuxSession: "tap-projection-jun",
+                  startCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-projection --tmux'",
+                  statusCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-projection --status'",
+                },
+                {
+                  id: "mac-jun-uplink",
+                  label: "Mac 준 -> sum-back uplink",
+                  host: "sum-back",
+                  tmuxSession: "tap-uplink-jun",
+                  startCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-uplink --tmux'",
+                  statusCommand:
+                    "ssh sum-back 'bash scripts/tap-flow-supervisor.sh mac-jun-uplink --status'",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  return profilePackPath;
+}
+
 function freshBridgePresenceWithOldActivity(
   agent: string,
   lastActivityAgeHours: number,
@@ -1082,10 +1135,13 @@ describe("flowDoctorCommand", () => {
   it("reports flow supervisors on the owning host instead of running host-incompatible commands", async () => {
     writePresence(sourceCommsDir, "준", freshConsentPresence("준"));
     writePresence(targetCommsDir, "준", freshConsentPresence("준"));
+    const profilePackPath = writeLaneProfilePack();
 
     const result = await flowDoctorCommand([
       "--lane-profile",
       "mac-jun-ssh-tui",
+      "--profile-pack",
+      profilePackPath,
       "--source-comms-dir",
       sourceCommsDir,
       "--target-comms-dir",

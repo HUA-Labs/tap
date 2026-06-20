@@ -307,9 +307,7 @@ describe("tap-presence", () => {
         adapter: "codex-bridge",
       },
     });
-    expect(agents[0].health.recovery).toContain(
-      "docs/areas/tap/codex-app-server-bridge-runbook.md",
-    );
+    expect(agents[0].health.recovery).toContain("AI_GUIDE.md");
     expect(agents[0]?.address).toMatchObject({
       clientId: "codex-reviewer",
       conversationId: null,
@@ -1242,9 +1240,7 @@ describe("tap-presence", () => {
       reason: "bridge/app-server is initializing",
       adapter: "codex-bridge",
     });
-    expect(agents[0].health.recovery).toContain(
-      "docs/areas/tap/codex-app-server-bridge-runbook.md",
-    );
+    expect(agents[0].health.recovery).toContain("AI_GUIDE.md");
   });
 
   it("marks stale bridge presence as adapter-unavailable health", () => {
@@ -1291,12 +1287,7 @@ describe("tap-presence", () => {
       adapter: "codex-bridge",
     });
     expect(agents[0].health.recovery).toContain("restart");
-    expect(agents[0].health.recovery).toContain(
-      "docs/areas/tap/codex-app-server-bridge-runbook.md",
-    );
-    expect(agents[0].health.recovery).toContain(
-      "docs/areas/tap/sumback-codex-lifecycle.md",
-    );
+    expect(agents[0].health.recovery).toContain("AI_GUIDE.md");
   });
 
   it("resolves structured targets using client and conversation constraints", () => {
