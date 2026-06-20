@@ -4,13 +4,19 @@
 
 ## Overview
 
-tap bridges connect runtime CLI tools (codex, gemini) to the tap channel. Claude uses native MCP push — no bridge needed.
+tap bridges connect runtime CLI tools to the tap channel. Claude uses native
+MCP push and does not need a bridge. Codex is the primary supported bridge
+runtime in `0.6.x`.
 
-| Runtime | Bridge Mode   | What It Does                           |
-| ------- | ------------- | -------------------------------------- |
-| Claude  | `native-push` | MCP channel notifications — no bridge  |
-| Codex   | `app-server`  | WebSocket bridge via codex app-server  |
-| Gemini  | `polling`     | File polling (planned: extension hook) |
+| Runtime | Bridge Mode   | What It Does                          |
+| ------- | ------------- | ------------------------------------- |
+| Claude  | `native-push` | MCP channel notifications, no bridge  |
+| Codex   | `app-server`  | WebSocket bridge via codex app-server |
+| Gemini  | legacy        | Deprecated compatibility path         |
+
+Gemini CLI support remains for old installs, but new docs should not use it as
+the default bridge path. If your workflow has moved to Antigravity CLI, model
+it as a custom profile-pack surface until tap ships a dedicated adapter.
 
 ## Codex Bridge (Most Common)
 
