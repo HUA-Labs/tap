@@ -1,4 +1,4 @@
-import * as path from "node:path";
+import { logFilePath } from "../engine/bridge-paths.js";
 import { loadState, saveState } from "../state.js";
 import {
   getBridgeStatus,
@@ -10,9 +10,13 @@ import {
   getTurnInfo,
   deriveBridgeLifecycleState,
   deriveCodexSessionState,
+  isProcessAlive,
   transitionBridgeLifecycle,
 } from "../engine/bridge.js";
-import { loadLiveDispatchEvidence } from "../engine/health-monitor.js";
+import {
+  loadLiveDispatchEvidence,
+  resolveUniqueLiveDispatchAliases,
+} from "../engine/health-monitor.js";
 import { resolveConfig } from "../config/index.js";
 import { findRepoRoot, resolveInstanceId, log, logHeader } from "../utils.js";
 import type { CommandResult, AppServerState } from "../types.js";
@@ -30,6 +34,31 @@ import {
 } from "./bridge-helpers.js";
 
 // ─── Subcommand: status ────────────────────────────────────────
+
+function probeRetainedAppServer(
+  appServer: AppServerState | null | undefined,
+): AppServerState | null {
+  if (!appServer) {
+    return null;
+  }
+
+  const pidAlive = appServer.pid != null && isProcessAlive(appServer.pid);
+  const gatewayAlive =
+    appServer.auth?.gatewayPid != null
+      ? isProcessAlive(appServer.auth.gatewayPid)
+      : true;
+  const healthy = pidAlive && gatewayAlive;
+  const checkedAt = new Date().toISOString();
+
+  return {
+    ...appServer,
+    healthy,
+    lastCheckedAt: checkedAt,
+    lastHealthyAt: healthy
+      ? (appServer.lastHealthyAt ?? checkedAt)
+      : appServer.lastHealthyAt,
+  };
+}
 
 export function bridgeStatusAll(): CommandResult {
   const repoRoot = findRepoRoot();
@@ -66,6 +95,9 @@ export function bridgeStatusAll(): CommandResult {
       savedThreadId: string | null;
       savedThreadCwd: string | null;
       appServer: AppServerState | null;
+      lastNotificationMethod: string | null;
+      lastNotificationAt: string | null;
+      lastError: string | null;
     }
   > = {};
 
@@ -100,6 +132,9 @@ export function bridgeStatusAll(): CommandResult {
         savedThreadId: null,
         savedThreadCwd: null,
         appServer: null,
+        lastNotificationMethod: null,
+        lastNotificationAt: null,
+        lastError: null,
       };
       continue;
     }
@@ -109,11 +144,20 @@ export function bridgeStatusAll(): CommandResult {
     const liveDispatch =
       rawStatus === "running"
         ? null
-        : loadLiveDispatchEvidence(state.commsDir, instanceId);
+        : loadLiveDispatchEvidence(
+            state.commsDir,
+            instanceId,
+            resolveUniqueLiveDispatchAliases(state.instances, instanceId),
+          );
     const surfaceBridgeState = liveDispatch ? null : bridgeState;
     const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(surfaceBridgeState);
     const savedThread = loadRuntimeBridgeThreadState(surfaceBridgeState);
     const status = liveDispatch ? "dispatch-live" : rawStatus;
+    const surfaceAppServer =
+      surfaceBridgeState?.appServer ??
+      (status === "stopped" || status === "stale"
+        ? probeRetainedAppServer(inst.managedAppServer)
+        : null);
     const lifecycle = liveDispatch
       ? deriveBridgeLifecycleState({ bridgeStatus: "stopped" })
       : deriveBridgeLifecycleState({
@@ -142,6 +186,9 @@ export function bridgeStatusAll(): CommandResult {
           "crashed",
           "bridge pid not alive",
         ),
+        managedAppServer: inst.bridge?.appServer?.managed
+          ? probeRetainedAppServer(inst.bridge.appServer)
+          : (inst.managedAppServer ?? null),
       };
       stateChanged = true;
     }
@@ -157,14 +204,14 @@ export function bridgeStatusAll(): CommandResult {
     log(
       `${instanceId.padEnd(20)} ${inst.runtime.padEnd(8)} ${status.padEnd(10)} ${lifecycle.status.padEnd(20)} ${(session?.status ?? "-").padEnd(18)} ${pidStr.padEnd(8)} ${portStr.padEnd(6)} ${ageStr}`,
     );
-    if (surfaceBridgeState?.appServer) {
-      log(`  App server: ${formatAppServerState(surfaceBridgeState.appServer)}`);
-      if (surfaceBridgeState.appServer.logPath) {
-        log(`  Server log: ${surfaceBridgeState.appServer.logPath}`);
+    if (surfaceAppServer) {
+      log(`  App server: ${formatAppServerState(surfaceAppServer)}`);
+      if (surfaceAppServer.logPath) {
+        log(`  Server log: ${surfaceAppServer.logPath}`);
       }
-      if (surfaceBridgeState.appServer.auth) {
+      if (surfaceAppServer.auth) {
         log(
-          `  Protected: ${redactProtectedUrl(surfaceBridgeState.appServer.auth.protectedUrl)}`,
+          `  Protected: ${redactProtectedUrl(surfaceAppServer.auth.protectedUrl)}`,
         );
       }
     }
@@ -172,6 +219,14 @@ export function bridgeStatusAll(): CommandResult {
       log(
         `  Thread:     ${formatThreadSummary(runtimeHeartbeat.threadId, runtimeHeartbeat.threadCwd)}`,
       );
+    }
+    if (runtimeHeartbeat?.lastNotificationMethod) {
+      log(
+        `  Notify:     ${runtimeHeartbeat.lastNotificationMethod} @ ${runtimeHeartbeat.lastNotificationAt ?? "-"}`,
+      );
+    }
+    if (runtimeHeartbeat?.lastError) {
+      log(`  Last error: ${runtimeHeartbeat.lastError}`);
     }
     if (
       savedThread?.threadId &&
@@ -220,7 +275,10 @@ export function bridgeStatusAll(): CommandResult {
       threadCwd: runtimeHeartbeat?.threadCwd ?? null,
       savedThreadId: savedThread?.threadId ?? null,
       savedThreadCwd: savedThread?.cwd ?? null,
-      appServer: surfaceBridgeState?.appServer ?? null,
+      appServer: surfaceAppServer,
+      lastNotificationMethod: runtimeHeartbeat?.lastNotificationMethod ?? null,
+      lastNotificationAt: runtimeHeartbeat?.lastNotificationAt ?? null,
+      lastError: runtimeHeartbeat?.lastError ?? null,
     };
   }
 
@@ -336,7 +394,11 @@ export function bridgeStatusOne(identifier: string): CommandResult {
   const liveDispatch =
     rawStatus === "running"
       ? null
-      : loadLiveDispatchEvidence(state.commsDir, instanceId);
+      : loadLiveDispatchEvidence(
+          state.commsDir,
+          instanceId,
+          resolveUniqueLiveDispatchAliases(state.instances, instanceId),
+        );
   const surfaceBridgeState = liveDispatch ? null : bridgeState;
   const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(surfaceBridgeState);
   const savedThread = loadRuntimeBridgeThreadState(surfaceBridgeState);
@@ -345,6 +407,11 @@ export function bridgeStatusOne(identifier: string): CommandResult {
     ? null
     : getBridgeHeartbeatTimestamp(stateDir, instanceId);
   const status = liveDispatch ? "dispatch-live" : rawStatus;
+  const surfaceAppServer =
+    surfaceBridgeState?.appServer ??
+    (status === "stopped" || status === "stale"
+      ? probeRetainedAppServer(inst.managedAppServer)
+      : null);
   const lifecycle = liveDispatch
     ? deriveBridgeLifecycleState({ bridgeStatus: "stopped" })
     : deriveBridgeLifecycleState({
@@ -352,7 +419,8 @@ export function bridgeStatusOne(identifier: string): CommandResult {
         bridgeState,
         runtimeHeartbeat,
         savedThread,
-        persistedLifecycle: inst.bridgeLifecycle ?? bridgeState?.lifecycle ?? null,
+        persistedLifecycle:
+          inst.bridgeLifecycle ?? bridgeState?.lifecycle ?? null,
       });
   const session = deriveCodexSessionState({
     runtimeHeartbeat,
@@ -372,6 +440,9 @@ export function bridgeStatusOne(identifier: string): CommandResult {
         "crashed",
         "bridge pid not alive",
       ),
+      managedAppServer: inst.bridge?.appServer?.managed
+        ? probeRetainedAppServer(inst.bridge.appServer)
+        : (inst.managedAppServer ?? null),
     };
     saveState(repoRoot, state);
   }
@@ -395,37 +466,39 @@ export function bridgeStatusOne(identifier: string): CommandResult {
         `Saved:       ${formatThreadSummary(savedThread.threadId, savedThread.cwd)}`,
       );
     }
-    log(
-      `Log:         ${path.join(stateDir, "logs", `bridge-${instanceId}.log`)}`,
-    );
-    if (surfaceBridgeState.appServer) {
-      log(`App server:  ${surfaceBridgeState.appServer.url}`);
-      log(`Server PID:  ${surfaceBridgeState.appServer.pid ?? "-"}`);
+    if (runtimeHeartbeat?.lastNotificationMethod) {
       log(
-        `Server mode: ${surfaceBridgeState.appServer.managed ? "managed" : "external"}`,
+        `Notify:      ${runtimeHeartbeat.lastNotificationMethod} @ ${runtimeHeartbeat.lastNotificationAt ?? "-"}`,
       );
+    }
+    if (runtimeHeartbeat?.lastError) {
+      log(`Last error:  ${runtimeHeartbeat.lastError}`);
+    }
+    log(`Log:         ${logFilePath(stateDir, instanceId)}`);
+  }
+  if (surfaceAppServer) {
+    log(`App server:  ${surfaceAppServer.url}`);
+    log(`Server PID:  ${surfaceAppServer.pid ?? "-"}`);
+    log(`Server mode: ${surfaceAppServer.managed ? "managed" : "external"}`);
+    log(`Health:      ${surfaceAppServer.healthy ? "healthy" : "unhealthy"}`);
+    log(`Checked:     ${surfaceAppServer.lastCheckedAt}`);
+    if (surfaceAppServer.logPath) {
+      log(`Server log:  ${surfaceAppServer.logPath}`);
+    }
+    if (surfaceAppServer.auth) {
+      log(`Auth:        ${surfaceAppServer.auth.mode}`);
       log(
-        `Health:      ${surfaceBridgeState.appServer.healthy ? "healthy" : "unhealthy"}`,
+        `Protected:   ${redactProtectedUrl(surfaceAppServer.auth.protectedUrl)}`,
       );
-      log(`Checked:     ${surfaceBridgeState.appServer.lastCheckedAt}`);
-      if (surfaceBridgeState.appServer.logPath) {
-        log(`Server log:  ${surfaceBridgeState.appServer.logPath}`);
+      log(`Upstream:    ${surfaceAppServer.auth.upstreamUrl}`);
+      log(`TUI connect: ${surfaceAppServer.auth.upstreamUrl}`);
+      log(`Gateway PID: ${surfaceAppServer.auth.gatewayPid ?? "-"}`);
+      if (surfaceAppServer.auth.gatewayLogPath) {
+        log(`Gateway log: ${surfaceAppServer.auth.gatewayLogPath}`);
       }
-      if (surfaceBridgeState.appServer.auth) {
-        log(`Auth:        ${surfaceBridgeState.appServer.auth.mode}`);
-        log(
-          `Protected:   ${redactProtectedUrl(surfaceBridgeState.appServer.auth.protectedUrl)}`,
-        );
-        log(`Upstream:    ${surfaceBridgeState.appServer.auth.upstreamUrl}`);
-        log(`TUI connect: ${surfaceBridgeState.appServer.auth.upstreamUrl}`);
-        log(`Gateway PID: ${surfaceBridgeState.appServer.auth.gatewayPid ?? "-"}`);
-        if (surfaceBridgeState.appServer.auth.gatewayLogPath) {
-          log(`Gateway log: ${surfaceBridgeState.appServer.auth.gatewayLogPath}`);
-        }
-      } else if (surfaceBridgeState.appServer.managed) {
-        log(`Auth:        none (--no-auth)`);
-        log(`TUI connect: ${surfaceBridgeState.appServer.url}`);
-      }
+    } else if (surfaceAppServer.managed) {
+      log(`Auth:        none (--no-auth)`);
+      log(`TUI connect: ${surfaceAppServer.url}`);
     }
   }
   const transition = formatLifecycleTransition(lifecycle);
@@ -475,7 +548,10 @@ export function bridgeStatusOne(identifier: string): CommandResult {
       threadCwd: runtimeHeartbeat?.threadCwd ?? null,
       savedThreadId: savedThread?.threadId ?? null,
       savedThreadCwd: savedThread?.cwd ?? null,
-      appServer: surfaceBridgeState?.appServer ?? null,
+      appServer: surfaceAppServer,
+      lastNotificationMethod: runtimeHeartbeat?.lastNotificationMethod ?? null,
+      lastNotificationAt: runtimeHeartbeat?.lastNotificationAt ?? null,
+      lastError: runtimeHeartbeat?.lastError ?? null,
     },
   };
 }

@@ -104,11 +104,40 @@ export async function waitForPortRelease(
   return false;
 }
 
+/**
+ * Return true when `port` is free to assign to `instanceId`:
+ *  - No other instance has claimed it in state (excludeInstanceId is allowed
+ *    to hold it, e.g. when an instance re-registers during restart).
+ *  - For loopback hosts, the TCP port is bindable right now.
+ *
+ * Non-loopback hosts skip the TCP check because we can only bind locally.
+ */
+async function isPortAvailableForInstance(
+  state: TapState,
+  hostname: string,
+  port: number,
+  excludeInstanceId?: InstanceId,
+): Promise<boolean> {
+  const claimedInState = Object.entries(state.instances).some(
+    ([id, inst]) => id !== excludeInstanceId && inst.port === port,
+  );
+  if (claimedInState) {
+    return false;
+  }
+
+  if (!isLoopbackHost(hostname)) {
+    return true;
+  }
+
+  return await isTcpPortAvailable(hostname, port);
+}
+
 export async function findNextAvailableAppServerPort(
   state: TapState,
   baseUrl: string | undefined,
   basePort: number = 4501,
   excludeInstanceId?: InstanceId,
+  preferredPort?: number,
 ): Promise<number> {
   let hostname = "127.0.0.1";
   try {
@@ -117,21 +146,33 @@ export async function findNextAvailableAppServerPort(
     // Fall back to the default loopback host.
   }
 
+  // M320: Honour portMap-resolved preferred port when provided and free.
+  // A collision (state claim or TCP bind failure) downgrades to auto-assign
+  // silently — portMap is a hint, never an error surface.
+  if (
+    typeof preferredPort === "number" &&
+    Number.isFinite(preferredPort) &&
+    preferredPort >= 1 &&
+    preferredPort <= 65535
+  ) {
+    if (
+      await isPortAvailableForInstance(
+        state,
+        hostname,
+        preferredPort,
+        excludeInstanceId,
+      )
+    ) {
+      return preferredPort;
+    }
+  }
+
   const maxAttempts = 1000;
   let port = basePort;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1, port += 1) {
-    const claimedInState = Object.entries(state.instances).some(
-      ([id, inst]) => id !== excludeInstanceId && inst.port === port,
-    );
-    if (claimedInState) {
-      continue;
-    }
-
-    if (!isLoopbackHost(hostname)) {
-      return port;
-    }
-
-    if (await isTcpPortAvailable(hostname, port)) {
+    if (
+      await isPortAvailableForInstance(state, hostname, port, excludeInstanceId)
+    ) {
       return port;
     }
   }

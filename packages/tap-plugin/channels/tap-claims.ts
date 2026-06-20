@@ -75,7 +75,11 @@ function isProcessAlive(pid: number): boolean {
  * never share the same "unknown" instanceId.
  */
 export function resolveClaimInstanceId(): string {
-  const envId = process.env.TAP_BRIDGE_INSTANCE_ID ?? process.env.TAP_AGENT_ID;
+  // M294: TAP_INSTANCE_ID takes priority for per-worktree separation
+  const envId =
+    process.env.TAP_INSTANCE_ID ??
+    process.env.TAP_BRIDGE_INSTANCE_ID ??
+    process.env.TAP_AGENT_ID;
   if (envId && envId !== "unknown") return envId;
   // No managed identity — use PID to distinguish direct MCP sessions
   return `mcp-direct-${process.pid}`;
@@ -332,6 +336,32 @@ function renewClaimTTLLocked(
   const filePath = claimFilePath(name);
   atomicOverwrite(filePath, JSON.stringify(claim, null, 2) + "\n");
   return true;
+}
+
+/**
+ * M294: Get all claimed agent names from comms-level registry.
+ * Returns names from .claims/ dir regardless of liveness — for DM routing validation.
+ * Includes both alive and expired claims (file exists = agent was registered).
+ */
+export function getClaimedNames(): Set<string> {
+  ensureClaimsDir();
+  const names = new Set<string>();
+  try {
+    for (const file of readdirSync(CLAIMS_DIR)) {
+      if (!file.endsWith(".json") || file.endsWith(".lock")) continue;
+      const filePath = join(CLAIMS_DIR, file);
+      try {
+        const raw = readFileSync(filePath, "utf-8");
+        const claim = JSON.parse(raw) as NameClaim;
+        if (claim.name) names.add(claim.name);
+      } catch {
+        // Skip corrupted files
+      }
+    }
+  } catch {
+    // Dir read error
+  }
+  return names;
 }
 
 export function expireStale(): string[] {

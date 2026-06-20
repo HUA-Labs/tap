@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  resolvePackagedBridgeAsset,
   unwrapNpmCmdShim,
   splitResolvedCommand,
 } from "../engine/bridge-codex-command.js";
@@ -16,7 +17,13 @@ describe("unwrapNpmCmdShim", () => {
     fs.writeFileSync(cmdPath, content, "utf-8");
 
     if (scriptExists) {
-      const scriptDir = path.join(dir, "node_modules", "@openai", "codex", "bin");
+      const scriptDir = path.join(
+        dir,
+        "node_modules",
+        "@openai",
+        "codex",
+        "bin",
+      );
       fs.mkdirSync(scriptDir, { recursive: true });
       fs.writeFileSync(path.join(scriptDir, "codex.js"), "// stub", "utf-8");
     }
@@ -91,5 +98,68 @@ describe("splitResolvedCommand", () => {
     );
     expect(result.command).toBe("C:\\Program Files\\node.exe");
     expect(result.prefixArgs).toEqual(["C:\\Users\\test\\codex.js"]);
+  });
+});
+
+describe("resolvePackagedBridgeAsset", () => {
+  it("finds bridge assets in an ancestor monorepo dist from a worktree repoRoot", () => {
+    const workspaceDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tap-bridge-asset-test-"),
+    );
+
+    try {
+      const repoRoot = path.join(workspaceDir, ".tmp", "wt-2");
+      const assetPath = path.join(
+        workspaceDir,
+        "packages",
+        "tap-comms",
+        "dist",
+        "bridges",
+        "codex-bridge-runner.mjs",
+      );
+      fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+      fs.writeFileSync(assetPath, "// stub", "utf-8");
+
+      const resolved = resolvePackagedBridgeAsset(
+        repoRoot,
+        "codex-bridge-runner.mjs",
+        "file:///D:/repo/packages/tap-comms/src/engine/bridge-codex-command.ts",
+      );
+
+      expect(resolved).toBe(assetPath);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the installed npm package dist when present", () => {
+    const workspaceDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tap-bridge-package-test-"),
+    );
+
+    try {
+      const repoRoot = path.join(workspaceDir, "repos", "project");
+      const assetPath = path.join(
+        workspaceDir,
+        "node_modules",
+        "@hua-labs",
+        "tap",
+        "dist",
+        "bridges",
+        "codex-app-server-auth-gateway.mjs",
+      );
+      fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+      fs.writeFileSync(assetPath, "// stub", "utf-8");
+
+      const resolved = resolvePackagedBridgeAsset(
+        repoRoot,
+        "codex-app-server-auth-gateway.mjs",
+        "file:///D:/repo/packages/tap-comms/src/engine/bridge-codex-command.ts",
+      );
+
+      expect(resolved).toBe(assetPath);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
   });
 });

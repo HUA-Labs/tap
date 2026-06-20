@@ -1,6 +1,17 @@
 import * as path from "node:path";
-import { loadState, saveState, updateInstanceState, fileHash } from "../state.js";
-import { loadInstanceConfig, saveInstanceConfig } from "../config/instance-config.js";
+import { randomBytes } from "node:crypto";
+import { logFilePath } from "../engine/bridge-paths.js";
+import { resolveBridgeRoutingSlot } from "../bridges/codex-bridge-runner.js";
+import {
+  loadState,
+  saveState,
+  updateInstanceState,
+  fileHash,
+} from "../state.js";
+import {
+  loadInstanceConfig,
+  saveInstanceConfig,
+} from "../config/instance-config.js";
 import {
   startBridge,
   inferRestartMode,
@@ -20,7 +31,12 @@ import {
   logSuccess,
   logError,
   logHeader,
+  logWarn,
 } from "../utils.js";
+import {
+  detectCommsPathDrift,
+  formatCommsPathDriftSummary,
+} from "../config/comms-path-drift.js";
 import type {
   InstanceId,
   HeadlessConfig,
@@ -35,6 +51,119 @@ import {
 } from "./bridge-helpers.js";
 import { pruneStaleHeartbeatsForBridgeUp } from "./bridge-heartbeat.js";
 import { patchCodexApprovalMode } from "../adapters/codex.js";
+
+// ─── M392: per-session TAP_INSTANCE_ID suffix ──────────────────
+
+const INSTANCE_ID_SUFFIX_PATTERN = /^[a-z0-9]{4,16}$/;
+
+interface SuffixResolutionOk {
+  ok: true;
+  suffix: string | undefined;
+}
+
+interface SuffixResolutionErr {
+  ok: false;
+  message: string;
+}
+
+export function resolveInstanceIdSuffix(
+  flagValue: string | boolean | undefined,
+  env: NodeJS.ProcessEnv,
+): SuffixResolutionOk | SuffixResolutionErr {
+  // Explicit string value: validate and use as-is.
+  if (typeof flagValue === "string") {
+    const trimmed = flagValue.trim();
+    if (!trimmed) {
+      // Bare `--instance-id-suffix=` with empty value → treat as auto.
+      return { ok: true, suffix: randomBytes(3).toString("hex") };
+    }
+    if (!INSTANCE_ID_SUFFIX_PATTERN.test(trimmed)) {
+      return {
+        ok: false,
+        message: `Invalid --instance-id-suffix: ${trimmed}. Must match /^[a-z0-9]{4,16}$/`,
+      };
+    }
+    return { ok: true, suffix: trimmed };
+  }
+
+  // Boolean true: auto-generate.
+  if (flagValue === true) {
+    return { ok: true, suffix: randomBytes(3).toString("hex") };
+  }
+
+  // Env opt-in: TAP_INSTANCE_ID_AUTO_SUFFIX=1 or true.
+  const envFlag = env.TAP_INSTANCE_ID_AUTO_SUFFIX?.trim().toLowerCase();
+  if (envFlag === "1" || envFlag === "true") {
+    return { ok: true, suffix: randomBytes(3).toString("hex") };
+  }
+
+  return { ok: true, suffix: undefined };
+}
+
+interface LauncherOverridesOk {
+  ok: true;
+  instanceIdSuffix: string | undefined;
+  routingSlot: string | undefined;
+  logs: string[];
+}
+
+interface LauncherOverridesErr {
+  ok: false;
+  message: string;
+}
+
+/**
+ * M392: shared resolution of launcher-side overrides for both `bridge start`
+ * and `bridge restart`. Returns the suffix (if any) and the routing slot
+ * derived from the base instance id before suffix application, so suffixed
+ * agent ids never leak into the slot regex.
+ */
+export function resolveLauncherInstanceOverrides(args: {
+  flags: Record<string, string | boolean | undefined>;
+  env: NodeJS.ProcessEnv;
+  repoRoot: string;
+  baseInstanceId: string;
+}): LauncherOverridesOk | LauncherOverridesErr {
+  const suffixResolution = resolveInstanceIdSuffix(
+    args.flags["instance-id-suffix"],
+    args.env,
+  );
+  if (!suffixResolution.ok) return suffixResolution;
+  const instanceIdSuffix = suffixResolution.suffix;
+
+  const explicitRoutingSlot =
+    typeof args.flags["routing-slot"] === "string"
+      ? (args.flags["routing-slot"] as string)
+      : undefined;
+  let routingSlot: string | undefined = explicitRoutingSlot;
+  if (instanceIdSuffix && !routingSlot) {
+    // Derive slot from the base instance id BEFORE suffix application so
+    // the bridge runner's slot regex (which expects unsuffixed ids) keeps
+    // resolving correctly. resolveBridgeRoutingSlot returns null when no
+    // slot pattern matches (e.g. tower-side codex on hua-platform); we
+    // leave routingSlot undefined in that case to preserve current
+    // behavior.
+    const derived =
+      resolveBridgeRoutingSlot(args.repoRoot, {
+        ...args.env,
+        TAP_INSTANCE_ID: args.baseInstanceId,
+        TAP_BRIDGE_INSTANCE_ID: args.baseInstanceId,
+      }) ?? undefined;
+    if (derived) routingSlot = derived;
+  }
+
+  const logs: string[] = [];
+  if (instanceIdSuffix) {
+    logs.push(
+      `Instance suffix: ${instanceIdSuffix} (TAP_INSTANCE_ID=${args.baseInstanceId}-${instanceIdSuffix})`,
+    );
+    if (routingSlot) {
+      logs.push(`Routing slot:    ${routingSlot} (preserved from base id)`);
+    }
+  }
+
+  return { ok: true, instanceIdSuffix, routingSlot, logs };
+}
 
 // ─── Subcommand: start ─────────────────────────────────────────
 
@@ -124,8 +253,12 @@ export async function bridgeStart(
     ctx.stateDir,
   );
 
-  if ((resolvedAgentName ?? null) !== instance.agentName) {
-    instance = { ...instance, agentName: resolvedAgentName ?? null };
+  const currentName = instance.defaultAgentName;
+  if ((resolvedAgentName ?? null) !== currentName) {
+    instance = {
+      ...instance,
+      defaultAgentName: resolvedAgentName ?? null,
+    };
     const updatedState = updateInstanceState(state, instanceId, instance);
     saveState(repoRoot, updatedState);
     state = updatedState;
@@ -148,8 +281,37 @@ export async function bridgeStart(
   // Resolve runtime command + appServerUrl from config
   const { config: resolvedConfig } = resolveConfig({}, repoRoot);
   const runtimeCommand = resolvedConfig.runtimeCommand;
-  const manageAppServer =
-    instance.runtime === "codex" && flags["no-server"] !== true;
+  if (
+    flags["unsandboxed"] === true &&
+    (instance.runtime !== "codex" || flags["no-server"] === true)
+  ) {
+    return {
+      ok: false,
+      command: "bridge",
+      instanceId,
+      runtime: instance.runtime,
+      code: "TAP_INVALID_ARGUMENT",
+      message:
+        "--unsandboxed requires a managed Codex app-server (omit --no-server)",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const currentBridgeState = loadBridgeState(ctx.stateDir, instanceId);
+  const { manageAppServer, noAuth, appServerUnsandboxed } = inferRestartMode(
+    currentBridgeState,
+    {
+      noServer: flags["no-server"] === true ? true : undefined,
+      noAuth: flags["no-auth"] === true ? true : undefined,
+      unsandboxed: flags["unsandboxed"] === true ? true : undefined,
+    },
+    {
+      manageAppServer: instance.manageAppServer,
+      noAuth: instance.noAuth,
+      appServerUnsandboxed: instance.appServerUnsandboxed,
+    },
+  );
 
   // Auto-assign port only for managed app-server mode (local instances).
   // External servers (--no-server) keep the configured appServerUrl as-is.
@@ -179,12 +341,29 @@ export async function bridgeStart(
   log(`App server:    ${appServerUrl}`);
   if (effectivePort != null) log(`Port:          ${effectivePort}`);
   if (resolvedAgentName) log(`Agent name:    ${resolvedAgentName}`);
-  const noAuth = flags["no-auth"] === true;
+
+  // M361: surface commsDir drift at bridge start so operators catch it
+  // before messages start routing to the wrong inbox.
+  const pathDrift = detectCommsPathDrift(repoRoot, ctx.stateDir);
+  if (pathDrift.status === "drifted") {
+    logWarn(formatCommsPathDriftSummary(pathDrift));
+    for (const mismatch of pathDrift.mismatches) {
+      logWarn(`  ${mismatch}`);
+    }
+    logWarn(
+      "  Run `tap bridge doctor` or see docs/areas/tap/comms-path-drift-runbook.md",
+    );
+  } else if (pathDrift.status === "empty") {
+    logWarn(formatCommsPathDriftSummary(pathDrift));
+  }
   if (!manageAppServer && instance.runtime === "codex") {
     log("Auto server:   disabled (--no-server)");
   }
   if (noAuth && manageAppServer) {
     log("Auth gateway:  disabled (--no-auth)");
+  }
+  if (appServerUnsandboxed && manageAppServer && instance.runtime === "codex") {
+    log("Sandbox:       bypassed (--dangerously-bypass-approvals-and-sandbox)");
   }
   // Show headless status from instance config or --headless flag (resolved below)
   const willBeHeadless =
@@ -315,6 +494,29 @@ export async function bridgeStart(
         }
       : instance.headless;
 
+    // M392: per-session TAP_INSTANCE_ID suffix (opt-in). Shared resolution
+    // with `bridge restart` via resolveLauncherInstanceOverrides.
+    const launcher = resolveLauncherInstanceOverrides({
+      flags,
+      env: process.env,
+      repoRoot,
+      baseInstanceId: instanceId,
+    });
+    if (!launcher.ok) {
+      return {
+        ok: false,
+        command: "bridge",
+        instanceId,
+        runtime: instance.runtime,
+        code: "TAP_INVALID_ARGUMENT",
+        message: launcher.message,
+        warnings: [],
+        data: {},
+      };
+    }
+    const { instanceIdSuffix, routingSlot } = launcher;
+    for (const line of launcher.logs) log(line);
+
     // Scope TAP_COLD_START_WARMUP so the bridge can bootstrap its first turn
     const previousWarmup = process.env.TAP_COLD_START_WARMUP;
     process.env.TAP_COLD_START_WARMUP = "true";
@@ -334,6 +536,8 @@ export async function bridgeStart(
         port: effectivePort ?? undefined,
         manageAppServer,
         noAuth,
+        appServerUnsandboxed,
+        existingAppServer: instance.managedAppServer ?? null,
         headless,
         busyMode,
         pollSeconds,
@@ -344,6 +548,8 @@ export async function bridgeStart(
         processExistingMessages,
         previousLifecycle:
           instance.bridgeLifecycle ?? instance.bridge?.lifecycle ?? null,
+        instanceIdSuffix,
+        routingSlot,
       });
     } finally {
       if (previousWarmup === undefined) {
@@ -354,7 +560,7 @@ export async function bridgeStart(
     }
 
     logSuccess(`Bridge started (PID: ${bridge.pid})`);
-    log(`Log: ${path.join(ctx.stateDir, "logs", `bridge-${instanceId}.log`)}`);
+    log(`Log: ${logFilePath(ctx.stateDir, instanceId)}`);
     if (bridge.appServer) {
       log(`App server:   ${formatAppServerState(bridge.appServer)}`);
       if (bridge.appServer.logPath) {
@@ -383,6 +589,8 @@ export async function bridgeStart(
       bridgeLifecycle: bridge.lifecycle ?? instance.bridgeLifecycle ?? null,
       manageAppServer,
       noAuth,
+      appServerUnsandboxed,
+      managedAppServer: bridge.appServer?.managed ? bridge.appServer : null,
     };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
@@ -489,7 +697,7 @@ export async function bridgeStartAll(
     const inst = state.instances[instanceId];
     const storedName = resolveRecoveredAgentName(
       instanceId,
-      inst?.agentName ?? undefined,
+      inst?.defaultAgentName ?? undefined,
       repoRoot,
       ctx.stateDir,
     );
@@ -504,21 +712,24 @@ export async function bridgeStartAll(
     // Restore saved --no-server / --no-auth mode (M197: inferRestartMode for start --all)
     const stateDir = path.join(repoRoot, ".tap-comms");
     const currentBridgeState = loadBridgeState(stateDir, instanceId);
-    const { manageAppServer, noAuth } = inferRestartMode(
+    const { manageAppServer, noAuth, appServerUnsandboxed } = inferRestartMode(
       currentBridgeState,
       {
         noServer: flags["no-server"] === true ? true : undefined,
         noAuth: flags["no-auth"] === true ? true : undefined,
+        unsandboxed: flags["unsandboxed"] === true ? true : undefined,
       },
       {
         manageAppServer: inst.manageAppServer,
         noAuth: inst.noAuth,
+        appServerUnsandboxed: inst.appServerUnsandboxed,
       },
     );
     const mergedFlags = {
       ...flags,
       ...(manageAppServer === false ? { "no-server": true } : {}),
       ...(noAuth === true ? { "no-auth": true } : {}),
+      ...(appServerUnsandboxed === true ? { unsandboxed: true } : {}),
     };
 
     log(`Starting ${instanceId} (agent: ${storedName})...`);

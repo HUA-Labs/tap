@@ -96,6 +96,36 @@ describe("startUnixCodexAppServer", () => {
       expect.any(Object),
     );
   });
+
+  it("prepends the unsandboxed launch flag when requested", () => {
+    const unref = vi.fn();
+    spawnMock.mockReturnValue({ pid: 5151, unref });
+    const logPath = path.join(tmpDir, "app-server-unsandboxed.log");
+
+    const pid = startUnixCodexAppServer(
+      "node\0/tmp/codex.js",
+      "ws://127.0.0.1:4501",
+      tmpDir,
+      logPath,
+      undefined,
+      "linux",
+      true,
+    );
+
+    expect(pid).toBe(5151);
+    expect(spawnMock).toHaveBeenCalledWith(
+      "nohup",
+      [
+        "node",
+        "/tmp/codex.js",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "app-server",
+        "--listen",
+        "ws://127.0.0.1:4501",
+      ],
+      expect.any(Object),
+    );
+  });
 });
 
 describe("findUnixListeningProcessId", () => {

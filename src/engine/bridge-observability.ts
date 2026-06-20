@@ -1,6 +1,19 @@
 /**
  * Bridge observability — heartbeat monitoring, turn stuck detection, log rotation.
  *
+ * ## SSOT Hierarchy (M321)
+ *
+ * - **Process liveness** → `{runtimeStateDir}/heartbeat.json` (SSOT).
+ *   Written by bridge-dispatch on each poll cycle. Contains detailed
+ *   runtime state: threadId, turnState, connected, etc.
+ *
+ * - **`state.json` lastHeartbeat** → Legacy fallback only. No longer
+ *   actively written. `resolveHeartbeatTimestamp()` prefers runtime
+ *   heartbeat and falls back to this for pre-M321 state files.
+ *
+ * - **Agent presence** → `heartbeats.json` (commsDir). Separate concern,
+ *   managed by MCP layer (`tap-plugin`). Not accessed here.
+ *
  * Consolidated from bridge-state.ts (heartbeat/turn functions) and
  * bridge-log-rotate.ts into a single observability module.
  *
@@ -11,7 +24,6 @@ import * as fs from "node:fs";
 import type { InstanceId, BridgeState } from "../types.js";
 import {
   loadBridgeState,
-  saveBridgeState,
   clearBridgeState,
   loadRuntimeBridgeHeartbeat,
 } from "./bridge-state.js";
@@ -31,6 +43,13 @@ function loadRuntimeHeartbeatTimestamp(
   return typeof heartbeat?.updatedAt === "string" ? heartbeat.updatedAt : null;
 }
 
+/**
+ * Resolve the most authoritative heartbeat timestamp.
+ *
+ * Priority: runtime heartbeat.json (SSOT) → state.json lastHeartbeat (legacy fallback).
+ * The legacy fallback covers pre-M321 state files that still have lastHeartbeat
+ * but no runtime heartbeat.json. New bridges write runtime heartbeat only.
+ */
 function resolveHeartbeatTimestamp(
   state: BridgeState | null | undefined,
 ): string | null {
@@ -44,18 +63,20 @@ function resolveHeartbeatTimestamp(
 /**
  * Update the heartbeat timestamp for a running bridge.
  * Only the owning process (matching PID) can update the heartbeat.
+ *
+ * @deprecated M321 — Runtime heartbeat (`{runtimeStateDir}/heartbeat.json`)
+ * is the SSOT for process liveness. `state.json lastHeartbeat` is no longer
+ * actively updated. This function is kept for backward compatibility but
+ * is a no-op. Use runtime heartbeat written by bridge-dispatch instead.
  */
 export function updateBridgeHeartbeat(
-  stateDir: string,
-  instanceId: InstanceId,
+  _stateDir: string,
+  _instanceId: InstanceId,
 ): void {
-  const state = loadBridgeState(stateDir, instanceId);
-  if (!state) return;
-
-  if (state.pid !== process.pid) return;
-
-  state.lastHeartbeat = new Date().toISOString();
-  saveBridgeState(stateDir, instanceId, state);
+  // M321: No-op. Runtime heartbeat.json (written by bridge-dispatch) is now
+  // the sole source of truth for bridge process liveness. state.json
+  // lastHeartbeat is retained as a read-only legacy fallback in
+  // resolveHeartbeatTimestamp() but no longer actively written.
 }
 
 /**

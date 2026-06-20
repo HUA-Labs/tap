@@ -43,6 +43,7 @@ export interface EnsureCodexAppServerOptions {
   agentName: string;
   existingAppServer?: AppServerState | null;
   noAuth?: boolean;
+  unsandboxed?: boolean;
 }
 
 export const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
@@ -155,6 +156,7 @@ export async function ensureCodexAppServer(
   const fallbackManualCommand = formatCodexAppServerCommand(
     "codex",
     effectiveUrl,
+    options.unsandboxed,
   );
   if (
     options.existingAppServer?.url === effectiveUrl &&
@@ -208,7 +210,11 @@ export async function ensureCodexAppServer(
   // --no-auth: start app-server directly on the public URL (no gateway).
   // TUI and bridge both connect to the same port without token auth.
   if (options.noAuth) {
-    const manualCommand = formatCodexAppServerCommand("codex", effectiveUrl);
+    const manualCommand = formatCodexAppServerCommand(
+      "codex",
+      effectiveUrl,
+      options.unsandboxed,
+    );
     let pid: number | null;
 
     if (options.platform === "win32") {
@@ -219,6 +225,7 @@ export async function ensureCodexAppServer(
           options.repoRoot,
           logPath,
           appServerEnv,
+          options.unsandboxed,
         );
       } catch (err) {
         throw new Error(
@@ -235,6 +242,7 @@ export async function ensureCodexAppServer(
           logPath,
           appServerEnv,
           options.platform,
+          options.unsandboxed,
         );
       } catch (err) {
         throw new Error(
@@ -289,7 +297,11 @@ export async function ensureCodexAppServer(
     platform: options.platform,
     publicUrl: effectiveUrl,
   });
-  const manualCommand = formatCodexAppServerCommand("codex", auth.upstreamUrl);
+  const manualCommand = formatCodexAppServerCommand(
+    "codex",
+    auth.upstreamUrl,
+    options.unsandboxed,
+  );
 
   let pid: number | null;
 
@@ -301,6 +313,7 @@ export async function ensureCodexAppServer(
         options.repoRoot,
         logPath,
         appServerEnv,
+        options.unsandboxed,
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -321,6 +334,7 @@ export async function ensureCodexAppServer(
         logPath,
         appServerEnv,
         options.platform,
+        options.unsandboxed,
       );
     } catch (err) {
       if (auth.gatewayPid != null) {
@@ -411,6 +425,7 @@ export async function ensureCodexAppServer(
 export function formatCodexAppServerCommand(
   command: string,
   url: string,
+  unsandboxed = false,
 ): string {
-  return `${command} app-server --listen ${url}`;
+  return `${command}${unsandboxed ? " --dangerously-bypass-approvals-and-sandbox" : ""} app-server --listen ${url}`;
 }

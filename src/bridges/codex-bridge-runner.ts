@@ -12,13 +12,29 @@ import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
 
 // ─── Repo root discovery (fallback for unbundled runs) ─────────
 
-function findRepoRootFromRunner(): string | null {
-  let dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+export function resolveRepoRootHintFromRunner(
+  runnerUrl: string = import.meta.url,
+  env: NodeJS.ProcessEnv = process.env,
+  fileExists: (candidate: string) => boolean = fs.existsSync,
+): string | null {
+  const envRepoRoot = env.TAP_REPO_ROOT?.trim();
+  if (envRepoRoot) {
+    return path.resolve(envRepoRoot);
+  }
+
+  let dir = path.resolve(path.dirname(fileURLToPath(runnerUrl)));
 
   while (true) {
-    if (fs.existsSync(path.join(dir, SHARED_CONFIG_FILE))) return dir;
-    if (fs.existsSync(path.join(dir, LOCAL_CONFIG_FILE))) return dir;
-    if (fs.existsSync(path.join(dir, "scripts", "codex-app-server-bridge.ts")))
+    if (fileExists(path.join(dir, SHARED_CONFIG_FILE))) return dir;
+    if (fileExists(path.join(dir, LOCAL_CONFIG_FILE))) return dir;
+    if (
+      fileExists(
+        path.join(dir, "scripts", "codex", "codex-app-server-bridge.ts"),
+      )
+    ) {
+      return dir;
+    }
+    if (fileExists(path.join(dir, "scripts", "codex-app-server-bridge.ts")))
       return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
@@ -46,7 +62,7 @@ function maybeStartHeadlessLoop(
         process.env.TAP_AGENT_ID ??
         process.env.TAP_BRIDGE_INSTANCE_ID ??
         agentName;
-      const generation = process.env.TAP_REVIEW_GENERATION ?? "gen11";
+      const generation = resolveHeadlessReviewGeneration(repoRoot, commsDir);
       const resolvedStateDir = stateDir ?? path.join(repoRoot, ".tap-comms");
 
       const loop = createHeadlessLoop({
@@ -68,6 +84,67 @@ function maybeStartHeadlessLoop(
     .catch((err) => {
       console.error("[headless-loop] Failed to start:", err);
     });
+}
+
+export function resolveHeadlessReviewGeneration(
+  repoRoot: string,
+  commsDir?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const explicit = env.TAP_REVIEW_GENERATION?.trim();
+  if (explicit) return explicit;
+
+  const envGeneration = normalizeGenerationValue(env.TAP_GENERATION);
+  if (envGeneration) return envGeneration;
+
+  try {
+    const reviewsDir = path.join(repoRoot, "reviews");
+    const generations = readGenerationNumbers(reviewsDir);
+    if (generations.length > 0) {
+      return `gen${generations[0]}`;
+    }
+  } catch {
+    // Fall through to comms/env fallback.
+  }
+
+  const resolvedCommsDir =
+    commsDir?.trim() || env.TAP_COMMS_DIR?.trim() || null;
+  if (resolvedCommsDir) {
+    const commsGenerations = [
+      ...readGenerationNumbers(path.join(resolvedCommsDir, "retros")),
+      ...readGenerationNumbers(path.join(resolvedCommsDir, "letters")),
+    ].sort((a, b) => b - a);
+    if (commsGenerations.length > 0) {
+      return `gen${commsGenerations[0]}`;
+    }
+  }
+
+  return "gen1";
+}
+
+function normalizeGenerationValue(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^gen(\d+)$/i) ?? trimmed.match(/^(\d+)$/);
+  if (!match?.[1]) return null;
+  return `gen${Number.parseInt(match[1], 10)}`;
+}
+
+function readGenerationNumbers(dir: string): number[] {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => normalizeGenerationValue(entry.name))
+      .filter((value): value is string => Boolean(value))
+      .map((value) => Number.parseInt(value.slice(3), 10))
+      .filter(Number.isFinite)
+      .sort((a, b) => b - a);
+  } catch {
+    return [];
+  }
 }
 
 // ─── Main ──────────────────────────────────────────────────────
@@ -110,7 +187,9 @@ export function resolveBridgeDaemonScript(
       "bridges",
       "codex-app-server-bridge.ts",
     ),
-    // 5. Legacy monorepo root script
+    // 5. Monorepo scripts/codex/ subfolder
+    path.join(repoRoot, "scripts", "codex", "codex-app-server-bridge.ts"),
+    // 6. Legacy monorepo root script (pre-cleanup)
     path.join(repoRoot, "scripts", "codex-app-server-bridge.ts"),
   ];
 
@@ -159,8 +238,53 @@ export function buildBridgeDaemonEnv(
   };
 }
 
+function normalizeRoutingSlot(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "tower") return "tower";
+  if (normalized === "reviewer") return "reviewer";
+  const worktreeMatch = normalized.match(/^wt[-_]?(\d+)$/);
+  if (worktreeMatch) {
+    return `wt-${Number.parseInt(worktreeMatch[1], 10)}`;
+  }
+  return null;
+}
+
+export function resolveBridgeRoutingSlot(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const explicit = normalizeRoutingSlot(env.TAP_ROUTING_SLOT);
+  if (explicit) return explicit;
+
+  const instanceId =
+    env.TAP_INSTANCE_ID?.trim() || env.TAP_BRIDGE_INSTANCE_ID?.trim() || "";
+  const normalizedInstance = instanceId.toLowerCase().replace(/_/g, "-");
+  if (
+    normalizedInstance === "tower" ||
+    normalizedInstance === "claude-main" ||
+    normalizedInstance === "codex-main"
+  ) {
+    return "tower";
+  }
+  if (
+    normalizedInstance === "reviewer" ||
+    normalizedInstance === "claude-reviewer" ||
+    normalizedInstance === "codex-reviewer"
+  ) {
+    return "reviewer";
+  }
+  if (/^(?:(?:claude|codex)-)?wt-?(\d+)$/.test(normalizedInstance)) {
+    return normalizeRoutingSlot(
+      normalizedInstance.replace(/^(?:claude|codex)-/, ""),
+    );
+  }
+
+  return normalizeRoutingSlot(path.basename(repoRoot));
+}
+
 async function main(): Promise<void> {
-  const repoRootHint = findRepoRootFromRunner() ?? undefined;
+  const repoRootHint = resolveRepoRootHintFromRunner() ?? undefined;
   const { config } = resolveConfig({}, repoRootHint);
 
   const repoRoot = config.repoRoot;
@@ -266,6 +390,10 @@ async function main(): Promise<void> {
   // Spawn with fnm-aware PATH so any further child spawns also find the right Node
   const runtimeEnv = buildRuntimeEnv(repoRoot);
   const daemonEnv = buildBridgeDaemonEnv(process.env, runtimeEnv);
+  const routingSlot = resolveBridgeRoutingSlot(repoRoot, daemonEnv);
+  if (routingSlot && !daemonEnv.TAP_ROUTING_SLOT) {
+    daemonEnv.TAP_ROUTING_SLOT = routingSlot;
+  }
 
   const child = spawn(command, args, {
     cwd: repoRoot,
@@ -293,6 +421,7 @@ async function main(): Promise<void> {
 function isDirectExecution(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
+  if (!path.basename(entry).startsWith("codex-bridge-runner")) return false;
   return import.meta.url === pathToFileURL(path.resolve(entry)).href;
 }
 

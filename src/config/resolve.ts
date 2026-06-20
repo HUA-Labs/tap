@@ -25,7 +25,12 @@ const DEFAULT_APP_SERVER_URL = "ws://127.0.0.1:4501";
 
 // ─── Repo root discovery ───────────────────────────────────────
 
-import { _noGitWarned, _setNoGitWarned, log } from "../utils.js";
+import {
+  _noGitWarned,
+  _setNoGitWarned,
+  log,
+  normalizeTapPath,
+} from "../utils.js";
 
 export function findRepoRoot(startDir: string = process.cwd()): string {
   let dir = path.resolve(startDir);
@@ -124,6 +129,8 @@ export function resolveConfig(
     runtimeCommand: "auto",
     appServerUrl: "auto",
     towerName: "auto",
+    remoteAgents: "auto",
+    portMap: "auto",
   };
 
   // ─── commsDir ──────────────────────────────────────────────
@@ -204,6 +211,26 @@ export function resolveConfig(
   // ─── towerName ──────────────────────────────────────────────
   const towerName = local.towerName ?? shared.towerName ?? null;
 
+  // ─── remoteAgents (M310) ───────────────────────────────────
+  const remoteAgents = [
+    ...(shared.remoteAgents ?? []),
+    ...(local.remoteAgents ?? []),
+  ];
+
+  // ─── portMap (M320) ────────────────────────────────────────
+  // Merge shared (project defaults) with local (machine-specific). Local
+  // entries override shared entries for the same instanceId, which matches
+  // the rest of the config resolution priority.
+  const portMap: Record<string, number> = {};
+  if (shared.portMap) {
+    Object.assign(portMap, shared.portMap);
+    sources.portMap = "shared-config";
+  }
+  if (local.portMap) {
+    Object.assign(portMap, local.portMap);
+    sources.portMap = "local-config";
+  }
+
   return {
     config: {
       repoRoot,
@@ -212,6 +239,8 @@ export function resolveConfig(
       runtimeCommand,
       appServerUrl,
       towerName,
+      remoteAgents,
+      portMap,
     },
     sources,
   };
@@ -253,6 +282,9 @@ function resolvePath(repoRoot: string, p: string): string {
 
 /** Subset of config fields that can be overridden per-instance or per-session. */
 interface ResolveOverrides {
+  /** M310: Canonical bootstrap name. */
+  defaultAgentName?: string | null;
+  /** @deprecated Use defaultAgentName. */
   agentName?: string | null;
   port?: number | null;
   bridgeMode?: string | null;
@@ -437,10 +469,13 @@ export function resolveTrackedConfig(
     null,
   );
 
+  // M310 → M350: defaultAgentName is the canonical identity seed. Legacy
+  // instance config files on disk may still carry only `agentName` — read
+  // the deprecated field as a fallback so pre-M350 artifacts keep working.
   const agentNameTracked = resolveField<string | null>(
     undefined,
     undefined,
-    inst?.agentName ?? undefined,
+    inst?.defaultAgentName ?? inst?.agentName ?? undefined,
     sess?.agentName ?? undefined,
     undefined,
     undefined,
@@ -480,22 +515,4 @@ export function resolveTrackedConfig(
   };
 
   return { tracked: trackedConfig, hash: computeConfigHash(trackedConfig) };
-}
-
-export function normalizeTapPath(input: string): string {
-  const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
-  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
-    return trimmed;
-  }
-
-  // MSYS/Git Bash `/c/...` → `C:\...` conversion — Windows only.
-  // On POSIX, `/d/...` is a legitimate absolute path and must not be rewritten.
-  if (process.platform === "win32") {
-    const match = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
-    if (match) {
-      return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, "\\")}`;
-    }
-  }
-
-  return trimmed;
 }

@@ -17,6 +17,26 @@ export interface TapSharedConfig {
   commsRepoUrl?: string;
   /** Control tower agent name. Used for auto-notify on new agent join (M111). */
   towerName?: string;
+  /**
+   * M310: Known agents on remote machines that share this comms dir via git sync.
+   * These agents bypass local heartbeat validation in tap_reply routing,
+   * allowing cross-machine DM delivery through comms repo sync.
+   */
+  remoteAgents?: string[];
+  /**
+   * M320: Optional map of instanceId -> preferred app-server port.
+   * When present, `tap add codex` consults this table before falling back to
+   * auto-assign. A missing entry, a conflicting state record, or a taken TCP
+   * port all downgrade the instance to auto-assign; entries never cause an
+   * error.
+   *
+   * Convention (non-enforced, for multi-instance setups):
+   *   4510 codex-tower, 4511 codex-wt1, 4512 codex-wt2
+   *   4520 codex-reviewer
+   *   4530 codex-probe
+   *   451x = active workers, 452x = reviewers, 453x = diagnostic/probe
+   */
+  portMap?: Record<string, number>;
 }
 
 /**
@@ -35,6 +55,10 @@ export interface TapResolvedConfig {
   runtimeCommand: string;
   appServerUrl: string;
   towerName: string | null;
+  /** M310: Known agents on remote machines. */
+  remoteAgents: string[];
+  /** M320: Resolved instanceId -> port preferences (empty object when unset). */
+  portMap: Record<string, number>;
 }
 
 /** Config resolution source for diagnostics (legacy API — backward compatible). */

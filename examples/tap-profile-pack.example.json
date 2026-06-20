@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "tap-profile-pack.v0",
+  "packId": "local.public.example",
+  "label": "Local public profile pack example",
+  "profiles": [
+    {
+      "id": "local-agent-a-cli",
+      "label": "Local Agent A CLI",
+      "agent": "agent-a",
+      "runtimeSurface": "codex-cli",
+      "paths": {
+        "repoRoot": ".",
+        "commsDir": "./tap-comms"
+      },
+      "capabilities": {
+        "ready": true,
+        "status": true,
+        "apply": false
+      },
+      "status": {
+        "kind": "codex-cli"
+      },
+      "ready": {
+        "surface": "codex-cli",
+        "commandRef": "ready-check"
+      },
+      "commands": {
+        "ready-check": {
+          "shell": "npx @hua-labs/tap ready --surface codex-cli --agent agent-a --json",
+          "risk": "read-only",
+          "reviewRequired": true,
+          "defaultEnabled": false
+        }
+      }
+    },
+    {
+      "id": "local-agent-a-panel",
+      "label": "Local Agent A Remote Panel",
+      "agent": "agent-a",
+      "runtimeSurface": "remote-panel",
+      "paths": {
+        "repoRoot": ".",
+        "commsDir": "./tap-comms"
+      },
+      "capabilities": {
+        "ready": true,
+        "status": true,
+        "apply": false
+      },
+      "status": {
+        "kind": "remote-panel",
+        "host": "127.0.0.1",
+        "port": 8765,
+        "readOnly": true,
+        "sendEnabled": false
+      },
+      "ready": {
+        "surface": "remote-panel",
+        "commandRef": "panel-check"
+      },
+      "commands": {
+        "panel-check": {
+          "shell": "npx @hua-labs/tap ready --surface remote-panel --agent agent-a --host 127.0.0.1 --port 8765 --json",
+          "risk": "read-only",
+          "reviewRequired": true,
+          "defaultEnabled": false
+        }
+      }
+    }
+  ]
+}

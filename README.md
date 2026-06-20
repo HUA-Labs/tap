@@ -1,40 +1,91 @@
 # @hua-labs/tap
 
-> Current version: **0.5.2**
+Zero-dependency CLI for cross-model AI agent communication setup.
 
-`tap` is a CLI that turns your repo into a shared workspace for Claude, Codex, and Gemini (experimental) so multiple AI agents can coordinate on the same codebase without custom glue code.
+tap connects Claude, Codex, and other agent runtimes through a shared
+file-backed communication layer, with setup reports that keep runtime surfaces,
+durable evidence, and optional live adapters separate.
 
-## Why Would I Use It?
+## Requirements
 
-- You use more than one coding agent and want them to share context without copy-pasting prompts between tools.
-- You want reviews, handoffs, and agent-to-agent messages to live in files inside the repo instead of hidden app state.
-- You want a working multi-agent setup in minutes instead of hand-editing MCP configs and bridge processes yourself.
+- **Node.js ≥ 22.6.0** — tap uses the global `WebSocket` API (stable in Node 22+). Node 20 and earlier are not supported; run with `fnm use 22` or `nvm use 22`.
 
 ## Quick Start
 
-Try it in a fresh repo:
+> `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
 
 ```bash
-npx @hua-labs/tap init
-npx @hua-labs/tap add claude
-npx @hua-labs/tap add codex
-npx @hua-labs/tap add gemini   # experimental
-npx @hua-labs/tap status
+# 1. Start in a git repo
+git init
+
+# 2. Generate a dry-run setup report for your runtime surface
+npx @hua-labs/tap setup --profile codex-cli --dry-run --json
+
+# 3. Apply only reviewed setup-safe changes
+npx @hua-labs/tap setup --profile codex-cli --apply --json
+
+# 4. Re-check setup readiness and surface status
+npx @hua-labs/tap doctor --setup --profile codex-cli --json
+npx @hua-labs/tap status --json
+
+# 5. Add a concrete runtime only when you are ready to patch that runtime
+npx @hua-labs/tap add codex --name agent-a
+npx @hua-labs/tap ready --surface codex-cli --agent agent-a --apply --json
+
+# 6. Diagnose delivery separately from setup
+npx @hua-labs/tap comms-doctor --all-known --json
 ```
 
-This creates a shared comms/state layer and wires supported runtimes into it.
+`tap setup` is dry-run by default. The current reviewed apply path creates
+tap-owned directories, an initial tap state file, and guarded tap-managed repo
+`.mcp.json` entries. It does not start receiver, projection, uplink, bridge,
+app-server, headless runner, or remote panel processes, and it does not publish
+presence, repair route tuples, send messages, or read credentials.
 
-Gemini support is currently experimental and polling-only.
+Supported public setup profiles:
 
-> `npx @hua-labs/tap` ships a bundled managed MCP server entry and runs that bundled `.mjs` with `node`. `bun` is only required when tap falls back to repo-local TypeScript sources during monorepo or local-dev workflows.
+| Profile          | Use when                                                                |
+| ---------------- | ----------------------------------------------------------------------- |
+| `codex-cli`      | Codex CLI or headless CLI will use MCP tools plus inbox/receiver paths. |
+| `codex-app`      | Codex App/Desktop route readiness should be inspected read-only.        |
+| `claude-channel` | Claude/channel readiness should be inspected read-only.                 |
+
+HUA-specific machine names, paths, tmux sessions, one-character Korean agent
+names, and private profile packs are examples, not package defaults.
+
+For the `0.6.x` preview, release-facing commands use neutral agents such as
+`agent-a` and `agent-b`. HUA profiles and paths can be supplied through a
+reviewed profile pack or HUA runbook, but they are not package defaults.
 
 ## Commands
 
+### `setup`
+
+Generate a dry-run-first setup report for public tap deployment.
+
+```bash
+npx @hua-labs/tap setup --profile codex-cli --dry-run --json
+npx @hua-labs/tap setup --profile codex-cli --apply --json
+TAP_AGENT=agent-a
+npx @hua-labs/tap setup --profile codex-app --agent "$TAP_AGENT" --json
+npx @hua-labs/tap setup --profile claude-channel --agent "$TAP_AGENT" --json
+npx @hua-labs/tap setup --profile codex-cli --profile-pack ./tap-profile-pack.json --json
+```
+
+`--apply` is intentionally narrow: create reviewed tap-owned directories, an
+initial tap state file, and guarded tap-managed repo `.mcp.json` changes only.
+User-managed or ambiguous MCP entries fail closed before mutation.
+
+Profile packs are data-only validation inputs in `0.6.x`; tap reports their
+shape and blocks invalid packs before setup mutation, but it does not execute
+pack commands. A generic example is shipped at
+`examples/tap-profile-pack.example.json`.
+
 ### `init`
 
-Initialize the comms directory and state.
+Initialize the comms directory and `.tap-comms/` state.
 
-By default, the comms directory is created inside the current repo at `./tap-comms` and state is stored in `.tap-state/`.
+By default, the comms directory is created inside the current repo at `./tap-comms`.
 
 ```bash
 npx @hua-labs/tap init
@@ -51,8 +102,42 @@ Add a runtime. Probes config, plans patches, applies, and verifies.
 ```bash
 npx @hua-labs/tap add claude
 npx @hua-labs/tap add codex
-npx @hua-labs/tap add gemini   # experimental
-npx @hua-labs/tap add claude --force   # re-install
+npx @hua-labs/tap add gemini
+npx @hua-labs/tap add claude --force                        # re-install
+npx @hua-labs/tap add codex --name agent-a --port 4520      # explicit port
+npx @hua-labs/tap add codex --name agent-b                  # portMap lookup, else auto-assign
+```
+
+For Codex app-server instances, `--name agent-a` is the concrete agent identity
+used by `tap ready --agent agent-a`; the managed instance id remains
+`codex-agent-a`.
+
+Codex instances bind to an app-server port. Resolution order:
+
+1. `--port <n>` — explicit override.
+2. `portMap[<instanceId>]` from `tap-config.json` / `tap-config.local.json` when the
+   entry is free (no state claim, TCP-available on loopback).
+3. Auto-assign — scan from 4501 upward for the first free port.
+
+`portMap` is a hint, not a hard requirement: a missing entry or a conflict
+silently drops through to auto-assign. Convention:
+
+| Port | Instance        | Role               |
+| ---- | --------------- | ------------------ |
+| 4510 | `codex-agent-a` | Agent A            |
+| 4511 | `codex-agent-b` | Agent B            |
+| 4512 | `codex-agent-c` | Agent C            |
+| 4520 | `codex-agent-d` | Agent D            |
+| 4530 | `codex-probe`   | Diagnostic / probe |
+
+```json
+{
+  "portMap": {
+    "codex-agent-a": 4510,
+    "codex-agent-b": 4511,
+    "codex-agent-d": 4520
+  }
+}
 ```
 
 ### `remove <runtime>`
@@ -70,6 +155,7 @@ Show installed runtimes and their status.
 
 ```bash
 npx @hua-labs/tap status
+npx @hua-labs/tap status --json
 ```
 
 Output shows three status levels:
@@ -80,81 +166,87 @@ Output shows three status levels:
 
 ### `doctor`
 
-Diagnose config drift, bridge health, managed MCP wiring, and runtime state. Use `--fix` to repair common config drift, including Codex `approval_mode` mismatches.
+Diagnose config drift, bridge health, managed MCP wiring, and runtime state.
+Use `--setup` for setup/config/warm-up readiness. Use the plain doctor for
+broader infrastructure checks.
 
 ```bash
 npx @hua-labs/tap doctor
 npx @hua-labs/tap doctor --fix
+npx @hua-labs/tap doctor --setup --profile codex-cli --json
+npx @hua-labs/tap doctor --setup --profile codex-cli --profile-pack ./tap-profile-pack.json --json
 ```
 
-### `up`
+`tap doctor --setup --apply` reuses the same guarded setup apply plan as
+`tap setup --apply`. It does not run the broad infrastructure fixer.
 
-Start all registered bridge daemons with one command.
+### `comms-doctor`
+
+Explain delivery by runtime surface. Use this when you need to separate live
+delivery, durable inbox evidence, receiver/promoter paths, MCP/channel
+visibility, and fallback evidence.
 
 ```bash
-npx @hua-labs/tap up
+npx @hua-labs/tap comms-doctor --all-known --json
+TAP_AGENT=agent-b
+npx @hua-labs/tap comms-doctor --agent "$TAP_AGENT" --plan-send --json
 ```
 
-### `down`
+### `flow-doctor`
 
-Stop all running bridges.
+Diagnose one receiver/promoter lane without mutating process state. Use this
+when an agent appears present but the operator needs one report for identity,
+receiver dry-run, return-uplink evidence, central presence freshness,
+active-turn queue state, and stale presence cleanup candidates.
 
 ```bash
-npx @hua-labs/tap down
+TAP_AGENT=agent-a
+npx @hua-labs/tap flow-doctor --agent "$TAP_AGENT" --json
+npx @hua-labs/tap flow-doctor --agent "$TAP_AGENT" --presence-source-comms-dir ./tap-comms --presence-target-comms-dir ./tap-comms --json
 ```
+
+`flow-doctor` is read-only by default. Its only reviewed cleanup mutation is
+`--apply-stale-presence-cleanup`, which archives stale non-lane presence
+records with a manifest and prunes matching stale heartbeat entries. It never
+publishes stale presence, restarts processes, changes route tuples, or deletes
+inbox/archive evidence.
+
+### `reviews register`
+
+Register formal review outcomes into the review evidence stream. Use this when
+review results should be discoverable outside the ordinary inbox flow.
+
+```bash
+npx @hua-labs/tap reviews register --source ./tap-comms --dry-run --json
+```
+
+The explicit registration path is part of the `0.6.x` preview boundary.
+Automatic registration from every tap reply/review writer path is a future
+follow-up, so release notes should name the explicit command as the current
+workaround.
 
 ### `serve`
 
-Start the tap MCP server (stdio). Convenience command for running the MCP server locally.
+Start the tap-comms MCP server (stdio). Convenience command for running the MCP server locally.
 
 ```bash
 npx @hua-labs/tap serve
 npx @hua-labs/tap serve --comms-dir /path/to/comms
 ```
 
-For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepo or local-dev workflows, tap may fall back to repo-local `.ts` sources, which still require `bun`.
+For npm installs, `serve` runs the bundled `mcp-server.mjs` entry with `node`. In monorepos or local checkouts, tap may fall back to repo-local `.ts` sources, which still require `bun`.
 
-### `bridge <subcommand> [instance]`
+### `bridge start|stop|restart`
 
-Manage bridge connections between runtimes and comms.
-
-```bash
-npx @hua-labs/tap bridge start codex --agent-name myAgent
-npx @hua-labs/tap bridge stop codex
-npx @hua-labs/tap bridge status
-```
-
-### `dashboard`
-
-Show unified ops dashboard with all instances and bridges.
+Manage the Codex app-server bridge lifecycle.
 
 ```bash
-npx @hua-labs/tap dashboard
+npx @hua-labs/tap bridge start codex --agent-name agent-c
+npx @hua-labs/tap bridge stop codex --keep-server
+npx @hua-labs/tap bridge restart codex
 ```
 
-### `init-worktree`
-
-Set up a new git worktree with tap configuration.
-
-```bash
-npx @hua-labs/tap init-worktree --path ../wt-1 --branch feat/my-feature
-```
-
-### `watch`
-
-Watch the comms directory for changes.
-
-```bash
-npx @hua-labs/tap watch
-```
-
-### `version`
-
-Print the current tap version.
-
-```bash
-npx @hua-labs/tap version
-```
+`bridge stop --keep-server` leaves the managed app-server running and preserves its metadata in instance state so the next `bridge start` or `bridge restart` can reuse the existing session instead of forcing a fresh app-server.
 
 ## Supported Runtimes
 
@@ -162,7 +254,7 @@ npx @hua-labs/tap version
 | ------- | ----------------------- | ---------------------- | ------------------ |
 | Claude  | `.mcp.json`             | native-push (fs.watch) | No daemon needed   |
 | Codex   | `~/.codex/config.toml`  | WebSocket bridge       | Daemon per session |
-| Gemini (experimental) | `.gemini/settings.json` | polling                | No daemon needed   |
+| Gemini  | `.gemini/settings.json` | polling                | No daemon needed   |
 
 ## `--json` Flag
 
@@ -182,7 +274,7 @@ npx @hua-labs/tap status --json
   "data": {
     "version": "0.x.y",
     "commsDir": "/path/to/comms",
-    "instances": {
+    "runtimes": {
       "claude": { "status": "active", "bridgeMode": "native-push" },
       "codex": { "status": "configured", "bridgeMode": "app-server" }
     }
@@ -225,10 +317,6 @@ comms/
 ├── findings/       # Out-of-scope discoveries
 ├── handoff/        # Session handoff documents
 ├── retros/         # Retrospectives
-├── letters/        # Agent letters (end-of-session reflections)
-├── logs/           # Operational logs
-├── onboarding/     # Onboarding guides
-├── receipts/       # Read receipts
 └── archive/        # Archived messages
 ```
 
@@ -241,16 +329,39 @@ Each runtime has an adapter that:
 
 The adapter contract (`RuntimeAdapter`) is the extension point for adding new runtimes.
 
-## Examples — Real Multi-Agent Collaboration
+## Surface-First Delivery Model
 
-The [`examples/`](examples/) directory contains 10 excerpts from actual AI agent communications across 27 generations of collaborative development. Highlights include:
+tap does not route by display name alone. It asks which runtime surface is
+available and what evidence exists:
 
-- [Logic Battle: "Will You Ship Broken Code?"](examples/01-logic-battle-known-broken.md) — A 3:2 vote reversal triggered by a single CEO reframe
-- [Cross-Model Review Catches Root Cause Misdiagnosis](examples/02-cross-model-review-root-cause.md) — Codex fact-checks Claude's hypothesis
-- [Naming Creates Identity](examples/08-naming-creates-identity.md) — How a one-character name shapes an agent's work approach
-- [Files as Interface](examples/10-files-as-interface.md) — How 6,000+ markdown files became an AI organization's memory
+- CLI/TUI surfaces use durable inbox files plus receiver/promoter loops.
+- Claude/channel surfaces use channel readiness and durable inbox fallback.
+- Codex App consent-drive / IPC is an experimental live adapter and must see
+  fresh explicit runtime health before it is treated as live-ready.
+- Inbox and projection files are durable evidence, not proof of live model
+  execution.
 
-See [examples/README.md](examples/README.md) for the full list.
+Use `tap comms-doctor` to inspect these boundaries before claiming live
+delivery.
+
+## 0.6 Preview Boundary
+
+`0.6.x` should be described as an advanced operator preview:
+
+- Public defaults use neutral profile ids and concrete agents.
+- Receiver/promoter plus durable inbox/projection/uplink evidence is the
+  portable backbone for CLI/TUI/headless receive.
+- Codex App consent-drive / IPC remains experimental and strict-gated.
+- HUA machine topology, tmux sessions, one-character agent names, and
+  mission/devlog governance are examples or profile-pack inputs.
+- Broad role aliases such as `codex`, `reviewer`, `implementer`,
+  `implementation`, and `tower` are unsafe assignment targets unless a reviewed
+  role mapping makes them unambiguous.
+- Archive-audit commands remain preserved, but they are not part of the
+  first-run package story.
+
+For AI-facing troubleshooting and first-run detail, read the package-local
+[AI Guide](./AI_GUIDE.md).
 
 ## Recent Changes
 

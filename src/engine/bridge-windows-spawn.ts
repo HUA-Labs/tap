@@ -92,6 +92,28 @@ export function buildWindowsDetachedWrapperScript(
   return `${lines.join("\r\n")}\r\n`;
 }
 
+interface StderrLogPathFileOps {
+  mkdirSync: typeof fs.mkdirSync;
+  openSync: typeof fs.openSync;
+  closeSync: typeof fs.closeSync;
+}
+
+export function resolveWritableStderrLogPath(
+  logPath: string,
+  fileOps: StderrLogPathFileOps = fs,
+): string {
+  const defaultPath = stderrLogFilePath(logPath);
+  fileOps.mkdirSync(path.dirname(defaultPath), { recursive: true });
+
+  try {
+    const fd = fileOps.openSync(defaultPath, "a");
+    fileOps.closeSync(fd);
+    return defaultPath;
+  } catch {
+    return `${defaultPath}.${process.pid}.${randomBytes(4).toString("hex")}`;
+  }
+}
+
 /**
  * Start a background process on Windows without creating a visible console window.
  *
@@ -116,7 +138,7 @@ export function startWindowsDetachedProcess(
   logPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): number | null {
-  const stderrLogPath = stderrLogFilePath(logPath);
+  const stderrLogPath = resolveWritableStderrLogPath(logPath);
   const powerShellCommand = resolvePowerShellCommand();
 
   cleanupStaleWindowsSpawnWrappers();
@@ -175,11 +197,18 @@ export function startWindowsCodexAppServer(
   repoRoot: string,
   logPath: string,
   env: NodeJS.ProcessEnv = process.env,
+  unsandboxed = false,
 ): number | null {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startWindowsDetachedProcess(
     exe,
-    [...prefixArgs, "app-server", "--listen", url],
+    [
+      ...prefixArgs,
+      ...(unsandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
+      "app-server",
+      "--listen",
+      url,
+    ],
     repoRoot,
     logPath,
     env,

@@ -1,7 +1,9 @@
 // bridge-dispatch.ts — Dispatch orchestration + heartbeat
 
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   renameSync,
   statSync,
@@ -10,32 +12,349 @@ import {
 } from "fs";
 import { join } from "path";
 import {
-  BridgeHealthState,
-  Candidate,
+  type BridgeRoutingSlot,
+  type BridgeHealthState,
+  type Candidate,
   COMMS_HEARTBEAT_LOCK_TIMEOUT_MS,
   COMMS_LOCK_STALE_AGE_MS,
-  HeadlessWarmupClient,
-  HeartbeatRecord,
-  HeartbeatStore,
+  type HeadlessWarmupClient,
+  type HeartbeatAddressRecord,
+  type HeartbeatRecord,
+  type HeartbeatStoreRecord,
+  type HeartbeatStore,
   HEADLESS_WARMUP_PROMPT,
   HEADLESS_WARMUP_TIMEOUT_MS,
-  Options,
-  ThreadStateRecord,
+  type Options,
+  type ThreadStateRecord,
   TURN_COMPLETION_POLL_MS,
   TURN_COMPLETION_REFRESH_MS,
-} from "./bridge-types.js";
-import { createBridgeLogger } from "./bridge-logging.js";
-import { shouldRetrySteerAsStart } from "./bridge-routing.js";
-import { getPendingCandidates } from "./bridge-candidates.js";
+} from "./bridge-types.ts";
+import { createBridgeLogger } from "./bridge-logging.ts";
+import {
+  isWaitingApprovalStatus,
+  normalizePersistedThreadCwd,
+  shouldRetrySteerAsStart,
+} from "./bridge-routing.ts";
+import { getPendingCandidates } from "./bridge-candidates.ts";
 import {
   buildUserInput,
   writeLastDispatch,
   writeProcessedMarker,
-} from "./bridge-format.js";
-import { AppServerClient } from "./bridge-ws-client.js";
+} from "./bridge-format.ts";
+import { AppServerClient } from "./bridge-ws-client.ts";
+import { ExperimentalCodexIpcControlTransport } from "../../src/transport/experimental/codex-ipc-control.ts";
+import { writeConsentLedgerEvent } from "../../src/transport/consent-ledger.ts";
 
 const dispatchLogger = createBridgeLogger("dispatch");
 const heartbeatLogger = createBridgeLogger("heartbeat");
+// Keep reservation ownership scoped to the current bridge process lifetime.
+const DRIVE_DISPATCH_RESERVATION_OWNER_ID = randomUUID();
+export const DRIVE_NOT_YET_WIRED_REASON =
+  "missing pairToken / drive not yet wired (M345 Phase 2 / M355 pending)";
+export const DRIVE_ACTION_NOT_YET_SUPPORTED_REASON =
+  "drive action is not yet wired through bridge dispatch";
+
+interface DriveDispatchTransport {
+  connect(): Promise<unknown>;
+  disconnect(): Promise<void>;
+  startTurn(options: {
+    conversationId: string;
+    text: string;
+    action?: string | null;
+    consentRef?: string | null;
+    hostId?: string | null;
+    ownerClientId?: string | null;
+  }): Promise<unknown>;
+}
+
+type DriveDispatchTransportFactory = (
+  options: Options,
+) => DriveDispatchTransport;
+
+const DRIVE_START_TURN_ACTIONS = new Set([
+  "start-turn",
+  "thread-follower-start-turn",
+]);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function extractDriveTurnId(result: unknown): string | null {
+  const response = asRecord(result);
+  const payload = asRecord(response?.response);
+  const body = asRecord(payload?.result);
+  const nestedResult = asRecord(body?.result);
+  const turn = asRecord(body?.turn) ?? asRecord(nestedResult?.turn);
+  const turnId = turn?.id;
+  return typeof turnId === "string" && turnId.trim() ? turnId.trim() : null;
+}
+
+function shouldTraceIpc(): boolean {
+  const value = process.env.TAP_IPC_TRACE?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function logIpcTrace(message: string, context?: Record<string, unknown>): void {
+  if (!shouldTraceIpc()) {
+    return;
+  }
+  dispatchLogger.info(`[ipc-trace] ${message}`, context);
+}
+
+function createDriveDispatchTransport(
+  options: Options,
+): DriveDispatchTransport {
+  return new ExperimentalCodexIpcControlTransport({
+    commsDir: options.commsDir,
+    hostId: resolveBridgeHostId(options),
+    clientType: "tap-bridge-dispatch",
+    reservationOwnerId: DRIVE_DISPATCH_RESERVATION_OWNER_ID,
+  });
+}
+
+function buildInvalidDriveEnvelopeReason(reason: string): string {
+  return `invalid drive envelope: ${reason}`;
+}
+
+function normalizeDriveStartTurnAction(
+  action: string | null | undefined,
+): string | null {
+  const normalized = action?.trim() || null;
+  if (!normalized) return null;
+  return DRIVE_START_TURN_ACTIONS.has(normalized)
+    ? "thread-follower-start-turn"
+    : null;
+}
+
+function rejectDriveEnvelope(
+  options: Options,
+  candidate: Candidate,
+  threadId: string | null,
+  reason: string,
+): boolean {
+  writeProcessedMarker(
+    options.stateDir,
+    candidate,
+    "rejected",
+    threadId,
+    null,
+    reason,
+  );
+  writeLastDispatch(
+    options.stateDir,
+    candidate,
+    "rejected",
+    threadId,
+    null,
+    reason,
+  );
+  writeConsentLedgerEvent({
+    commsDir: options.commsDir,
+    event: "rejected",
+    grantId: candidate.consentRef?.trim() || null,
+    scope: "drive",
+    method: candidate.action ?? null,
+    hostId: candidate.toAddress?.hostId ?? null,
+    conversationId: candidate.toAddress?.conversationId ?? threadId,
+    recordedAt: new Date().toISOString(),
+    result: reason,
+    requester: candidate.fromAddress ?? null,
+    owner: candidate.toAddress ?? null,
+  });
+  dispatchLogger.warn("rejected malformed drive envelope", {
+    fileName: candidate.fileName,
+    messageId: candidate.messageId ?? null,
+    conversationId: candidate.toAddress?.conversationId ?? null,
+    action: candidate.action ?? null,
+    consentRef: candidate.consentRef ?? null,
+    reason,
+  });
+  return true;
+}
+
+function blockDriveEnvelope(
+  options: Options,
+  candidate: Candidate,
+  threadId: string | null,
+  reason: string,
+): boolean {
+  writeLastDispatch(
+    options.stateDir,
+    candidate,
+    "blocked",
+    threadId,
+    null,
+    reason,
+  );
+  writeConsentLedgerEvent({
+    commsDir: options.commsDir,
+    event: "rejected",
+    grantId: candidate.consentRef?.trim() || null,
+    scope: "drive",
+    method: candidate.action ?? null,
+    hostId: candidate.toAddress?.hostId ?? null,
+    conversationId: candidate.toAddress?.conversationId ?? threadId,
+    recordedAt: new Date().toISOString(),
+    result: reason,
+    requester: candidate.fromAddress ?? null,
+    owner: candidate.toAddress ?? null,
+  });
+  dispatchLogger.warn("blocked drive envelope", {
+    fileName: candidate.fileName,
+    messageId: candidate.messageId ?? null,
+    subject: candidate.subject || "(none)",
+    conversationId: candidate.toAddress?.conversationId ?? null,
+    action: candidate.action ?? null,
+    consentRef: candidate.consentRef ?? null,
+    reason,
+  });
+  return false;
+}
+
+async function dispatchDriveEnvelope(
+  options: Options,
+  candidate: Candidate,
+  driveTransportFactory: DriveDispatchTransportFactory,
+): Promise<boolean> {
+  const conversationId = candidate.toAddress?.conversationId?.trim() || null;
+  if (!conversationId) {
+    return rejectDriveEnvelope(
+      options,
+      candidate,
+      null,
+      buildInvalidDriveEnvelopeReason(
+        "drive scope requires target conversationId metadata.",
+      ),
+    );
+  }
+
+  const consentRef = candidate.consentRef?.trim() || null;
+  if (!consentRef) {
+    return rejectDriveEnvelope(
+      options,
+      candidate,
+      conversationId,
+      buildInvalidDriveEnvelopeReason(
+        "drive scope requires a non-empty consentRef.",
+      ),
+    );
+  }
+
+  const method = normalizeDriveStartTurnAction(candidate.action);
+  if (!method) {
+    const action = candidate.action?.trim() || "(missing)";
+    return blockDriveEnvelope(
+      options,
+      candidate,
+      conversationId,
+      `${DRIVE_ACTION_NOT_YET_SUPPORTED_REASON}: ${action}`,
+    );
+  }
+
+  const text = candidate.body.trim();
+  if (!text) {
+    return rejectDriveEnvelope(
+      options,
+      candidate,
+      conversationId,
+      buildInvalidDriveEnvelopeReason(
+        `${method} requires a non-empty message body.`,
+      ),
+    );
+  }
+
+  const transport = driveTransportFactory(options);
+  const targetHostId = candidate.toAddress?.hostId?.trim() || null;
+  const targetOwnerClientId =
+    candidate.toAddress?.ownerClientId?.trim() ||
+    candidate.toAddress?.clientId?.trim() ||
+    null;
+  logIpcTrace("drive envelope prepared", {
+    fileName: candidate.fileName,
+    conversationId,
+    action: candidate.action ?? null,
+    consentRef,
+    targetHostId,
+    targetOwnerClientId,
+  });
+  try {
+    logIpcTrace("transport connect start", {
+      fileName: candidate.fileName,
+      conversationId,
+    });
+    await transport.connect();
+    logIpcTrace("transport connect success", {
+      fileName: candidate.fileName,
+      conversationId,
+    });
+    logIpcTrace("transport startTurn start", {
+      fileName: candidate.fileName,
+      conversationId,
+      textLength: text.length,
+    });
+    const result = await transport.startTurn({
+      conversationId,
+      text,
+      action: candidate.action?.trim() || null,
+      consentRef,
+      hostId: targetHostId,
+      ownerClientId: targetOwnerClientId,
+    });
+    const turnId = extractDriveTurnId(result);
+    logIpcTrace("transport startTurn success", {
+      fileName: candidate.fileName,
+      conversationId,
+      turnId,
+      result,
+    });
+    writeProcessedMarker(
+      options.stateDir,
+      candidate,
+      "drive",
+      conversationId,
+      turnId,
+    );
+    writeLastDispatch(
+      options.stateDir,
+      candidate,
+      "drive",
+      conversationId,
+      turnId,
+      null,
+    );
+    markBridgeActivity();
+    dispatchLogger.info("handed drive envelope to control transport", {
+      fileName: candidate.fileName,
+      messageId: candidate.messageId ?? null,
+      conversationId,
+      action: candidate.action ?? null,
+      consentRef,
+      turnId,
+    });
+    return true;
+  } catch (error) {
+    logIpcTrace("transport startTurn error", {
+      fileName: candidate.fileName,
+      conversationId,
+      error:
+        error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+    return blockDriveEnvelope(
+      options,
+      candidate,
+      conversationId,
+      sanitizeErrorForPersistence(
+        error instanceof Error ? (error.stack ?? error.message) : String(error),
+      ) ?? "drive handoff failed",
+    );
+  } finally {
+    await transport.disconnect().catch(() => undefined);
+  }
+}
 
 export function sanitizeErrorForPersistence(
   error: string | null,
@@ -69,6 +388,78 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function resolveBridgeRoutingSlot(agentId: string): BridgeRoutingSlot | null {
+  const normalized = agentId.trim().replace(/-/g, "_").toLowerCase();
+  if (!normalized) return null;
+  if (
+    normalized === "tower" ||
+    normalized === "claude_main" ||
+    normalized === "codex_main"
+  ) {
+    return "tower";
+  }
+  if (
+    normalized === "reviewer" ||
+    normalized === "claude_reviewer" ||
+    normalized === "codex_reviewer"
+  ) {
+    return "reviewer";
+  }
+  const worktreeMatch = normalized.match(/^(?:(?:claude|codex)_)?wt_?(\d+)$/);
+  if (!worktreeMatch) return null;
+  return `wt-${Number.parseInt(worktreeMatch[1], 10)}` as BridgeRoutingSlot;
+}
+
+function resolveBridgeHostId(options: Options): string | null {
+  const explicitHostId = process.env.TAP_HOST_ID?.trim();
+  if (explicitHostId) return explicitHostId;
+
+  const computerName = process.env.COMPUTERNAME?.trim();
+  if (computerName) return computerName;
+
+  const hostName = process.env.HOSTNAME?.trim();
+  if (hostName) return hostName;
+
+  return options.commsDir;
+}
+
+function resolveBridgeAliases(
+  values: Array<string | null | undefined>,
+): string[] {
+  const aliases: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || aliases.includes(normalized)) continue;
+    aliases.push(normalized);
+  }
+  return aliases;
+}
+
+function buildBridgeAddress(
+  options: Options,
+  conversationId: string | null,
+): HeartbeatAddressRecord {
+  // M392: prefer launcher-supplied routing slot so suffixed agent ids
+  // (`codex-wt1-abc123` etc.) still advertise the correct slot. Fall back
+  // to the legacy id-derived slot when the launcher did not pin one.
+  const slot = options.routingSlot ?? resolveBridgeRoutingSlot(options.agentId);
+  const routingAddress = slot ?? options.agentId;
+  return {
+    hostId: resolveBridgeHostId(options),
+    clientId: options.agentId,
+    conversationId,
+    ownerClientId: conversationId ? options.agentId : null,
+    routingAddress,
+    slot,
+    aliases: resolveBridgeAliases([
+      routingAddress,
+      slot,
+      options.agentId,
+      options.agentName,
+    ]),
+  };
+}
+
 export function readThreadState(stateDir: string): ThreadStateRecord | null {
   const threadPath = join(stateDir, "thread.json");
   if (!existsSync(threadPath)) {
@@ -80,7 +471,10 @@ export function readThreadState(stateDir: string): ThreadStateRecord | null {
       readFileSync(threadPath, "utf8"),
     ) as ThreadStateRecord;
     if (parsed.threadId) {
-      return parsed;
+      return {
+        ...parsed,
+        cwd: normalizePersistedThreadCwd(parsed.cwd),
+      };
     }
   } catch {
     return null;
@@ -101,7 +495,7 @@ export function persistThreadState(
     updatedAt: new Date().toISOString(),
     appServerUrl,
     ephemeral,
-    cwd,
+    cwd: normalizePersistedThreadCwd(cwd),
   };
   writeFileSync(
     join(stateDir, "thread.json"),
@@ -150,7 +544,36 @@ export function releaseCommsLock(lockPath: string): void {
   }
 }
 
-export function updateCommsHeartbeat(options: Options, status: string): void {
+function heartbeatStoreKey(record: Record<string, unknown>): string | null {
+  for (const field of ["id", "instanceId", "agent"]) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function normalizeHeartbeatStore(raw: unknown): Record<string, unknown> {
+  if (Array.isArray(raw)) {
+    const normalized: Record<string, unknown> = {};
+    for (const entry of raw) {
+      const record = asRecord(entry);
+      if (!record) continue;
+      const key = heartbeatStoreKey(record);
+      if (key) normalized[key] = record;
+    }
+    return normalized;
+  }
+
+  return asRecord(raw) ?? {};
+}
+
+export function updateCommsHeartbeat(
+  options: Options,
+  status: string,
+  conversationId?: string | null,
+): void {
   const heartbeatsPath = join(options.commsDir, "heartbeats.json");
   const lockPath = join(options.commsDir, ".heartbeats.lock");
 
@@ -161,7 +584,9 @@ export function updateCommsHeartbeat(options: Options, status: string): void {
   try {
     let store: Record<string, unknown> = {};
     try {
-      store = JSON.parse(readFileSync(heartbeatsPath, "utf-8"));
+      store = normalizeHeartbeatStore(
+        JSON.parse(readFileSync(heartbeatsPath, "utf-8")),
+      );
     } catch {
       // Empty or corrupt — start fresh
     }
@@ -169,24 +594,44 @@ export function updateCommsHeartbeat(options: Options, status: string): void {
     // Use agentId as key (SSOT for heartbeat store), not agentName.
     // This matches tap-comms.ts which keys by routing id.
     const key = options.agentId;
-    const existing = store[key] as Record<string, unknown> | undefined;
+    const existing = store[key] as HeartbeatStoreRecord | undefined;
     const now = new Date().toISOString();
+    // M144: timestamp = bridge poll freshness (always now)
+    // lastActivity = actual agent work (dispatch/turn), falls back to existing or now
+    const lastActivity = _lastBridgeActivityAt ?? existing?.lastActivity ?? now;
+    const resolvedConversationId =
+      conversationId ?? readThreadState(options.stateDir)?.threadId ?? null;
     store[key] = {
       id: options.agentId,
       agent: options.agentName,
       timestamp: now,
-      lastActivity: now,
-      joinedAt: (existing?.joinedAt as string) ?? now,
+      lastActivity,
+      joinedAt: existing?.joinedAt ?? now,
       status,
       source: "bridge-dispatch",
       instanceId: options.agentId,
       bridgePid: process.pid,
       connectHash: `instance:${options.agentId}`,
+      receiveTransports: ["consent-drive"],
+      address: buildBridgeAddress(options, resolvedConversationId),
     };
 
     const tmpPath = heartbeatsPath + ".tmp." + process.pid;
     writeFileSync(tmpPath, JSON.stringify(store, null, 2), "utf-8");
     renameSync(tmpPath, heartbeatsPath);
+
+    // M334: Write per-agent presence file for cross-device visibility
+    try {
+      const presenceDir = join(options.commsDir, "presence");
+      mkdirSync(presenceDir, { recursive: true });
+      const sanitizedId = key.replace(/[/\\:]/g, "_");
+      const presPath = join(presenceDir, `${sanitizedId}.json`);
+      const presTmp = presPath + ".tmp." + process.pid;
+      writeFileSync(presTmp, JSON.stringify(store[key], null, 2), "utf-8");
+      renameSync(presTmp, presPath);
+    } catch {
+      // Non-fatal — local heartbeats.json is still primary
+    }
   } catch {
     // Non-critical — comms heartbeat update failure should never crash bridge
   } finally {
@@ -195,6 +640,18 @@ export function updateCommsHeartbeat(options: Options, status: string): void {
 }
 
 let heartbeatCount = 0;
+// M144: Track actual agent activity (dispatch success, turn completion)
+// separately from poll freshness. `timestamp` = bridge alive (every poll),
+// `lastActivity` = real work happened.
+let _lastBridgeActivityAt: string | null = null;
+
+export function markBridgeActivity(): void {
+  _lastBridgeActivityAt = new Date().toISOString();
+}
+
+export function getLastBridgeActivityAt(): string | null {
+  return _lastBridgeActivityAt;
+}
 
 interface PreviousHeartbeatRecord {
   activeTurnId?: string | null;
@@ -241,11 +698,6 @@ function readLastDispatchAt(stateDir: string): string | null {
   }
 }
 
-function isWaitingApprovalStatus(status: string | null | undefined): boolean {
-  if (!status) return false;
-  return /approval|input-required|confirm|consent/i.test(status);
-}
-
 function resolveTurnState(
   client: AppServerClient | null,
 ): "active" | "idle" | "waiting-approval" | "disconnected" | null {
@@ -268,10 +720,15 @@ export function writeHeartbeat(
   const previousHeartbeat = readPreviousHeartbeat(options.stateDir);
   const lastDispatchAt = readLastDispatchAt(options.stateDir);
   const turnState = resolveTurnState(client);
-  const lastTurnAt =
-    previousHeartbeat?.activeTurnId && !client?.activeTurnId
-      ? nowIso
-      : (previousHeartbeat?.lastTurnAt ?? null);
+  // M144: Detect turn completion (was active, now idle) and mark activity
+  const turnJustCompleted =
+    previousHeartbeat?.activeTurnId && !client?.activeTurnId;
+  if (turnJustCompleted) {
+    markBridgeActivity();
+  }
+  const lastTurnAt = turnJustCompleted
+    ? nowIso
+    : (previousHeartbeat?.lastTurnAt ?? null);
   const idleSince =
     turnState === "idle" || turnState === "waiting-approval"
       ? previousHeartbeat?.turnState === turnState &&
@@ -337,7 +794,11 @@ export function writeHeartbeat(
 
   // Also update comms heartbeats.json so tap_who sees this agent
   const status = turnState === "active" ? "active" : "idle";
-  updateCommsHeartbeat(options, status);
+  updateCommsHeartbeat(
+    options,
+    status,
+    payload.threadId ?? readThreadState(options.stateDir)?.threadId ?? null,
+  );
 }
 
 export async function dispatchCandidate(
@@ -345,18 +806,36 @@ export async function dispatchCandidate(
   options: Options,
   candidate: Candidate,
   heartbeats: HeartbeatStore,
+  driveTransportFactory: DriveDispatchTransportFactory = createDriveDispatchTransport,
 ): Promise<boolean> {
-  const input = buildUserInput(candidate, options.agentName, heartbeats);
-
   dispatchLogger.info("dispatching candidate", {
     sender: candidate.sender || "unknown",
     recipient: candidate.recipient || options.agentName,
     subject: candidate.subject || "(none)",
     fileName: candidate.fileName,
+    messageId: candidate.messageId ?? null,
+    scope: candidate.scope ?? null,
+    action: candidate.action ?? null,
+    hasConsentRef: Boolean(candidate.consentRef),
     threadId: client.threadId,
     activeTurnId: client.activeTurnId,
     busyMode: options.busyMode,
   });
+
+  if (candidate.scope === "drive") {
+    return dispatchDriveEnvelope(options, candidate, driveTransportFactory);
+  }
+
+  const input = buildUserInput(candidate, options.agentName, heartbeats);
+
+  if (client.isWaitingOnApproval()) {
+    dispatchLogger.warn("thread waiting on approval; skipping dispatch", {
+      fileName: candidate.fileName,
+      threadId: client.threadId,
+      lastTurnStatus: client.lastTurnStatus,
+    });
+    return false;
+  }
 
   if (client.isBusy()) {
     if (options.busyMode !== "steer") {
@@ -382,7 +861,9 @@ export async function dispatchCandidate(
         "steer",
         client.threadId,
         turnId,
+        null,
       );
+      markBridgeActivity(); // M144: steer dispatch = real activity
       dispatchLogger.info("steered active turn", {
         fileName: candidate.fileName,
         threadId: client.threadId,
@@ -393,7 +874,13 @@ export async function dispatchCandidate(
       await client.refreshCurrentThreadState().catch(() => undefined);
 
       if (!client.isBusy()) {
-        return dispatchCandidate(client, options, candidate, heartbeats);
+        return dispatchCandidate(
+          client,
+          options,
+          candidate,
+          heartbeats,
+          driveTransportFactory,
+        );
       }
 
       if (shouldRetrySteerAsStart(error)) {
@@ -404,7 +891,13 @@ export async function dispatchCandidate(
           threadId: client.threadId,
           error: sanitizeErrorForPersistence(String(error)),
         });
-        return dispatchCandidate(client, options, candidate, heartbeats);
+        return dispatchCandidate(
+          client,
+          options,
+          candidate,
+          heartbeats,
+          driveTransportFactory,
+        );
       }
 
       throw error;
@@ -425,7 +918,9 @@ export async function dispatchCandidate(
     "start",
     client.threadId,
     turnId,
+    null,
   );
+  markBridgeActivity(); // M144: start dispatch = real activity
   dispatchLogger.info("started turn for candidate", {
     fileName: candidate.fileName,
     threadId: client.threadId,
@@ -468,7 +963,7 @@ export async function runScan(
       candidate,
       heartbeats,
     );
-    if (!dispatched && options.busyMode === "wait") {
+    if (!dispatched) {
       return { dispatched: false, maxMtimeMs };
     }
     maxMtimeMs = Math.max(maxMtimeMs, candidate.mtimeMs);
@@ -487,6 +982,7 @@ export async function waitForTurnDrain(
   while (Date.now() < deadline) {
     writeHeartbeat(options, client, health);
     if (!client.activeTurnId) {
+      markBridgeActivity(); // M144: turn completed = real activity
       return;
     }
     await delay(1_000);
@@ -590,6 +1086,7 @@ export async function maybeBootstrapHeadlessTurn(
     throw new Error(
       `Headless cold-start warmup failed: ${reason}. ` +
         "Run: npx @hua-labs/tap doctor",
+      { cause: error },
     );
   }
 }

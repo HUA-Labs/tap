@@ -12,19 +12,21 @@ Usage:
   tap bridge <subcommand> [instance] [options]
 
 Subcommands:
-  start <instance>  Start bridge for an instance (e.g. codex, codex-reviewer)
+  start <instance>  Start bridge for an instance (e.g. codex, codex-agent-c)
   start --all       Start all registered app-server instances
   stop  <instance>  Stop bridge for an instance
   stop              Stop all running bridges
   status            Show bridge status for all instances
   status <instance> Show bridge status for a specific instance
-  tui <instance>    Show the safe Codex TUI attach command for a running bridge
+  tui <instance>    Show the safe Codex TUI attach command with preserved tap context
   watch             Monitor bridges and auto-restart stuck/stale ones
 
 Options:
   --agent-name <name>              Agent identity for bridge (or set TAP_AGENT_NAME env)
                                    Overrides the stored name from 'tap add' when needed
   --all                            Start all registered app-server instances
+  --keep-server                    Leave the managed app-server running when bridge stops
+  --bridge-only                    Alias for --keep-server
   --busy-mode <steer|wait>         How to handle active turns (default: steer)
   --poll-seconds <n>               Inbox poll interval (default: 5)
   --reconnect-seconds <n>          Reconnect delay after disconnect (default: 5)
@@ -32,8 +34,16 @@ Options:
   --thread-id <id>                 Resume specific thread
   --ephemeral                      Use ephemeral thread (no persistence)
   --process-existing-messages      Process all existing inbox messages
+  --drain-timeout <seconds>        Restart: wait this long for active turn drain (default: 30)
+  --force                          Restart: continue after drain timeout instead of aborting
   --no-server                      Skip app-server auto-start and connect only
   --no-auth                        Skip auth gateway (app-server listens directly, localhost only)
+  --unsandboxed                    Launch managed Codex app-server with sandbox bypass
+  --instance-id-suffix [<id>]      M392: append per-session suffix to TAP_INSTANCE_ID for the
+                                   bridge daemon. Bare flag auto-generates 6 hex chars; pass an
+                                   explicit value (4-16 [a-z0-9]) to pin one. Env: TAP_INSTANCE_ID_AUTO_SUFFIX=1
+  --routing-slot <slot>            M392: explicit TAP_ROUTING_SLOT for reviewed deployments
+                                   into bridge env. Auto-derived from base instance id when --instance-id-suffix is set
 
 Port Assignment:
   Ports are auto-assigned from 4501 on first bridge start if not set via --port
@@ -43,8 +53,10 @@ Examples:
   npx @hua-labs/tap bridge start codex --agent-name myAgent
   npx @hua-labs/tap bridge start --all
   npx @hua-labs/tap bridge start codex --agent-name myAgent --no-server
-  npx @hua-labs/tap bridge start codex-reviewer --agent-name reviewer --busy-mode steer
-  npx @hua-labs/tap bridge stop codex
+  npx @hua-labs/tap bridge start codex-agent-c --agent-name agent-c --busy-mode steer
+  npx @hua-labs/tap bridge stop codex --keep-server
+  npx @hua-labs/tap bridge restart codex
+  npx @hua-labs/tap bridge restart codex --drain-timeout 10 --force
   npx @hua-labs/tap bridge stop
   npx @hua-labs/tap bridge status
   npx @hua-labs/tap bridge tui codex
@@ -103,9 +115,9 @@ export async function bridgeCommand(args: string[]): Promise<CommandResult> {
 
     case "stop": {
       if (!identifierArg) {
-        return bridgeStopAll();
+        return bridgeStopAll(flags);
       }
-      return bridgeStopOne(identifierArg);
+      return bridgeStopOne(identifierArg, flags);
     }
 
     case "status": {

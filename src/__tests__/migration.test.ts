@@ -3,6 +3,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { loadState, migrateStateV1toV2 } from "../state.js";
+import {
+  createInstanceConfig,
+  loadInstanceConfig,
+  saveInstanceConfig,
+} from "../config/instance-config.js";
 import type { TapStateV1 } from "../types.js";
 
 let tmpDir: string;
@@ -66,7 +71,7 @@ describe("migrateStateV1toV2", () => {
     const codex = v2.instances["codex"];
     expect(codex.instanceId).toBe("codex");
     expect(codex.runtime).toBe("codex");
-    expect(codex.agentName).toBeNull();
+    expect(codex.defaultAgentName).toBeNull();
     expect(codex.port).toBeNull();
     expect(codex.installed).toBe(true);
     expect(codex.bridgeMode).toBe("app-server");
@@ -205,6 +210,161 @@ describe("loadState auto-migration", () => {
     // v3 fields added
     expect(loaded!.instances["codex-reviewer"].configHash).toBe("");
     expect(loaded!.instances["codex-reviewer"].configSourceFile).toBe("");
+  });
+
+  it("reconciles stale comms metadata in state and instance config", () => {
+    const currentCommsDir = path.join(tmpDir, "hua-comms");
+    fs.writeFileSync(
+      path.join(tmpDir, "tap-config.json"),
+      JSON.stringify({ commsDir: currentCommsDir }, null, 2),
+      "utf-8",
+    );
+
+    const stateDir = path.join(tmpDir, ".tap-comms");
+    const staleState = {
+      schemaVersion: 3,
+      createdAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-24T00:00:00.000Z",
+      commsDir: path.join(tmpDir, "old-comms"),
+      repoRoot: path.join(tmpDir, "old-repo"),
+      packageVersion: "0.5.2",
+      instances: {
+        codex: {
+          instanceId: "codex",
+          runtime: "codex",
+          agentName: "결",
+          port: 4501,
+          installed: true,
+          configPath: path.join(tmpDir, ".codex", "config.toml"),
+          bridgeMode: "app-server",
+          restartRequired: false,
+          ownedArtifacts: [],
+          backupPath: "",
+          lastAppliedHash: "",
+          lastVerifiedAt: null,
+          bridge: null,
+          headless: null,
+          configHash: "",
+          configSourceFile: "",
+          warnings: [],
+        },
+      },
+    };
+
+    fs.writeFileSync(
+      path.join(stateDir, "state.json"),
+      JSON.stringify(staleState, null, 2),
+      "utf-8",
+    );
+
+    const instConfig = createInstanceConfig({
+      instanceId: "codex",
+      runtime: "codex",
+      defaultAgentName: "결",
+      port: 4501,
+      appServerUrl: "ws://127.0.0.1:4501",
+      commsDir: path.join(tmpDir, "old-comms"),
+      stateDir: path.join(tmpDir, ".tap-comms-old"),
+      repoRoot: path.join(tmpDir, "old-repo"),
+    });
+    saveInstanceConfig(stateDir, instConfig);
+
+    const loaded = loadState(tmpDir);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded!.commsDir).toBe(currentCommsDir);
+    expect(loaded!.repoRoot).toBe(tmpDir);
+
+    const syncedConfig = loadInstanceConfig(stateDir, "codex");
+    expect(syncedConfig).not.toBeNull();
+    expect(syncedConfig!.commsDir).toBe(currentCommsDir);
+    expect(syncedConfig!.stateDir).toBe(stateDir);
+    expect(syncedConfig!.mcpEnv.TAP_COMMS_DIR).toBe(currentCommsDir);
+    expect(syncedConfig!.mcpEnv.TAP_STATE_DIR).toBe(stateDir);
+    expect(syncedConfig!.mcpEnv.TAP_REPO_ROOT).toBe(tmpDir);
+    expect(loaded!.instances.codex.configHash).toBe(syncedConfig!.configHash);
+  });
+
+  it("reconciles stale configSourceFile paths to the current stateDir", () => {
+    const currentCommsDir = path.join(tmpDir, "hua-comms");
+    fs.writeFileSync(
+      path.join(tmpDir, "tap-config.json"),
+      JSON.stringify({ commsDir: currentCommsDir }, null, 2),
+      "utf-8",
+    );
+
+    const stateDir = path.join(tmpDir, ".tap-comms");
+    const expectedConfigSourceFile = path.join(
+      stateDir,
+      "instances",
+      "codex.json",
+    );
+    const instConfig = createInstanceConfig({
+      instanceId: "codex",
+      runtime: "codex",
+      defaultAgentName: "결",
+      port: 4501,
+      appServerUrl: "ws://127.0.0.1:4501",
+      commsDir: currentCommsDir,
+      stateDir,
+      repoRoot: tmpDir,
+    });
+    saveInstanceConfig(stateDir, instConfig);
+
+    const staleState = {
+      schemaVersion: 3,
+      createdAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-24T00:00:00.000Z",
+      commsDir: currentCommsDir,
+      repoRoot: tmpDir,
+      packageVersion: "0.5.2",
+      instances: {
+        codex: {
+          instanceId: "codex",
+          runtime: "codex",
+          agentName: "결",
+          port: 4501,
+          installed: true,
+          configPath: path.join(tmpDir, ".codex", "config.toml"),
+          bridgeMode: "app-server",
+          restartRequired: false,
+          ownedArtifacts: [],
+          backupPath: "",
+          lastAppliedHash: "",
+          lastVerifiedAt: null,
+          bridge: null,
+          headless: null,
+          configHash: instConfig.configHash,
+          configSourceFile: path.join(
+            tmpDir,
+            ".tap-comms-old",
+            "instances",
+            "codex.json",
+          ),
+          warnings: [],
+        },
+      },
+    };
+
+    fs.writeFileSync(
+      path.join(stateDir, "state.json"),
+      JSON.stringify(staleState, null, 2),
+      "utf-8",
+    );
+
+    const loaded = loadState(tmpDir);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded!.instances.codex.configSourceFile).toBe(
+      expectedConfigSourceFile,
+    );
+
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "state.json"), "utf-8"),
+    );
+    expect(persisted.instances.codex.configSourceFile).toBe(
+      expectedConfigSourceFile,
+    );
   });
 });
 

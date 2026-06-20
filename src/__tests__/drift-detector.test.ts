@@ -42,7 +42,7 @@ function makeState(
     full.instances[id] = {
       instanceId: id,
       runtime: "codex",
-      agentName: null,
+      defaultAgentName: null,
       port: null,
       installed: true,
       configPath: "",
@@ -89,8 +89,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -101,7 +100,7 @@ describe("checkInstanceDrift", () => {
 
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         port: 4501,
         configHash: config.configHash,
       },
@@ -112,12 +111,11 @@ describe("checkInstanceDrift", () => {
     expect(result.checks.every((c) => c.status === "ok")).toBe(true);
   });
 
-  it("detects agentName drift between instance config and state", () => {
+  it("detects defaultAgentName drift between instance config and state", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "돌",
-      agentId: null,
+      defaultAgentName: "돌",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -127,7 +125,7 @@ describe("checkInstanceDrift", () => {
     saveInstanceConfig(stateDir, config);
 
     const state = makeState({
-      codex: { agentName: "솔", port: 4501 },
+      codex: { defaultAgentName: "솔", port: 4501 },
     });
 
     const result = checkInstanceDrift(stateDir, "codex", state);
@@ -136,7 +134,7 @@ describe("checkInstanceDrift", () => {
       (c) => c.name === "state consistency",
     );
     expect(stateCheck?.status).toBe("drifted");
-    expect(stateCheck?.details).toContain("agentName");
+    expect(stateCheck?.details).toContain("defaultAgentName");
     expect(stateCheck?.autoFixable).toBe(true);
   });
 
@@ -144,8 +142,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4502,
       appServerUrl: "ws://127.0.0.1:4502",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -155,7 +152,7 @@ describe("checkInstanceDrift", () => {
     saveInstanceConfig(stateDir, config);
 
     const state = makeState({
-      codex: { agentName: "솔", port: 4501 },
+      codex: { defaultAgentName: "솔", port: 4501 },
     });
 
     const result = checkInstanceDrift(stateDir, "codex", state);
@@ -166,7 +163,7 @@ describe("checkInstanceDrift", () => {
 
   it("skips missing instance config for pre-M214 instances (no configSourceFile)", () => {
     const state = makeState({
-      codex: { agentName: "솔", installed: true },
+      codex: { defaultAgentName: "솔", installed: true },
     });
 
     const result = checkInstanceDrift(stateDir, "codex", state);
@@ -176,7 +173,7 @@ describe("checkInstanceDrift", () => {
   it("detects missing instance config for M214+ installed instance", () => {
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         installed: true,
         configSourceFile: "/some/path.json",
       },
@@ -195,8 +192,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -207,7 +203,7 @@ describe("checkInstanceDrift", () => {
 
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         port: 4501,
         configHash: "", // empty = not baselined (v2→v3 migration)
       },
@@ -228,8 +224,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -242,7 +237,7 @@ describe("checkInstanceDrift", () => {
 
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         port: 4501,
         configHash: config.configHash,
         configPath: configTomlPath,
@@ -262,8 +257,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -275,7 +269,7 @@ describe("checkInstanceDrift", () => {
 
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         port: 4501,
         configHash: config.configHash,
         configPath: configTomlPath,
@@ -295,8 +289,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex-orphan",
       runtime: "codex",
-      agentName: null,
-      agentId: null,
+      defaultAgentName: null,
       port: null,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: "/comms",
@@ -315,8 +308,7 @@ describe("checkInstanceDrift", () => {
     const config = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -327,7 +319,7 @@ describe("checkInstanceDrift", () => {
 
     const state = makeState({
       codex: {
-        agentName: "솔",
+        defaultAgentName: "솔",
         port: 4501,
         configHash: "stale0000", // different from actual
       },
@@ -345,8 +337,7 @@ describe("checkAllDrift", () => {
     const c1 = createInstanceConfig({
       instanceId: "codex",
       runtime: "codex",
-      agentName: "솔",
-      agentId: null,
+      defaultAgentName: "솔",
       port: 4501,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: "/comms",
@@ -356,8 +347,7 @@ describe("checkAllDrift", () => {
     const c2 = createInstanceConfig({
       instanceId: "codex-orphan",
       runtime: "codex",
-      agentName: null,
-      agentId: null,
+      defaultAgentName: null,
       port: null,
       appServerUrl: "ws://127.0.0.1:4501",
       commsDir: "/comms",
@@ -368,7 +358,7 @@ describe("checkAllDrift", () => {
     saveInstanceConfig(stateDir, c2);
 
     const state = makeState({
-      codex: { agentName: "솔", port: 4501, configHash: c1.configHash },
+      codex: { defaultAgentName: "솔", port: 4501, configHash: c1.configHash },
     });
 
     const results = checkAllDrift(stateDir, state);

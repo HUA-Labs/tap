@@ -1,6 +1,6 @@
 {
   "name": "@hua-labs/tap",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Zero-dependency CLI for cross-model AI agent communication setup",
   "bin": {
     "tap": "bin/tap.mjs",
@@ -14,11 +14,29 @@
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./codex-a2a": {
+      "types": "./dist/codex-a2a/index.d.mts",
+      "import": "./dist/codex-a2a/index.mjs",
+      "default": "./dist/codex-a2a/index.mjs"
+    },
+    "./codex-ipc": {
+      "types": "./dist/codex-ipc/index.d.mts",
+      "import": "./dist/codex-ipc/index.mjs",
+      "default": "./dist/codex-ipc/index.mjs"
+    },
+    "./codex-health": {
+      "types": "./dist/codex-health/index.d.mts",
+      "import": "./dist/codex-health/index.mjs",
+      "default": "./dist/codex-health/index.mjs"
     }
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "examples",
+    "AI_GUIDE.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,7 +55,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@types/node": "^24.6.0",
+    "@types/node": "^25.5.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

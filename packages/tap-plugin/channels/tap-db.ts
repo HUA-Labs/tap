@@ -1,6 +1,19 @@
 /**
  * tap-comms optional SQLite cache layer.
- * Falls back gracefully if bun:sqlite is unavailable.
+ * Falls back gracefully if bun:sqlite is unavailable (Node environments).
+ *
+ * ## Role in SSOT Hierarchy (M321)
+ *
+ * SQLite is a **read-only mirror** of the file-based stores, not a source
+ * of truth. The authoritative stores are:
+ * - Agent presence → `heartbeats.json` (via tap-io.ts)
+ * - Messages → inbox/ directory files
+ * - Receipts → receipts.json
+ *
+ * Data flows: file store → `dbSyncAll()` / `dbUpsertHeartbeat()` → SQLite.
+ * SQLite enables efficient queries (tap_stats) but is never read back as
+ * the canonical state. If SQLite is unavailable, the system works fine
+ * with file-only mode.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";

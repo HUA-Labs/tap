@@ -152,7 +152,7 @@ export function getHealthReport(options?: StateApiOptions): HealthReport {
       for (const [id, inst] of Object.entries(state.instances)) {
         if (inst?.installed && inst.bridgeMode === "app-server") {
           activeMatchers.add(id);
-          if (inst.agentName) activeMatchers.add(inst.agentName);
+          if (inst.defaultAgentName) activeMatchers.add(inst.defaultAgentName);
         }
       }
     }

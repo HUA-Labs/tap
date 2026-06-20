@@ -46,6 +46,7 @@ Options:
   --name <name>         Instance name (default: runtime name)
   --port <port>         Port for app-server bridge
   --agent-name <name>   Agent display name for bridge identification
+  --unsandboxed         Launch managed Codex app-server with sandbox bypass
   --force               Re-install even if already configured
   --headless            Enable headless reviewer mode (requires --name)
   --role <role>         Headless role: reviewer, validator, long-running
@@ -53,7 +54,7 @@ Options:
 
 Examples:
   npx @hua-labs/tap add claude
-  npx @hua-labs/tap add codex --name reviewer --port 4501 --headless --role reviewer
+  npx @hua-labs/tap add codex --name agent-c --port 4501 --headless --role reviewer
 `.trim();
 
 function normalizeAgentName(value: string | null | undefined): string | null {
@@ -130,6 +131,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     typeof flags["agent-name"] === "string" ? flags["agent-name"] : null,
   );
   const force = flags["force"] === true;
+  const unsandboxed = flags["unsandboxed"] === true;
   const headlessFlag = flags["headless"] === true;
   const roleArg = typeof flags["role"] === "string" ? flags["role"] : undefined;
 
@@ -157,6 +159,20 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       instanceId,
       code: "TAP_INVALID_ARGUMENT",
       message: "--headless requires --name for instance isolation",
+      warnings: [],
+      data: {},
+    };
+  }
+
+  if (unsandboxed && runtime !== "codex") {
+    return {
+      ok: false,
+      command: "add",
+      runtime,
+      instanceId,
+      code: "TAP_INVALID_ARGUMENT",
+      message:
+        "--unsandboxed is only supported for managed Codex app-server instances",
       warnings: [],
       data: {},
     };
@@ -207,19 +223,21 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   const envAgentName = normalizeAgentName(
     process.env.TAP_AGENT_NAME ?? process.env.CODEX_TAP_AGENT_NAME,
   );
-  const defaultAgentName = mode === "app-server" ? instanceId : null;
+  const defaultAgentName =
+    mode === "app-server" ? (instanceName ?? instanceId) : null;
   const resolvedAgentName = resolveAgentName({
     explicit: agentNameFlag,
     env: envAgentName,
-    stored: existingInstance?.agentName ?? null,
+    stored: existingInstance?.defaultAgentName ?? null,
     fallback: defaultAgentName,
   });
 
   if (existingInstance?.installed && !force) {
-    if (resolvedAgentName !== existingInstance.agentName) {
+    const currentName = existingInstance.defaultAgentName;
+    if (resolvedAgentName !== currentName) {
       const updatedState = updateInstanceState(state, instanceId, {
         ...existingInstance,
-        agentName: resolvedAgentName,
+        defaultAgentName: resolvedAgentName,
       });
       saveState(repoRoot, updatedState);
 
@@ -234,7 +252,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
         const existing = loadInstCfg(cfg.stateDir, instanceId);
         if (existing) {
           const updated = updateInstCfg(existing, {
-            agentName: resolvedAgentName,
+            defaultAgentName: resolvedAgentName,
           });
           saveInstCfg(cfg.stateDir, updated);
         }
@@ -260,6 +278,13 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       };
     }
 
+    const noOpWarnings: string[] = [];
+    const displayName = existingInstance.defaultAgentName;
+    if (!displayName || displayName === instanceId) {
+      noOpWarnings.push(
+        "No agent display name set. Use --agent-name <name> or tap_set_name(<name>) at runtime.",
+      );
+    }
     return {
       ok: true,
       command: "add",
@@ -267,7 +292,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       instanceId,
       code: "TAP_NO_OP",
       message: `${instanceId} is already installed. Use --force to re-install.`,
-      warnings: [],
+      warnings: noOpWarnings,
       data: {},
     };
   }
@@ -293,6 +318,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   if (instanceName) log(`Instance name: ${instanceName}`);
   if (port !== null) log(`Port: ${port}`);
   if (resolvedAgentName) log(`Agent name: ${resolvedAgentName}`);
+  if (unsandboxed) log("App server: unsandboxed");
   const ctx = {
     ...createAdapterContext(state.commsDir, repoRoot),
     instanceId,
@@ -416,16 +442,30 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
       logWarn("Bridge script not found. Bridge not started.");
       warnings.push("Bridge script not found. Run bridge manually.");
     } else {
-      // Auto-assign a free port for managed codex instances without --port
+      // Auto-assign a free port for managed codex instances without --port.
+      // M320: consult portMap[instanceId] as the preferred port; the resolver
+      // falls through to auto-assign if it collides.
       if (effectivePort == null && runtime === "codex") {
         const currentState = loadState(repoRoot) ?? state;
+        const preferredPort = resolvedCfg.portMap[instanceId];
         effectivePort = await findNextAvailableAppServerPort(
           currentState,
           resolvedCfg.appServerUrl,
           4501,
           instanceId,
+          preferredPort,
         );
-        log(`Auto-assigned port ${effectivePort} for ${instanceId}`);
+        if (preferredPort != null && effectivePort === preferredPort) {
+          log(`Using portMap-assigned port ${effectivePort} for ${instanceId}`);
+        } else {
+          if (preferredPort != null) {
+            logWarn(
+              `portMap port ${preferredPort} for ${instanceId} was unavailable — auto-assigned ${effectivePort} instead`,
+            );
+          } else {
+            log(`Auto-assigned port ${effectivePort} for ${instanceId}`);
+          }
+        }
       }
       log(`Starting bridge: ${bridgeScript}`);
       try {
@@ -443,6 +483,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
           repoRoot,
           port: effectivePort ?? undefined,
           manageAppServer,
+          appServerUnsandboxed: unsandboxed,
           headless,
         });
         logSuccess(`Bridge started (PID: ${bridge.pid})`);
@@ -476,10 +517,10 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   const instConfig = createInstanceConfig({
     instanceId,
     runtime,
-    agentName: resolvedAgentName,
-    agentId: null,
+    defaultAgentName: resolvedAgentName,
     port: effectivePort,
     appServerUrl: effectiveAppServerUrl,
+    appServerUnsandboxed: unsandboxed,
     commsDir: ctx.commsDir,
     stateDir: ctx.stateDir,
     repoRoot,
@@ -505,7 +546,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
   const instanceState = {
     instanceId,
     runtime,
-    agentName: resolvedAgentName,
+    defaultAgentName: resolvedAgentName,
     port: effectivePort,
     installed: true,
     configPath: probe.configPath ?? "",
@@ -518,6 +559,7 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
     bridge,
     manageAppServer: runtime === "codex",
     noAuth: false,
+    appServerUnsandboxed: runtime === "codex" ? unsandboxed : false,
     headless,
     configHash: instConfig.configHash,
     configSourceFile: instConfigPath,
@@ -530,6 +572,25 @@ export async function addCommand(args: string[]): Promise<CommandResult> {
 
   if (result.restartRequired) {
     logWarn(`Restart ${runtime} to pick up the new configuration.`);
+  }
+
+  // M188: Agent name UX hint for app-server (Codex) instances only,
+  // when no explicit source (flag or env) was provided and the name
+  // fell back to the instanceId default.
+  if (
+    mode === "app-server" &&
+    !agentNameFlag &&
+    !envAgentName &&
+    resolvedAgentName === instanceId
+  ) {
+    log("");
+    logWarn(
+      `No custom agent name resolved. Using instance ID "${instanceId}" as display name.`,
+    );
+    log("Set a custom display name with one of:");
+    log(`  tap add ${runtime} --agent-name <name>   # at install time`);
+    log("  tap_set_name(<name>)                    # at runtime via MCP tool");
+    log("  TAP_AGENT_NAME=<name>                   # via environment variable");
   }
 
   // Claude-specific: real-time notification hint

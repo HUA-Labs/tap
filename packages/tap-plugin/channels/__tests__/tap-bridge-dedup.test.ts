@@ -10,7 +10,7 @@ process.env.TAP_REPO_ROOT = FAKE_REPO_ROOT;
 setTestEnv();
 
 const { INBOX_DIR } = await import("../tap-utils.ts");
-const { startupFiles, readFiles, getUnreadItems } =
+const { startupFiles, readFiles, readFileContentHashes, getUnreadItems } =
   await import("../tap-io.ts");
 
 function writeBridgeProcessedMarker(
@@ -35,6 +35,7 @@ beforeEach(() => {
   resetTestDir();
   startupFiles.clear();
   readFiles.clear();
+  readFileContentHashes.clear();
   mkdirSync(INBOX_DIR, { recursive: true });
   mkdirSync(FAKE_REPO_ROOT, { recursive: true });
 });
@@ -42,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   startupFiles.clear();
   readFiles.clear();
+  readFileContentHashes.clear();
   resetTestDir();
 });
 
@@ -79,7 +81,7 @@ describe("bridge-MCP dedup", () => {
     expect(items[0]?.subject).toBe("new");
   });
 
-  it("discovers late-start bridge dirs after cache TTL", async () => {
+  it("discovers late-start bridge dirs without waiting for cache TTL", () => {
     const msgFile = "20260330-돌-담-late.md";
     const msgPath = join(INBOX_DIR, msgFile);
     writeFileSync(msgPath, "# late bridge", "utf-8");
@@ -95,19 +97,10 @@ describe("bridge-MCP dedup", () => {
     // Simulate bridge starting later and writing a marker
     writeBridgeProcessedMarker("결", msgPath, mtime);
 
-    // Force cache expiry by manipulating internal state
-    // The cache TTL is 30s, but we can't wait that long in a test.
-    // Instead, verify the marker file exists (contract test).
-    const markerId = createHash("sha1")
-      .update(`${msgPath}|${mtime}`)
-      .digest("hex");
-    const markerPath = join(
-      FAKE_REPO_ROOT,
-      ".tmp",
-      "codex-app-server-bridge-결",
-      "processed",
-      `${markerId}.done`,
-    );
-    expect(existsSync(markerPath)).toBe(true);
+    const after = getUnreadItems({
+      sources: ["inbox"],
+      markRead: false,
+    });
+    expect(after).toHaveLength(0);
   });
 });

@@ -37,7 +37,7 @@ const createInstanceConfigMock = vi.fn().mockReturnValue({
   schemaVersion: 1,
   instanceId: "codex",
   runtime: "codex",
-  agentName: null,
+  defaultAgentName: null,
   configHash: "abcd1234",
   mcpEnv: {},
 });
@@ -109,6 +109,7 @@ describe("addCommand", () => {
         stateDir: "D:/repo/.tap-comms",
         runtimeCommand: "node",
         appServerUrl: "ws://127.0.0.1:4501",
+        portMap: {},
       },
       sources: {
         repoRoot: "auto",
@@ -116,6 +117,7 @@ describe("addCommand", () => {
         stateDir: "auto",
         runtimeCommand: "auto",
         appServerUrl: "auto",
+        portMap: "auto",
       },
     });
   });
@@ -158,7 +160,7 @@ describe("addCommand", () => {
     expect(result.message).toContain("tap-comms MCP server entry not found");
   });
 
-  it("defaults codex agent-name to the instance id and auto-starts the bridge", async () => {
+  it("defaults unnamed codex agent-name to the instance id and auto-starts the bridge", async () => {
     const bridgeState = {
       pid: 4321,
       statePath: "D:/repo/.tap-comms/pids/bridge-codex.json",
@@ -223,7 +225,78 @@ describe("addCommand", () => {
       expect.anything(),
       "codex",
       expect.objectContaining({
-        agentName: "codex",
+        defaultAgentName: "codex",
+        bridge: bridgeState,
+      }),
+    );
+  });
+
+  it("defaults named codex app-server agent-name to the concrete instance name", async () => {
+    const bridgeState = {
+      pid: 4322,
+      statePath: "D:/repo/.tap-comms/pids/bridge-codex-agent-a.json",
+      lastHeartbeat: "2026-03-26T00:00:00.000Z",
+    };
+    const adapter: RuntimeAdapter = {
+      runtime: "codex",
+      probe: vi.fn().mockResolvedValue({
+        installed: true,
+        configPath: "C:/Users/test/.codex/config.toml",
+        configExists: true,
+        runtimeCommand: "codex.cmd",
+        version: "0.0.1",
+        canWrite: true,
+        warnings: [],
+        issues: [],
+      }),
+      plan: vi.fn().mockResolvedValue({
+        runtime: "codex",
+        operations: [{ type: "merge", path: "config.toml", key: "tap" }],
+        ownedArtifacts: [],
+        backupDir: "D:/repo/.tap-comms/backups/codex-agent-a",
+        restartRequired: true,
+        conflicts: [],
+        warnings: [],
+      }),
+      apply: vi.fn().mockResolvedValue({
+        success: true,
+        appliedOps: 1,
+        backupCreated: true,
+        lastAppliedHash: "abc123",
+        ownedArtifacts: [],
+        changedFiles: ["C:/Users/test/.codex/config.toml"],
+        restartRequired: true,
+        warnings: [],
+      }),
+      verify: vi.fn().mockResolvedValue({
+        ok: true,
+        checks: [],
+        restartRequired: true,
+        warnings: [],
+      }),
+      bridgeMode: () => "app-server",
+      resolveBridgeScript: vi.fn().mockReturnValue("D:/repo/bridge.mjs"),
+    };
+
+    getAdapterMock.mockReturnValue(adapter);
+    startBridgeMock.mockResolvedValue(bridgeState);
+
+    const result = await addCommand(["codex", "--name", "agent-a"]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_ADD_OK");
+    expect(startBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "codex-agent-a",
+        runtime: "codex",
+        agentName: "agent-a",
+      }),
+    );
+    expect(updateInstanceStateMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "codex-agent-a",
+      expect.objectContaining({
+        defaultAgentName: "agent-a",
         bridge: bridgeState,
       }),
     );
@@ -234,7 +307,7 @@ describe("addCommand", () => {
     state.instances.codex = {
       instanceId: "codex",
       runtime: "codex",
-      agentName: null,
+      defaultAgentName: null,
       port: null,
       installed: true,
       configPath: "C:/Users/test/.codex/config.toml",
@@ -270,7 +343,7 @@ describe("addCommand", () => {
       state,
       "codex",
       expect.objectContaining({
-        agentName: "reviewer",
+        defaultAgentName: "reviewer",
       }),
     );
     expect(saveStateMock).toHaveBeenCalledTimes(1);

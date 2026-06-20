@@ -74,7 +74,8 @@ describe("rotateLog", () => {
 // ─── Heartbeat ─────────────────────────────────────────────────
 
 describe("updateBridgeHeartbeat", () => {
-  it("updates lastHeartbeat timestamp", () => {
+  // M321: updateBridgeHeartbeat is now a no-op — runtime heartbeat.json is SSOT
+  it("is a no-op (M321 — deprecated, runtime heartbeat.json is SSOT)", () => {
     const oldTime = "2026-01-01T00:00:00.000Z";
     const state: BridgeState = {
       pid: process.pid,
@@ -85,34 +86,14 @@ describe("updateBridgeHeartbeat", () => {
 
     updateBridgeHeartbeat(stateDir, "codex");
 
-    const updated = loadBridgeState(stateDir, "codex");
-    expect(updated).not.toBeNull();
-    expect(updated!.lastHeartbeat).not.toBe(oldTime);
-    // Should be a recent timestamp
-    const diff = Date.now() - new Date(updated!.lastHeartbeat).getTime();
-    expect(diff).toBeLessThan(5000);
-  });
-
-  it("does nothing when no PID file exists", () => {
-    expect(() => updateBridgeHeartbeat(stateDir, "codex")).not.toThrow();
-    expect(loadBridgeState(stateDir, "codex")).toBeNull();
-  });
-
-  it("refuses to update heartbeat for non-owning process", () => {
-    const oldTime = "2026-01-01T00:00:00.000Z";
-    const state: BridgeState = {
-      pid: 999999, // different PID — not this process
-      statePath: path.join(stateDir, "pids", "bridge-codex.json"),
-      lastHeartbeat: oldTime,
-    };
-    saveBridgeState(stateDir, "codex", state);
-
-    updateBridgeHeartbeat(stateDir, "codex");
-
-    // Heartbeat should NOT be updated since PID doesn't match
+    // M321: state.lastHeartbeat should be unchanged (no-op)
     const unchanged = loadBridgeState(stateDir, "codex");
     expect(unchanged).not.toBeNull();
     expect(unchanged!.lastHeartbeat).toBe(oldTime);
+  });
+
+  it("does not throw when no PID file exists", () => {
+    expect(() => updateBridgeHeartbeat(stateDir, "codex")).not.toThrow();
   });
 });
 

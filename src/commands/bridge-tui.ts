@@ -121,9 +121,12 @@ export function bridgeTuiOne(identifier: string): CommandResult {
       getBridgeRuntimeStateDir(repoRoot, instanceId),
     TAP_REPO_ROOT: repoRoot,
   };
-  if (typeof inst.agentName === "string" && inst.agentName.trim()) {
-    attachEnv.TAP_AGENT_NAME = inst.agentName;
-    attachEnv.CODEX_TAP_AGENT_NAME = inst.agentName;
+  if (
+    typeof inst.defaultAgentName === "string" &&
+    inst.defaultAgentName.trim()
+  ) {
+    attachEnv.TAP_AGENT_NAME = inst.defaultAgentName;
+    attachEnv.CODEX_TAP_AGENT_NAME = inst.defaultAgentName;
   }
   const attachCommand = formatCodexTuiAttachCommand(
     tuiConnectUrl,

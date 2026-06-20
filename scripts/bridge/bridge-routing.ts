@@ -1,21 +1,24 @@
 // bridge-routing.ts — Agent identity, message routing, frontmatter parsing
 
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, win32 } from "path";
 import {
+  type BridgeRoutingSlot,
+  type CandidateScope,
   DEFAULT_AGENT,
-  HeartbeatStore,
-  InboxRoute,
-  LoadedThreadCandidate,
-  Options,
+  type HeartbeatAddressRecord,
+  type HeartbeatStore,
+  type InboxRoute,
+  type LoadedThreadCandidate,
+  type Options,
   PLACEHOLDER_AGENT_VALUES,
   STALE_TURN_MS,
-} from "./bridge-types.js";
+} from "./bridge-types.ts";
 import {
   canonicalizeAgentId,
   matchesAgentRecipient as sharedMatchesAgentRecipient,
   isOwnMessageAddress as sharedIsOwnMessageAddress,
-} from "../../packages/tap-plugin/channels/tap-identity.js";
+} from "../../packages/tap-plugin/channels/tap-identity.ts";
 
 /**
  * M206: Re-export canonicalizeAgentId as canonicalize for backward compat.
@@ -24,8 +27,43 @@ export function canonicalize(id: string): string {
   return canonicalizeAgentId(id);
 }
 
+const WINDOWS_NAMESPACE_PREFIX = "\\\\?\\";
+const WINDOWS_NAMESPACE_UNC_PREFIX = "\\\\?\\UNC\\";
+
+function looksLikeWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+export function stripWindowsNamespacePrefix(cwd: string): string {
+  const trimmed = cwd.trim();
+  if (trimmed.startsWith(WINDOWS_NAMESPACE_UNC_PREFIX)) {
+    return `\\\\${trimmed.slice(WINDOWS_NAMESPACE_UNC_PREFIX.length)}`;
+  }
+  if (trimmed.startsWith(WINDOWS_NAMESPACE_PREFIX)) {
+    return trimmed.slice(WINDOWS_NAMESPACE_PREFIX.length);
+  }
+  return trimmed;
+}
+
+function resolveThreadCwd(cwd: string): string {
+  const normalized = stripWindowsNamespacePrefix(cwd);
+  return looksLikeWindowsAbsolutePath(normalized)
+    ? win32.resolve(normalized)
+    : resolve(normalized);
+}
+
 export function normalizeThreadCwd(cwd: string): string {
-  return resolve(cwd).replace(/\\/g, "/").toLowerCase();
+  return resolveThreadCwd(cwd).replace(/\\/g, "/").toLowerCase();
+}
+
+export function normalizePersistedThreadCwd(
+  cwd: string | null | undefined,
+): string | null {
+  if (!cwd?.trim()) {
+    return null;
+  }
+
+  return resolveThreadCwd(cwd);
 }
 
 export function threadCwdMatches(
@@ -43,7 +81,7 @@ export function chooseLoadedThreadForCwd(
   cwd: string,
   threads: LoadedThreadCandidate[],
 ): LoadedThreadCandidate | null {
-  const matching = threads.filter((thread) => {
+  const reusable = threads.filter((thread) => {
     if (!threadCwdMatches(cwd, thread.cwd)) {
       return false;
     }
@@ -51,22 +89,45 @@ export function chooseLoadedThreadForCwd(
     // `notLoaded` means the app-server knows about the thread id but the
     // thread is not attached in memory, so treating it as a ready loaded
     // thread can strand headless dispatch after restart/TUI detach.
-    return thread.statusType !== "notLoaded";
+    if (thread.statusType === "notLoaded") {
+      return false;
+    }
+
+    // Do not auto-attach to someone else's active loaded thread just because
+    // it shares the repo cwd. That can create turn-id mismatches across
+    // multiple bridge/TUI clients on the same thread.
+    if (thread.statusType === "active") {
+      return false;
+    }
+
+    const threadActiveFlags: string[] = Array.isArray(
+      thread.thread?.status?.activeFlags,
+    )
+      ? thread.thread.status.activeFlags
+      : [];
+    if (isTurnStuckOnApproval(threadActiveFlags)) {
+      return false;
+    }
+
+    const turns = Array.isArray(thread.thread?.turns)
+      ? thread.thread.turns
+      : [];
+    return !turns.some((turn: Record<string, unknown>) => {
+      const activeFlags: string[] = Array.isArray(turn?.activeFlags)
+        ? turn.activeFlags
+        : [];
+      return (
+        turn?.status === "inProgress" && isTurnStuckOnApproval(activeFlags)
+      );
+    });
   });
-  if (matching.length === 0) {
+  if (reusable.length === 0) {
     return null;
   }
 
-  matching.sort((left, right) => {
-    const leftActive = left.statusType === "active" ? 1 : 0;
-    const rightActive = right.statusType === "active" ? 1 : 0;
-    if (leftActive !== rightActive) {
-      return rightActive - leftActive;
-    }
-    return right.updatedAt - left.updatedAt;
-  });
+  reusable.sort((left, right) => right.updatedAt - left.updatedAt);
 
-  return matching[0] ?? null;
+  return reusable[0] ?? null;
 }
 
 export function normalizeAgentToken(value?: string | null): string | null {
@@ -225,6 +286,16 @@ export function isTurnStuckOnApproval(activeFlags: string[]): boolean {
   return activeFlags.includes("waitingOnApproval");
 }
 
+export function isWaitingApprovalStatus(
+  status: string | null | undefined,
+): boolean {
+  if (!status) {
+    return false;
+  }
+
+  return /approval|input-required|confirm|consent/i.test(status);
+}
+
 /**
  * M203: Check if a turn has been running longer than the stale threshold.
  */
@@ -250,13 +321,122 @@ export function shouldRetrySteerAsStart(error: unknown): boolean {
   );
 }
 
+export const FORBIDDEN_RAW_PAIR_TOKEN_REASON =
+  "envelope rejected: forbidden raw pairToken field present (M355 defensive drop)";
+
+function normalizeFrontmatterValue(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function parseJsonObject(
+  value: string | undefined,
+): Record<string, unknown> | null {
+  const normalized = normalizeFrontmatterValue(value);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function parseFrontmatterScope(
+  value: string | undefined,
+): CandidateScope | null {
+  const normalized = normalizeFrontmatterValue(value);
+  if (
+    normalized === "observe" ||
+    normalized === "suggest" ||
+    normalized === "drive"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseFrontmatterAliases(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const aliases: string[] = [];
+  for (const candidate of value) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate.trim();
+    if (!normalized || aliases.includes(normalized)) continue;
+    aliases.push(normalized);
+  }
+
+  return aliases.length > 0 ? aliases : undefined;
+}
+
+function parseFrontmatterSlot(value: unknown): BridgeRoutingSlot | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (
+    normalized === "tower" ||
+    normalized === "reviewer" ||
+    /^wt-\d+$/.test(normalized)
+  ) {
+    return normalized as BridgeRoutingSlot;
+  }
+
+  return null;
+}
+
+function parseFrontmatterAddress(
+  value: string | undefined,
+): HeartbeatAddressRecord | null {
+  const record = parseJsonObject(value);
+  if (!record) {
+    return null;
+  }
+
+  return {
+    hostId: normalizeFrontmatterValue(
+      typeof record.hostId === "string" ? record.hostId : undefined,
+    ),
+    clientId: normalizeFrontmatterValue(
+      typeof record.clientId === "string" ? record.clientId : undefined,
+    ),
+    conversationId: normalizeFrontmatterValue(
+      typeof record.conversationId === "string"
+        ? record.conversationId
+        : undefined,
+    ),
+    ownerClientId: normalizeFrontmatterValue(
+      typeof record.ownerClientId === "string"
+        ? record.ownerClientId
+        : undefined,
+    ),
+    routingAddress: normalizeFrontmatterValue(
+      typeof record.routingAddress === "string"
+        ? record.routingAddress
+        : undefined,
+    ) ?? undefined,
+    slot: parseFrontmatterSlot(record.slot),
+    aliases: parseFrontmatterAliases(record.aliases),
+  };
+}
+
 /**
  * Parse YAML frontmatter from message content for routing.
  * Returns null if no valid frontmatter found.
  */
 export function parseBridgeFrontmatter(
   content: string,
-): { sender: string; recipient: string; subject: string } | null {
+): InboxRoute | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
 
@@ -272,6 +452,21 @@ export function parseBridgeFrontmatter(
     sender: fields.from,
     recipient: fields.to,
     subject: fields.subject ?? "",
+    messageId:
+      normalizeFrontmatterValue(fields.message_id) ??
+      normalizeFrontmatterValue(fields.messageId),
+    fromAddress: parseFrontmatterAddress(fields.from_address),
+    toAddress: parseFrontmatterAddress(fields.to_address),
+    scope: parseFrontmatterScope(fields.scope),
+    action: normalizeFrontmatterValue(fields.action),
+    consentRef:
+      normalizeFrontmatterValue(fields.consent_ref) ??
+      normalizeFrontmatterValue(fields.consentRef),
+    validationError:
+      normalizeFrontmatterValue(fields.pairToken) ??
+      normalizeFrontmatterValue(fields.pair_token)
+        ? FORBIDDEN_RAW_PAIR_TOKEN_REASON
+        : null,
   };
 }
 
@@ -302,5 +497,6 @@ export function getInboxRouteFromFilename(fileName: string): InboxRoute {
     sender: parts[offset] ?? "",
     recipient: parts[offset + 1] ?? "",
     subject: parts.slice(offset + 2).join("-"),
+    validationError: null,
   };
 }

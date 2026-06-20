@@ -21,8 +21,26 @@ import {
 
 // ─── Subcommand: stop ──────────────────────────────────────────
 
+function shouldKeepManagedServer(
+  flags: Record<string, string | boolean | undefined> = {},
+): boolean {
+  return flags["keep-server"] === true || flags["bridge-only"] === true;
+}
+
+function retainManagedAppServer(appServer: AppServerState): AppServerState {
+  const now = new Date().toISOString();
+  return {
+    ...appServer,
+    managed: true,
+    healthy: true,
+    lastCheckedAt: now,
+    lastHealthyAt: appServer.lastHealthyAt ?? now,
+  };
+}
+
 export async function bridgeStopOne(
   identifier: string,
+  flags: Record<string, string | boolean | undefined> = {},
 ): Promise<CommandResult> {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
@@ -59,6 +77,7 @@ export async function bridgeStopOne(
     instance?.bridge,
   );
   const appServer = bridgeState?.appServer ?? null;
+  const keepServer = shouldKeepManagedServer(flags);
 
   logHeader(`@hua-labs/tap bridge stop ${instanceId}`);
 
@@ -70,6 +89,7 @@ export async function bridgeStopOne(
 
   let appServerStopped = false;
   let appServerTransferredTo: InstanceId | null = null;
+  let retainedAppServer: AppServerState | null = null;
 
   if (stopResult.stopped) {
     logSuccess(`Bridge for ${instanceId} stopped`);
@@ -102,6 +122,15 @@ export async function bridgeStopOne(
           `Managed app-server left running at ${appServer.url} because ownership transfer failed`,
         );
       }
+    } else if (keepServer) {
+      retainedAppServer = retainManagedAppServer(appServer);
+      const gatewayNote =
+        retainedAppServer.auth?.gatewayPid != null
+          ? `, gateway PID: ${retainedAppServer.auth.gatewayPid}`
+          : "";
+      logSuccess(
+        `Managed app-server kept running (PID: ${retainedAppServer.pid ?? "-"}${gatewayNote})`,
+      );
     } else {
       appServerStopped = await stopManagedAppServer(appServer, ctx.platform);
       if (appServerStopped) {
@@ -130,6 +159,7 @@ export async function bridgeStopOne(
       ...instance,
       bridge: null,
       bridgeLifecycle: stopResult.lifecycle ?? instance.bridgeLifecycle ?? null,
+      managedAppServer: retainedAppServer,
     };
     const newState = updateInstanceState(state, instanceId, updated);
     saveState(repoRoot, newState);
@@ -146,6 +176,7 @@ export async function bridgeStopOne(
       data: {
         appServerStopped,
         appServerTransferredTo,
+        appServerKept: retainedAppServer != null,
       },
     };
   }
@@ -160,11 +191,14 @@ export async function bridgeStopOne(
     data: {
       appServerStopped,
       appServerTransferredTo,
+      appServerKept: retainedAppServer != null,
     },
   };
 }
 
-export async function bridgeStopAll(): Promise<CommandResult> {
+export async function bridgeStopAll(
+  flags: Record<string, string | boolean | undefined> = {},
+): Promise<CommandResult> {
   const repoRoot = findRepoRoot();
   const state = loadState(repoRoot);
 
@@ -183,6 +217,8 @@ export async function bridgeStopAll(): Promise<CommandResult> {
   const instanceIds = Object.keys(state.instances) as InstanceId[];
   const stopped: string[] = [];
   const managedAppServers = new Map<string, AppServerState>();
+  const retainedAppServers = new Map<InstanceId, AppServerState>();
+  const keepServer = shouldKeepManagedServer(flags);
 
   logHeader("@hua-labs/tap bridge stop (all)");
 
@@ -195,11 +231,15 @@ export async function bridgeStopAll(): Promise<CommandResult> {
       state.instances[instanceId]?.bridge,
     );
     const appServer = bridgeState?.appServer;
-    if (appServer?.managed && appServer.pid != null) {
-      managedAppServers.set(
-        `${appServer.url}:${appServer.pid}:${appServer.auth?.gatewayPid ?? "-"}`,
-        appServer,
-      );
+    if (appServer?.managed) {
+      if (keepServer) {
+        retainedAppServers.set(instanceId, retainManagedAppServer(appServer));
+      } else if (appServer.pid != null) {
+        managedAppServers.set(
+          `${appServer.url}:${appServer.pid}:${appServer.auth?.gatewayPid ?? "-"}`,
+          appServer,
+        );
+      }
     }
 
     const stopResult = await stopBridge({
@@ -221,6 +261,7 @@ export async function bridgeStopAll(): Promise<CommandResult> {
         bridge: null,
         bridgeLifecycle:
           stopResult.lifecycle ?? instance.bridgeLifecycle ?? null,
+        managedAppServer: retainedAppServers.get(instanceId) ?? null,
       };
       stateChanged = true;
     }
@@ -228,16 +269,28 @@ export async function bridgeStopAll(): Promise<CommandResult> {
 
   const stoppedAppServers: number[] = [];
   const releasePorts: string[] = [];
-  for (const appServer of managedAppServers.values()) {
-    if (await stopManagedAppServer(appServer, ctx.platform)) {
-      stoppedAppServers.push(appServer.pid!);
-      releasePorts.push(appServer.url);
+  if (!keepServer) {
+    for (const appServer of managedAppServers.values()) {
+      if (await stopManagedAppServer(appServer, ctx.platform)) {
+        stoppedAppServers.push(appServer.pid!);
+        releasePorts.push(appServer.url);
+        const gatewayNote =
+          appServer.auth?.gatewayPid != null
+            ? `, gateway PID ${appServer.auth.gatewayPid}`
+            : "";
+        logSuccess(
+          `Stopped app-server PID ${appServer.pid} (${appServer.url}${gatewayNote})`,
+        );
+      }
+    }
+  } else {
+    for (const [instanceId, appServer] of retainedAppServers) {
       const gatewayNote =
         appServer.auth?.gatewayPid != null
           ? `, gateway PID ${appServer.auth.gatewayPid}`
           : "";
       logSuccess(
-        `Stopped app-server PID ${appServer.pid} (${appServer.url}${gatewayNote})`,
+        `Kept app-server for ${instanceId} running (PID ${appServer.pid ?? "-"}${gatewayNote})`,
       );
     }
   }
@@ -267,6 +320,10 @@ export async function bridgeStopAll(): Promise<CommandResult> {
     code: stopped.length > 0 ? "TAP_BRIDGE_STOP_OK" : "TAP_BRIDGE_NOT_RUNNING",
     message,
     warnings: [],
-    data: { stopped, stoppedAppServers },
+    data: {
+      stopped,
+      stoppedAppServers,
+      keptAppServers: Array.from(retainedAppServers.keys()),
+    },
   };
 }

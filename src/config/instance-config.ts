@@ -6,6 +6,20 @@ import type { AgentPermission, AgentRole } from "../permissions/types.js";
 import { createPermissionFromRole } from "../permissions/presets.js";
 
 // ─── Instance Config Schema ────────────────────────────────────
+//
+// M310: Instance config files (instances/*.json) are DEPRECATED.
+// They duplicate data from state.json and create divergence opportunities.
+// New code should read identity from state.json (defaultAgentName field)
+// and session identity from heartbeats/claims.
+// These files are retained for backward compatibility and will be
+// removed in a future version when all consumers migrate to state.json.
+//
+// M350: Legacy identity duplicates removed from the in-memory shape:
+//   - `agentName` (deprecated duplicate of `defaultAgentName`)
+//   - `agentId` (per-record mirror of `instanceId`)
+// `loadInstanceConfig` migrates pre-M350 files on read by backfilling
+// `defaultAgentName` and stripping the legacy fields.
+//
 
 const INSTANCE_CONFIG_SCHEMA_VERSION = 1;
 
@@ -15,12 +29,18 @@ export interface InstanceConfig {
   runtime: "codex" | "claude" | "gemini";
 
   // identity
-  agentName: string | null;
-  agentId: string | null;
+  /**
+   * Bootstrap default name — display seed only.
+   * The canonical instance identifier is `instanceId` (the object key in
+   * `state.json → instances`). `defaultAgentName` is the human-readable
+   * name captured at `tap add` time.
+   */
+  defaultAgentName: string | null;
 
   // network
   port: number | null;
   appServerUrl: string;
+  appServerUnsandboxed?: boolean;
 
   // config override fields (consumed by resolveTrackedConfig)
   commsDir?: string;
@@ -52,7 +72,10 @@ function instancesDir(stateDir: string): string {
   return path.join(stateDir, "instances");
 }
 
-function instanceConfigPath(stateDir: string, instanceId: InstanceId): string {
+export function getInstanceConfigPath(
+  stateDir: string,
+  instanceId: InstanceId,
+): string {
   // Validate to prevent path traversal (M190)
   if (
     instanceId.includes("/") ||
@@ -72,15 +95,29 @@ export function loadInstanceConfig(
   stateDir: string,
   instanceId: InstanceId,
 ): InstanceConfig | null {
-  const filePath = instanceConfigPath(stateDir, instanceId);
+  const filePath = getInstanceConfigPath(stateDir, instanceId);
   if (!fs.existsSync(filePath)) return null;
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as InstanceConfig;
+    const parsed = JSON.parse(raw) as InstanceConfig & {
+      agentName?: string | null;
+      agentId?: string | null;
+    };
     // Backfill permission for pre-M219 instance configs
     if (!parsed.permission) {
       parsed.permission = createPermissionFromRole("custom");
     }
+    // M310 → M350 migration: backfill defaultAgentName from deprecated
+    // `agentName`, then drop the legacy identity duplicates so consumers
+    // see only the canonical shape.
+    if (
+      parsed.defaultAgentName === undefined ||
+      parsed.defaultAgentName === null
+    ) {
+      parsed.defaultAgentName = parsed.agentName ?? null;
+    }
+    delete parsed.agentName;
+    delete parsed.agentId;
     return parsed;
   } catch {
     return null;
@@ -93,7 +130,7 @@ export function saveInstanceConfig(
 ): string {
   const dir = instancesDir(stateDir);
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = instanceConfigPath(stateDir, config.instanceId);
+  const filePath = getInstanceConfigPath(stateDir, config.instanceId);
   const tmp = `${filePath}.tmp.${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
   fs.renameSync(tmp, filePath);
@@ -121,7 +158,7 @@ export function deleteInstanceConfig(
   stateDir: string,
   instanceId: InstanceId,
 ): boolean {
-  const filePath = instanceConfigPath(stateDir, instanceId);
+  const filePath = getInstanceConfigPath(stateDir, instanceId);
   if (!fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
   return true;
@@ -132,14 +169,21 @@ export function deleteInstanceConfig(
 export interface CreateInstanceConfigOpts {
   instanceId: InstanceId;
   runtime: "codex" | "claude" | "gemini";
-  agentName: string | null;
-  agentId: string | null;
+  /** Display seed captured at install time. Session names live in heartbeats/claims. */
+  defaultAgentName: string | null;
   port: number | null;
   appServerUrl: string;
+  appServerUnsandboxed?: boolean;
   commsDir: string;
   stateDir: string;
   repoRoot: string;
   role?: AgentRole;
+}
+
+export interface ReconcileInstanceConfigPathsOpts {
+  commsDir: string;
+  stateDir: string;
+  repoRoot: string;
 }
 
 export function createInstanceConfig(
@@ -156,10 +200,10 @@ export function createInstanceConfig(
     schemaVersion: INSTANCE_CONFIG_SCHEMA_VERSION,
     instanceId: opts.instanceId,
     runtime: opts.runtime,
-    agentName: opts.agentName,
-    agentId: opts.agentId,
+    defaultAgentName: opts.defaultAgentName,
     port: opts.port,
     appServerUrl: opts.appServerUrl,
+    appServerUnsandboxed: opts.appServerUnsandboxed ?? false,
     permission: createPermissionFromRole(opts.role ?? "custom"),
     // Top-level overrides consumed by resolveTrackedConfig
     commsDir: opts.commsDir,
@@ -168,7 +212,7 @@ export function createInstanceConfig(
       TAP_COMMS_DIR: opts.commsDir,
       TAP_STATE_DIR: opts.stateDir,
       TAP_REPO_ROOT: opts.repoRoot,
-      TAP_AGENT_NAME: opts.agentName ?? "<set-per-session>",
+      TAP_AGENT_NAME: opts.defaultAgentName ?? "<set-per-session>",
     },
     configHash: "",
     lastSyncedToRuntime: null,
@@ -182,11 +226,15 @@ export function createInstanceConfig(
   return config;
 }
 
+export interface UpdateInstanceConfigUpdates {
+  defaultAgentName?: string | null;
+  port?: number | null;
+  appServerUrl?: string;
+}
+
 export function updateInstanceConfig(
   existing: InstanceConfig,
-  updates: Partial<
-    Pick<InstanceConfig, "agentName" | "agentId" | "port" | "appServerUrl">
-  >,
+  updates: UpdateInstanceConfigUpdates,
 ): InstanceConfig {
   const updated: InstanceConfig = {
     ...existing,
@@ -194,13 +242,56 @@ export function updateInstanceConfig(
     updatedAt: new Date().toISOString(),
   };
 
-  // Sync mcpEnv if agentName changed
-  if (updates.agentName !== undefined) {
+  if (updates.defaultAgentName !== undefined) {
     updated.mcpEnv = {
       ...updated.mcpEnv,
-      TAP_AGENT_NAME: updates.agentName ?? "<set-per-session>",
+      TAP_AGENT_NAME: updates.defaultAgentName ?? "<set-per-session>",
     };
   }
+
+  updated.configHash = computeInstanceConfigHash(updated);
+  return updated;
+}
+
+function normalizeComparablePath(filePath: string): string {
+  const normalized = path.resolve(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function pathDrifted(actual: string | undefined, expected: string): boolean {
+  if (!actual) return true;
+  return normalizeComparablePath(actual) !== normalizeComparablePath(expected);
+}
+
+export function reconcileInstanceConfigPaths(
+  existing: InstanceConfig,
+  opts: ReconcileInstanceConfigPathsOpts,
+): InstanceConfig {
+  const nextMcpEnv = {
+    ...existing.mcpEnv,
+    TAP_COMMS_DIR: opts.commsDir,
+    TAP_STATE_DIR: opts.stateDir,
+    TAP_REPO_ROOT: opts.repoRoot,
+  };
+
+  const changed =
+    pathDrifted(existing.commsDir, opts.commsDir) ||
+    pathDrifted(existing.stateDir, opts.stateDir) ||
+    pathDrifted(existing.mcpEnv.TAP_COMMS_DIR, opts.commsDir) ||
+    pathDrifted(existing.mcpEnv.TAP_STATE_DIR, opts.stateDir) ||
+    pathDrifted(existing.mcpEnv.TAP_REPO_ROOT, opts.repoRoot);
+
+  if (!changed) {
+    return existing;
+  }
+
+  const updated: InstanceConfig = {
+    ...existing,
+    commsDir: opts.commsDir,
+    stateDir: opts.stateDir,
+    mcpEnv: nextMcpEnv,
+    updatedAt: new Date().toISOString(),
+  };
 
   updated.configHash = computeInstanceConfigHash(updated);
   return updated;
@@ -209,14 +300,16 @@ export function updateInstanceConfig(
 // ─── Hash ──────────────────────────────────────────────────────
 
 function computeInstanceConfigHash(config: InstanceConfig): string {
-  // Hash the mutable fields that affect runtime behavior
+  // Hash the mutable fields that affect runtime behavior.
+  // M350: `agentName` + `agentId` removed — canonical identity is
+  // `instanceId` (record key) + `defaultAgentName` (display seed).
   const hashInput: Record<string, unknown> = {
     instanceId: config.instanceId,
     runtime: config.runtime,
-    agentName: config.agentName,
-    agentId: config.agentId,
+    defaultAgentName: config.defaultAgentName,
     port: config.port,
     appServerUrl: config.appServerUrl,
+    appServerUnsandboxed: config.appServerUnsandboxed ?? false,
     mcpEnv: config.mcpEnv,
     permission: config.permission,
   };

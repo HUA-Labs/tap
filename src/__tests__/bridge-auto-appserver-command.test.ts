@@ -88,7 +88,7 @@ function makeState(
       codex: {
         instanceId: "codex",
         runtime: "codex",
-        agentName: null,
+        defaultAgentName: null,
         port: 4510,
         installed: true,
         configPath: "D:/repo/.codex/config.json",
@@ -108,6 +108,9 @@ function makeState(
           : null,
         headless: null,
         warnings: [],
+        manageAppServer: true,
+        noAuth: false,
+        managedAppServer: null,
         ...overrides,
       },
     },
@@ -168,7 +171,7 @@ describe("bridgeCommand auto app-server behavior", () => {
         manualCommand: "codex app-server --listen ws://127.0.0.1:4510",
       },
     });
-    stopBridgeMock.mockResolvedValue(true);
+    stopBridgeMock.mockResolvedValue({ stopped: true, lifecycle: null });
     loadBridgeStateMock.mockReturnValue(null);
     getHeartbeatAgeMock.mockReturnValue(null);
     getBridgeHeartbeatTimestampMock.mockReturnValue(null);
@@ -179,10 +182,24 @@ describe("bridgeCommand auto app-server behavior", () => {
     resolveAgentNameMock.mockImplementation(
       (_instanceId: string, explicitName?: string) => explicitName ?? null,
     );
-    inferRestartModeMock.mockReturnValue({
-      manageAppServer: true,
-      noAuth: false,
-    });
+    // Mirror the real inferRestartMode contract: flags override defaults.
+    // Keeps manageAppServer=true by default (no saved mode or explicit flag)
+    // while letting --no-server flip it to false, which the --no-server test
+    // relies on.
+    inferRestartModeMock.mockImplementation(
+      (
+        _state: unknown,
+        flags?: {
+          noServer?: boolean;
+          noAuth?: boolean;
+          unsandboxed?: boolean;
+        },
+      ) => ({
+        manageAppServer: flags?.noServer === true ? false : true,
+        noAuth: flags?.noAuth === true,
+        appServerUnsandboxed: flags?.unsandboxed === true,
+      }),
+    );
   });
 
   it("enables app-server management by default for codex bridge start", async () => {
@@ -227,7 +244,9 @@ describe("bridgeCommand auto app-server behavior", () => {
   });
 
   it("recovers agentName from config and backwrites state before bridge start", async () => {
-    loadStateMock.mockReturnValue(makeState(undefined, { agentName: null }));
+    loadStateMock.mockReturnValue(
+      makeState(undefined, { defaultAgentName: null }),
+    );
     resolveAgentNameMock.mockReturnValue("솔");
 
     const result = await bridgeCommand(["start", "codex"]);
@@ -251,7 +270,7 @@ describe("bridgeCommand auto app-server behavior", () => {
       "D:/repo",
       expect.objectContaining({
         instances: expect.objectContaining({
-          codex: expect.objectContaining({ agentName: "솔" }),
+          codex: expect.objectContaining({ defaultAgentName: "솔" }),
         }),
       }),
     );
@@ -297,20 +316,20 @@ describe("bridgeCommand auto app-server behavior", () => {
 
   it("start --all assigns distinct ports per instance", async () => {
     let currentState: TapState = {
-      ...makeState(undefined, { agentName: "온", port: null }),
+      ...makeState(undefined, { defaultAgentName: "온", port: null }),
       instances: {
         codex: {
-          ...makeState(undefined, { agentName: "온", port: null }).instances
-            .codex,
+          ...makeState(undefined, { defaultAgentName: "온", port: null })
+            .instances.codex,
         },
         "codex-reviewer": {
           ...makeState(undefined, {
             instanceId: "codex-reviewer",
-            agentName: "별",
+            defaultAgentName: "별",
             port: null,
           }).instances.codex,
           instanceId: "codex-reviewer",
-          agentName: "별",
+          defaultAgentName: "별",
         },
       },
     };
@@ -405,5 +424,76 @@ describe("bridgeCommand auto app-server behavior", () => {
     expect(result.ok).toBe(true);
     expect(stopManagedAppServerMock).toHaveBeenCalledWith(appServer, "win32");
     expect(result.data).toMatchObject({ appServerStopped: true });
+  });
+
+  it("keeps the managed app-server metadata when --keep-server is set", async () => {
+    const appServer: AppServerState = {
+      url: "ws://127.0.0.1:4510",
+      pid: 8123,
+      managed: true,
+      healthy: true,
+      lastCheckedAt: "2026-03-24T00:00:00.000Z",
+      lastHealthyAt: "2026-03-24T00:00:00.000Z",
+      logPath: "D:/repo/.tap-comms/logs/app-server-codex.log",
+      manualCommand: "codex app-server --listen ws://127.0.0.1:4510",
+    };
+    loadStateMock.mockReturnValue(makeState(appServer));
+    loadBridgeStateMock.mockReturnValue({
+      pid: 7001,
+      statePath: "D:/repo/.tap-comms/pids/bridge-codex.json",
+      lastHeartbeat: "2026-03-24T00:00:00.000Z",
+      appServer,
+    });
+
+    const result = await bridgeCommand(["stop", "codex", "--keep-server"]);
+
+    expect(result.ok).toBe(true);
+    expect(stopManagedAppServerMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({ appServerKept: true });
+    expect(saveStateMock).toHaveBeenCalledWith(
+      "D:/repo",
+      expect.objectContaining({
+        instances: expect.objectContaining({
+          codex: expect.objectContaining({
+            bridge: null,
+            managedAppServer: expect.objectContaining({
+              url: appServer.url,
+              pid: appServer.pid,
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("passes retained managed app-server metadata into the next bridge start", async () => {
+    const retainedAppServer: AppServerState = {
+      url: "ws://127.0.0.1:4510",
+      pid: 8123,
+      managed: true,
+      healthy: true,
+      lastCheckedAt: "2026-03-24T00:00:00.000Z",
+      lastHealthyAt: "2026-03-24T00:00:00.000Z",
+      logPath: "D:/repo/.tap-comms/logs/app-server-codex.log",
+      manualCommand: "codex app-server --listen ws://127.0.0.1:4510",
+    };
+    loadStateMock.mockReturnValue(
+      makeState(undefined, { managedAppServer: retainedAppServer }),
+    );
+
+    const result = await bridgeCommand([
+      "start",
+      "codex",
+      "--agent-name",
+      "ko",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(startBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "codex",
+        existingAppServer: retainedAppServer,
+      }),
+    );
   });
 });

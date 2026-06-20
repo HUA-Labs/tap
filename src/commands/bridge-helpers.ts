@@ -222,6 +222,7 @@ export function transferManagedAppServerOwnership(
   state.instances[recipientId] = {
     ...recipient,
     bridge: updatedBridge,
+    managedAppServer: transferredAppServer,
   };
   return true;
 }

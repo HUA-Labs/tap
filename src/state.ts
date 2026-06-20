@@ -10,6 +10,12 @@ import type {
   OwnedArtifact,
 } from "./types.js";
 import { resolveConfig } from "./config/index.js";
+import {
+  getInstanceConfigPath,
+  loadInstanceConfig,
+  reconcileInstanceConfigPaths,
+  saveInstanceConfig,
+} from "./config/instance-config.js";
 
 const STATE_FILE = "state.json";
 const SCHEMA_VERSION = 3;
@@ -27,6 +33,87 @@ export function stateExists(repoRoot: string): boolean {
   return fs.existsSync(getStatePath(repoRoot));
 }
 
+function normalizeComparablePath(filePath: string): string {
+  const normalized = path.resolve(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function pathDrifted(actual: string | undefined, expected: string): boolean {
+  if (!actual) return true;
+  return normalizeComparablePath(actual) !== normalizeComparablePath(expected);
+}
+
+function reconcileStateConfig(repoRoot: string, state: TapState): TapState {
+  const { config } = resolveConfig({}, repoRoot);
+  const resolvedRepoRoot = path.resolve(repoRoot);
+  const resolvedCommsDir = path.resolve(config.commsDir);
+  const resolvedStateDir = path.resolve(config.stateDir);
+  const instanceIds = Object.keys(state.instances) as InstanceId[];
+
+  let nextState = state;
+  let changed = false;
+
+  if (
+    pathDrifted(state.commsDir, resolvedCommsDir) ||
+    pathDrifted(state.repoRoot, resolvedRepoRoot)
+  ) {
+    nextState = {
+      ...nextState,
+      commsDir: resolvedCommsDir,
+      repoRoot: resolvedRepoRoot,
+      updatedAt: new Date().toISOString(),
+    };
+    changed = true;
+  }
+
+  for (const instanceId of instanceIds) {
+    const instConfig = loadInstanceConfig(resolvedStateDir, instanceId);
+    if (!instConfig) continue;
+
+    const synced = reconcileInstanceConfigPaths(instConfig, {
+      commsDir: resolvedCommsDir,
+      stateDir: resolvedStateDir,
+      repoRoot: resolvedRepoRoot,
+    });
+    const currentInstance = nextState.instances[instanceId];
+    if (!currentInstance) continue;
+
+    const expectedConfigSourceFile = getInstanceConfigPath(
+      resolvedStateDir,
+      instanceId,
+    );
+    const stateNeedsSync =
+      currentInstance.configHash !== synced.configHash ||
+      pathDrifted(currentInstance.configSourceFile, expectedConfigSourceFile);
+
+    if (synced === instConfig && !stateNeedsSync) continue;
+
+    if (synced !== instConfig) {
+      saveInstanceConfig(resolvedStateDir, synced);
+    }
+
+    nextState = {
+      ...nextState,
+      updatedAt: synced.updatedAt,
+      instances: {
+        ...nextState.instances,
+        [instanceId]: {
+          ...currentInstance,
+          configHash: synced.configHash,
+          configSourceFile: expectedConfigSourceFile,
+        },
+      },
+    };
+    changed = true;
+  }
+
+  if (changed) {
+    saveState(repoRoot, nextState);
+  }
+
+  return nextState;
+}
+
 // ─── v1 → v2 Migration ────────────────────────────────────────
 
 export function migrateStateV1toV2(v1: TapStateV1): TapState {
@@ -38,7 +125,7 @@ export function migrateStateV1toV2(v1: TapStateV1): TapState {
     instances[instanceId] = {
       instanceId,
       runtime: runtime as RuntimeName,
-      agentName: null,
+      defaultAgentName: null,
       port: null,
       headless: null,
       ...rs,
@@ -62,10 +149,15 @@ export function migrateStateV2toV3(v2: TapState): TapState {
   const instances: Record<InstanceId, InstanceState> = {};
 
   for (const [id, inst] of Object.entries(v2.instances)) {
+    // M310: Backfill defaultAgentName from deprecated agentName.
+    // M350: drop the legacy `agentName` field from the in-memory shape.
+    const legacy = inst as InstanceState & { agentName?: string | null };
+    const { agentName: legacyAgentName, ...rest } = legacy;
     instances[id] = {
-      ...inst,
-      configHash: inst.configHash ?? "",
-      configSourceFile: inst.configSourceFile ?? "",
+      ...rest,
+      defaultAgentName: rest.defaultAgentName ?? legacyAgentName ?? null,
+      configHash: rest.configHash ?? "",
+      configSourceFile: rest.configSourceFile ?? "",
     };
   }
 
@@ -90,17 +182,35 @@ export function loadState(repoRoot: string): TapState | null {
     const v2 = migrateStateV1toV2(parsed as TapStateV1);
     const v3 = migrateStateV2toV3(v2);
     saveState(repoRoot, v3);
-    return v3;
+    return reconcileStateConfig(repoRoot, v3);
   }
 
   // Auto-migrate v2 → v3
   if (parsed.schemaVersion === 2) {
     const v3 = migrateStateV2toV3(parsed as TapState);
     saveState(repoRoot, v3);
-    return v3;
+    return reconcileStateConfig(repoRoot, v3);
   }
 
-  return parsed as TapState;
+  // M310 → M350: Backfill defaultAgentName from deprecated agentName and
+  // drop the legacy field from the in-memory shape. Legacy v3 state files
+  // written before the M350 cleanup still carry `agentName`; read-time
+  // migration keeps the on-disk copy readable while normalising consumers.
+  const state = parsed as TapState;
+  for (const [id, inst] of Object.entries(state.instances)) {
+    const legacy = inst as InstanceState & { agentName?: string | null };
+    if (
+      legacy.defaultAgentName === undefined ||
+      legacy.defaultAgentName === null
+    ) {
+      legacy.defaultAgentName = legacy.agentName ?? null;
+    }
+    if ("agentName" in legacy) {
+      delete legacy.agentName;
+    }
+    state.instances[id] = legacy;
+  }
+  return reconcileStateConfig(repoRoot, state);
 }
 
 export function saveState(repoRoot: string, state: TapState): void {

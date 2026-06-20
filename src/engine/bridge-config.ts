@@ -3,10 +3,16 @@ import * as path from "node:path";
 import type { InstanceId, BridgeState } from "../types.js";
 import { loadState } from "../state.js";
 import { loadInstanceConfig } from "../config/instance-config.js";
+import { resolveConfig } from "../config/resolve.js";
+
+/** M310: Heartbeat recency threshold for restart recovery (24 hours). */
+const HEARTBEAT_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Resolve agent name: explicit > instance config > state.json > env.
- * Exported for direct testing without spawning a process.
+ * Resolve agent name for bridge startup.
+ * M310: Priority: explicit > heartbeats (recent session) > instance config > state.json > env.
+ * Heartbeats are the session-mutable SSOT; instance config and state.json are
+ * bootstrap-only defaults that should not override a recent session name.
  */
 export function resolveAgentName(
   instanceId: InstanceId,
@@ -15,27 +21,83 @@ export function resolveAgentName(
 ): string | null {
   if (explicit) return explicit;
 
-  // Instance config (Phase 1-2 source-of-truth)
-  if (context?.stateDir) {
-    try {
-      const instConfig = loadInstanceConfig(context.stateDir, instanceId);
-      if (instConfig?.agentName) return instConfig.agentName;
-    } catch {
-      // instance config read failed — fall through
+  // M310: Recover name from heartbeats — session-mutable SSOT.
+  // If this instance had a recent active name (< 24h), use it.
+  try {
+    // Use canonical resolveConfig() to get commsDir — same priority as the
+    // rest of the system (shared config > local config > env > legacy > default).
+    const repoRoot =
+      context?.repoRoot ??
+      context?.stateDir?.replace(/[\\/].tap-comms$/, "") ??
+      process.cwd();
+    const { config: resolved } = resolveConfig({}, repoRoot);
+    const commsDir = resolved.commsDir;
+    const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+    if (fs.existsSync(heartbeatsPath)) {
+      const store = JSON.parse(
+        fs.readFileSync(heartbeatsPath, "utf-8"),
+      ) as Record<
+        string,
+        {
+          agent?: string;
+          timestamp?: string;
+          lastActivity?: string;
+          instanceId?: string | null;
+        }
+      >;
+
+      // Match by instance ID or normalized ID
+      const normalizedId = instanceId.replace(/-/g, "_");
+      for (const [key, hb] of Object.entries(store)) {
+        const keyNormalized = key.replace(/-/g, "_");
+        const matchesId =
+          keyNormalized === normalizedId ||
+          hb.instanceId === instanceId ||
+          hb.instanceId === normalizedId;
+        if (!matchesId) continue;
+        if (!hb.agent || hb.agent === "unknown" || hb.agent === "unnamed")
+          continue;
+
+        // Check recency using max of lastActivity and timestamp (M144 pattern).
+        // Idle bridges have fresh timestamp but stale lastActivity.
+        const activityMs = hb.lastActivity
+          ? new Date(hb.lastActivity).getTime()
+          : 0;
+        const timestampMs = hb.timestamp ? new Date(hb.timestamp).getTime() : 0;
+        const freshestMs = Math.max(activityMs, timestampMs);
+        if (Date.now() - freshestMs < HEARTBEAT_RECOVERY_MAX_AGE_MS) {
+          return hb.agent;
+        }
+      }
     }
+  } catch {
+    // heartbeat recovery failed — fall through to bootstrap defaults
   }
 
-  // state.json SSOT (#784 backwrite)
+  // M310: state.json is the primary bootstrap source — it's always updated
+  // on add/start/restart. Instance config is deprecated and may lag behind.
   try {
     const repoRoot =
       context?.repoRoot ??
       context?.stateDir?.replace(/[\\/].tap-comms$/, "") ??
       process.cwd();
     const state = loadState(repoRoot);
-    const stateAgent = state?.instances[instanceId]?.agentName;
+    const inst = state?.instances[instanceId];
+    const stateAgent = inst?.defaultAgentName;
     if (stateAgent) return stateAgent;
   } catch {
     // state read failed — fall through
+  }
+
+  // Instance config (deprecated — fallback only when state.json unavailable)
+  if (context?.stateDir) {
+    try {
+      const instConfig = loadInstanceConfig(context.stateDir, instanceId);
+      const instName = instConfig?.defaultAgentName;
+      if (instName) return instName;
+    } catch {
+      // instance config read failed — fall through
+    }
   }
 
   return process.env.TAP_AGENT_NAME || process.env.CODEX_TAP_AGENT_NAME || null;
@@ -47,11 +109,23 @@ export function resolveAgentName(
  */
 export function inferRestartMode(
   bridgeState: BridgeState | null,
-  flags?: { noServer?: boolean; noAuth?: boolean },
-  savedMode?: { manageAppServer?: boolean; noAuth?: boolean },
-): { manageAppServer: boolean; noAuth: boolean } {
+  flags?: { noServer?: boolean; noAuth?: boolean; unsandboxed?: boolean },
+  savedMode?: {
+    manageAppServer?: boolean;
+    noAuth?: boolean;
+    appServerUnsandboxed?: boolean;
+  },
+): {
+  manageAppServer: boolean;
+  noAuth: boolean;
+  appServerUnsandboxed: boolean;
+} {
   const wasManaged = bridgeState?.appServer != null;
   const hadAuth = bridgeState?.appServer?.auth != null;
+  const wasUnsandboxed =
+    bridgeState?.appServer?.manualCommand.includes(
+      "--dangerously-bypass-approvals-and-sandbox",
+    ) ?? false;
 
   const manageAppServer =
     flags?.noServer === true
@@ -65,8 +139,14 @@ export function inferRestartMode(
       : flags?.noAuth === undefined
         ? (savedMode?.noAuth ?? !hadAuth)
         : false;
+  const appServerUnsandboxed =
+    flags?.unsandboxed === true
+      ? true
+      : flags?.unsandboxed === undefined
+        ? (savedMode?.appServerUnsandboxed ?? wasUnsandboxed)
+        : false;
 
-  return { manageAppServer, noAuth };
+  return { manageAppServer, noAuth, appServerUnsandboxed };
 }
 
 /**

@@ -57,7 +57,9 @@ export function unwrapNpmCmdShim(cmdPath: string): string | null {
   if (!match) return null;
 
   const dp0 = path.dirname(cmdPath);
-  const scriptRelative = match[1].replace(/%dp0%\\/g, "");
+  const scriptRelative = match[1]
+    .replace(/%dp0%\\/g, "")
+    .replace(/\\/g, path.sep);
   const scriptPath = path.resolve(dp0, scriptRelative);
 
   if (!fs.existsSync(scriptPath)) return null;
@@ -94,48 +96,65 @@ export function resolvePowerShellCommand(): string {
   );
 }
 
-export function resolveAuthGatewayScript(repoRoot: string): string | null {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-  const resolvedModuleDir = path.resolve(moduleDir);
-  const resolvedRepoRoot = path.resolve(repoRoot);
+function findAncestorAsset(
+  startDir: string,
+  relativeSegments: string[],
+): string | null {
+  let dir = path.resolve(startDir);
 
-  const candidates = [
-    // Bundled: dist/bridges/ sibling (npm install / built package)
-    path.join(moduleDir, "bridges", "codex-app-server-auth-gateway.mjs"),
-    // Source: src/bridges/ sibling (monorepo dev with ts runner)
-    path.join(moduleDir, "bridges", "codex-app-server-auth-gateway.ts"),
-    // Monorepo dist fallback
-    path.join(
-      repoRoot,
+  while (true) {
+    const candidate = path.join(dir, ...relativeSegments);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+}
+
+export function resolvePackagedBridgeAsset(
+  repoRoot: string,
+  assetName: string,
+  runnerUrl: string = import.meta.url,
+): string | null {
+  const moduleDir = path.dirname(fileURLToPath(runnerUrl));
+  // 1. Same dir as the bundle (dist/cli.mjs → dist/bridges/<asset>).
+  const bundledChild = path.join(moduleDir, "bridges", assetName);
+  if (fs.existsSync(bundledChild)) {
+    return bundledChild;
+  }
+  // 2. Unbundled dev layout: adapter lives in dist/adapters/ so bridges/ is a sibling.
+  const bundledSibling = path.resolve(moduleDir, "..", "bridges", assetName);
+  if (fs.existsSync(bundledSibling)) {
+    return bundledSibling;
+  }
+
+  return (
+    findAncestorAsset(repoRoot, [
       "packages",
       "tap-comms",
       "dist",
       "bridges",
-      "codex-app-server-auth-gateway.mjs",
-    ),
-    path.join(
-      repoRoot,
-      "packages",
-      "tap-comms",
-      "src",
+      assetName,
+    ]) ??
+    findAncestorAsset(repoRoot, [
+      "node_modules",
+      "@hua-labs",
+      "tap",
+      "dist",
       "bridges",
-      "codex-app-server-auth-gateway.ts",
-    ),
-  ];
+      assetName,
+    ])
+  );
+}
 
-  for (const candidate of candidates) {
-    const resolved = path.resolve(candidate);
-    // Verify the resolved path stays within moduleDir or repoRoot
-    if (
-      !resolved.startsWith(resolvedModuleDir + path.sep) &&
-      !resolved.startsWith(resolvedRepoRoot + path.sep)
-    ) {
-      continue;
-    }
-    if (fs.existsSync(resolved)) {
-      return resolved;
-    }
-  }
-
-  return null;
+export function resolveAuthGatewayScript(repoRoot: string): string | null {
+  return resolvePackagedBridgeAsset(
+    repoRoot,
+    "codex-app-server-auth-gateway.mjs",
+  );
 }

@@ -6,6 +6,7 @@ import { bridgeCommand } from "../commands/bridge.js";
 
 let tmpDir: string;
 let originalCwd: string;
+let originalCommsDirEnv: string | undefined;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-bridge-cmd-test-"));
@@ -16,10 +17,22 @@ beforeEach(() => {
 
   originalCwd = process.cwd();
   process.chdir(tmpDir);
+
+  // Pin TAP_COMMS_DIR to the state.json's commsDir so loadState's
+  // reconcileStateConfig() doesn't rewrite state.commsDir back to the
+  // default <repoRoot>/tap-comms. Without this, the runtime resolves a
+  // different heartbeats.json path than the one tests seed.
+  originalCommsDirEnv = process.env.TAP_COMMS_DIR;
+  process.env.TAP_COMMS_DIR = path.join(tmpDir, "comms");
 });
 
 afterEach(() => {
   process.chdir(originalCwd);
+  if (originalCommsDirEnv === undefined) {
+    delete process.env.TAP_COMMS_DIR;
+  } else {
+    process.env.TAP_COMMS_DIR = originalCommsDirEnv;
+  }
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -101,6 +114,7 @@ function makeInstance(
   return {
     instanceId: overrides.instanceId ?? runtime,
     runtime,
+    defaultAgentName: null,
     agentName: null,
     port: null,
     installed: true,
