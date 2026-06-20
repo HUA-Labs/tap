@@ -27,36 +27,40 @@ tap init
 
 ### `add <runtime>`
 
-Add a runtime instance (claude, codex, gemini). Patches the runtime's config file with MCP server entry.
+Add a runtime instance. Patches the runtime's config file with an MCP server
+entry when verification allows it.
 
 ```bash
 tap add claude
 tap add codex
-tap add codex --agent-name reviewer
-tap add codex --name reviewer --port 4502
-tap add gemini
+tap add codex --agent-name agent-a
+tap add codex --name agent-a --port 4502
 ```
+
+`gemini` is still accepted for legacy compatibility, but it is deprecated for
+new first-run docs. If your workflow has moved to Antigravity CLI, model it as
+a custom profile-pack surface until tap ships a dedicated adapter.
 
 **Options:**
 
-- `--name <name>` — Instance name suffix (e.g. `codex-reviewer`)
+- `--name <name>` — Instance name suffix (e.g. `codex-agent-a`)
 - `--agent-name <name>` — Stored display/bridge name for codex; defaults to the instance ID if omitted
 - `--port <number>` — Bridge port (auto-assigned from 4501 if omitted)
 - `--headless` — Enable headless mode (codex only)
 - `--role <role>` — Headless role: `reviewer`, `validator`, `long-running`
 
-| Code                       | Meaning                                            |
-| -------------------------- | -------------------------------------------------- |
-| `TAP_ADD_OK`               | Instance added and config patched                  |
-| `TAP_RUNTIME_UNKNOWN`      | Unknown runtime — supported: claude, codex, gemini |
-| `TAP_RUNTIME_NOT_FOUND`    | Runtime CLI not installed on system                |
-| `TAP_PORT_CONFLICT`        | Port already used by another instance              |
-| `TAP_PATCH_FAILED`         | Config file write failed                           |
-| `TAP_LOCAL_SERVER_MISSING` | MCP server entry not found locally                 |
-| `TAP_VERIFY_FAILED`        | Post-add verification failed                       |
-| `TAP_NOT_INITIALIZED`      | Run `tap init` first                               |
-| `TAP_NO_OP`                | Instance already installed                         |
-| `TAP_INVALID_ARGUMENT`     | Bad flag value (port, name format, etc.)           |
+| Code                       | Meaning                                                     |
+| -------------------------- | ----------------------------------------------------------- |
+| `TAP_ADD_OK`               | Instance added and config patched                           |
+| `TAP_RUNTIME_UNKNOWN`      | Unknown runtime — supported: claude, codex, gemini (legacy) |
+| `TAP_RUNTIME_NOT_FOUND`    | Runtime CLI not installed on system                         |
+| `TAP_PORT_CONFLICT`        | Port already used by another instance                       |
+| `TAP_PATCH_FAILED`         | Config file write failed                                    |
+| `TAP_LOCAL_SERVER_MISSING` | MCP server entry not found locally                          |
+| `TAP_VERIFY_FAILED`        | Post-add verification failed                                |
+| `TAP_NOT_INITIALIZED`      | Run `tap init` first                                        |
+| `TAP_NO_OP`                | Instance already installed                                  |
+| `TAP_INVALID_ARGUMENT`     | Bad flag value (port, name format, etc.)                    |
 
 ### `remove <instance>`
 

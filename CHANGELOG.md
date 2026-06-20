@@ -1,5 +1,19 @@
 # @hua-labs/tap
 
+## 0.6.1
+
+### Patch Changes
+
+- Restructure the npm README for first-run clarity: shorter quick start, early
+  preview boundary, explicit `ready` section, setup/init/add/ready relationship,
+  concise concepts, and npm badges.
+- Move advanced AX and operator-safety details into `AI_GUIDE.md`, including
+  "do not claim" live-delivery rules, profile-pack flag distinctions, safer
+  `git init` guidance, setup mutation boundaries, and troubleshooting notes.
+- Mark Gemini CLI support as legacy/deprecated in public docs. Antigravity CLI
+  should be modeled as a custom profile-pack surface until a dedicated adapter
+  exists.
+
 ## 0.6.0
 
 ### Minor Changes
@@ -30,10 +44,10 @@
 
 - `0.6.0` is an advanced operator preview, not a universal one-click runtime
   installer.
-- HUA machine topology, tmux sessions, one-character agent names, mission
-  governance, and private profile packs are examples or profile-pack inputs;
-  they are not public defaults.
-- Some advanced/HUA helper surfaces still expose existing named profiles for
+- Host-specific topology, local process managers, custom agent names,
+  governance docs, and external profile packs are examples or profile-pack
+  inputs; they are not public defaults.
+- Some advanced helper surfaces still expose existing named profiles for
   compatibility. Portable first-run docs use explicit neutral agents and
   profiles instead of relying on those helper defaults.
 - Codex App consent-drive / IPC remains experimental and strict-gated. A
@@ -59,7 +73,7 @@
 
 ### Patch Changes
 
-- c931481: Gen 25 trust-layer repair and delivery hardening.
+- c931481: Trust-layer repair and delivery hardening.
   - split shared state (`TAP_STATE_DIR`) from per-bridge runtime state (`TAP_RUNTIME_STATE_DIR`) so headless restarts and later attached TUI sessions keep the correct identity
   - rebind attached TUI identity from runtime heartbeat and agent-name files instead of relying on one-shot session env injection
   - align bridge status, runtime heartbeat, and presence surfaces so `tap status`, bridge state, and plugin-visible presence report the same runtime truth
