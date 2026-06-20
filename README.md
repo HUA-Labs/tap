@@ -29,8 +29,6 @@ For detailed AI-operator troubleshooting, concepts, and advanced runtime notes,
 read [AI_GUIDE.md](./AI_GUIDE.md). AI operators should read it before claiming
 live delivery or runtime readiness.
 
-For likely post-`0.6.x` directions, see [ROADMAP.md](./ROADMAP.md).
-
 ## Requirements
 
 - Node.js `>=22.6.0`
@@ -266,8 +264,6 @@ The narrative examples are real collaboration stories, not setup defaults.
 ## Recent Changes
 
 See [CHANGELOG.md](./CHANGELOG.md) for full release history.
-
-See [ROADMAP.md](./ROADMAP.md) for planned directions and non-goals.
 
 Highlights in `0.6.x`:
 

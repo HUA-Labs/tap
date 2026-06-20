@@ -36,8 +36,7 @@
     "bin",
     "examples",
     "AI_GUIDE.md",
-    "CHANGELOG.md",
-    "ROADMAP.md"
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup",
