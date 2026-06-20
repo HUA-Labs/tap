@@ -5,7 +5,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { Duplex } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
@@ -261,8 +261,16 @@ export async function startGatewayServer(
       return;
     }
 
+    console.log(
+      `[auth-gateway] client authenticated from ${request.socket.remoteAddress ?? "unknown"} -> ${options.upstreamUrl}`,
+    );
+
     const upstream = new WebSocket(options.upstreamUrl, {
       perMessageDeflate: false,
+    });
+
+    upstream.on("open", () => {
+      console.log(`[auth-gateway] upstream connected ${options.upstreamUrl}`);
     });
 
     upstream.on("message", (data: RawData, isBinary: boolean) => {
@@ -279,11 +287,17 @@ export async function startGatewayServer(
 
     upstream.on("close", (code: number, reasonBuffer: Buffer) => {
       const reason = reasonBuffer.toString() || "Upstream closed";
+      console.log(
+        `[auth-gateway] upstream closed code=${code || 1000} reason=${reason}`,
+      );
       closeSocket(client, code || 1000, reason);
     });
 
     client.on("close", (code: number, reasonBuffer: Buffer) => {
       const reason = reasonBuffer.toString() || "Client closed";
+      console.log(
+        `[auth-gateway] client closed code=${code || 1000} reason=${reason}`,
+      );
       closeSocket(upstream, code || 1000, reason);
     });
 
@@ -373,6 +387,9 @@ export async function startGatewayServer(
 function isDirectExecution(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
+  if (!basename(entry).startsWith("codex-app-server-auth-gateway")) {
+    return false;
+  }
   return import.meta.url === pathToFileURL(resolve(entry)).href;
 }
 

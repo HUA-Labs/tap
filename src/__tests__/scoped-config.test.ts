@@ -202,7 +202,10 @@ describe("computeConfigHash", () => {
 
 describe("state v2 → v3 migration", () => {
   it("adds configHash and configSourceFile to instances", () => {
-    const v2: TapState = {
+    // v2 shape carried a deprecated `agentName` field that was stripped in
+    // the M350 cleanup. The test simulates reading a legacy v2 blob, so we
+    // cast through `unknown` to let the migration handle the legacy field.
+    const v2 = {
       schemaVersion: 2,
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
@@ -213,6 +216,7 @@ describe("state v2 → v3 migration", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
+          defaultAgentName: "솔",
           agentName: "솔",
           port: 4501,
           installed: true,
@@ -228,14 +232,17 @@ describe("state v2 → v3 migration", () => {
           warnings: [],
         },
       },
-    };
+    } as unknown as TapState;
 
     const v3 = migrateStateV2toV3(v2);
     expect(v3.schemaVersion).toBe(3);
     expect(v3.instances.codex.configHash).toBe("");
     expect(v3.instances.codex.configSourceFile).toBe("");
-    // Original fields preserved
-    expect(v3.instances.codex.agentName).toBe("솔");
+    // Canonical identity survives; legacy duplicate is stripped.
+    expect(v3.instances.codex.defaultAgentName).toBe("솔");
+    expect(
+      (v3.instances.codex as unknown as Record<string, unknown>).agentName,
+    ).toBeUndefined();
     expect(v3.instances.codex.port).toBe(4501);
   });
 
@@ -251,7 +258,7 @@ describe("state v2 → v3 migration", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
-          agentName: null,
+          defaultAgentName: null,
           port: null,
           installed: true,
           configPath: "",

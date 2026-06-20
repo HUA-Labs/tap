@@ -12,6 +12,7 @@ import {
   SHARED_CONFIG_FILE,
   LOCAL_CONFIG_FILE,
 } from "../config/index.js";
+import { normalizeTapPath, resolveCommsDir } from "../utils.js";
 
 let tmpDir: string;
 
@@ -179,3 +180,38 @@ describe("resolveConfig", () => {
     expect(sources.commsDir).toBe("shared-config");
   });
 });
+
+describe("normalizeTapPath", () => {
+  it("converts MSYS drive paths on Windows", () => {
+    expect(normalizeTapPath("/c/hua-comms", "win32")).toBe("C:\\hua-comms");
+  });
+
+  it("passes through existing Windows paths", () => {
+    expect(normalizeTapPath("C:\\already\\windows", "win32")).toBe(
+      "C:\\already\\windows",
+    );
+  });
+
+  it("leaves non-MSYS POSIX paths unchanged", () => {
+    expect(normalizeTapPath("/usr/local", "linux")).toBe("/usr/local");
+  });
+});
+
+describe.runIf(process.platform === "win32")(
+  "Windows MSYS path integration",
+  () => {
+    it("normalizes explicit --comms-dir values before resolving", () => {
+      expect(resolveCommsDir(["--comms-dir", "/c/hua-comms"], tmpDir)).toBe(
+        "C:\\hua-comms",
+      );
+    });
+
+    it("resolves config-provided MSYS commsDir values to Windows absolute paths", () => {
+      saveSharedConfig(tmpDir, { commsDir: "/c/hua-comms" });
+
+      const { config } = resolveConfig({}, tmpDir);
+
+      expect(config.commsDir).toBe("C:\\hua-comms");
+    });
+  },
+);

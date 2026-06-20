@@ -1,8 +1,12 @@
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { buildManagedMcpServerSpec } from "../adapters/common.js";
-import { createAdapterContext, findRepoRoot, log } from "../utils.js";
-import { normalizeTapPath } from "../config/index.js";
+import {
+  createAdapterContext,
+  findRepoRoot,
+  log,
+  normalizeTapPath,
+} from "../utils.js";
 import { loadState } from "../state.js";
 import type { CommandResult } from "../types.js";
 
@@ -96,12 +100,15 @@ export async function serveCommand(args: string[]): Promise<CommandResult> {
     managed.command === "npx" && managed.sourcePath
       ? [managed.sourcePath]
       : managed.args;
+  const sessionAgentName = process.env.TAP_AGENT_NAME;
 
   // Start MCP server
   const child = spawn(serveCommand, serveArgs, {
     stdio: "inherit",
     env: {
       ...process.env,
+      ...managed.env,
+      TAP_AGENT_NAME: sessionAgentName ?? managed.env.TAP_AGENT_NAME,
       TAP_COMMS_DIR: commsDir,
     },
   });

@@ -3,11 +3,15 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: [
     "src/index.ts",
+    "src/codex-a2a/index.ts",
+    "src/codex-health/index.ts",
+    "src/codex-ipc/index.ts",
     "src/cli.ts",
     "src/mcp-server.ts",
     "src/bridges/codex-app-server-auth-gateway.ts",
     "src/bridges/codex-app-server-bridge.ts",
     "src/bridges/codex-bridge-runner.ts",
+    "src/bridges/codex-remote-ipc-relay.ts",
     "src/bridges/gemini-ide-companion-runner.ts",
   ],
   format: ["esm"],
@@ -18,6 +22,9 @@ export default defineConfig({
   target: "node20",
   splitting: false,
   sourcemap: true,
+  esbuildOptions(options) {
+    options.sourcesContent = false;
+  },
   external: [
     "@modelcontextprotocol/sdk",
     "@modelcontextprotocol/sdk/server/index.js",

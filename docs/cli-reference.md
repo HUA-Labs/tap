@@ -161,6 +161,26 @@ tap serve
 | `TAP_SERVE_NO_SERVER`    | MCP server entry not found  |
 | `TAP_NOT_INITIALIZED`    | Run `tap init` first        |
 
+### `receiver <check|apply|watch>`
+
+Surface local inbox polling items for Codex CLI without claiming realtime
+delivery.
+
+```bash
+tap receiver check --agent agent-a --comms-dir ./tap-comms
+tap receiver apply --agent agent-a --since-minutes 10
+tap receiver watch --agent agent-a --max-iterations 5
+```
+
+`check` is a dry-run. `apply` writes local receiver cursor state under
+`<stateDir>/receiver/`. `watch` polls local inbox until a pending item appears
+or a bounded iteration limit is reached. The command reports `polling` /
+`file-polling`, preserves inbox files, and does not start Codex turns.
+
+| Code              | Meaning                         |
+| ----------------- | ------------------------------- |
+| `TAP_RECEIVER_OK` | Receiver check/apply/watch done |
+
 ### `init-worktree`
 
 Set up a new git worktree with tap configuration.
@@ -225,3 +245,4 @@ All CLI commands return a `CommandResult` with a `code` field. Success codes end
 | Review   | `TAP_REVIEW_START_OK`       | Headless review started             |
 | Review   | `TAP_REVIEW_TERMINATED`     | Headless review ended               |
 | Status   | `TAP_STATUS_OK`             | Status OK                           |
+| Receiver | `TAP_RECEIVER_OK`           | Receiver check/apply/watch done     |

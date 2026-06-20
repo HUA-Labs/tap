@@ -38,6 +38,7 @@ export {
 export {
   cleanupStaleWindowsSpawnWrappers,
   buildWindowsDetachedWrapperScript,
+  resolveWritableStderrLogPath,
   startWindowsDetachedProcess,
   startWindowsCodexAppServer,
   findListeningProcessId,
@@ -159,6 +160,20 @@ export { getBridgeRuntimeStateDir, startBridge } from "./bridge-startup.js";
 export type {
   BridgeStopOptions,
   RestartBridgeOptions,
+  RestartBridgeResult,
+  BridgeDrainWaitState,
 } from "./bridge-orchestrator.js";
 
-export { stopBridge, restartBridge } from "./bridge-orchestrator.js";
+export {
+  stopBridge,
+  restartBridge,
+  BridgeDrainTimeoutError,
+} from "./bridge-orchestrator.js";
+
+export type {
+  BridgeRestartPlan,
+  BridgeRestartPlanKind,
+  ResolveBridgeRestartPlanOptions,
+} from "./bridge-restart-plan.js";
+
+export { resolveBridgeRestartPlan } from "./bridge-restart-plan.js";

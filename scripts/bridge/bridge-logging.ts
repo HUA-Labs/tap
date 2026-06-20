@@ -1,6 +1,6 @@
 // bridge-logging.ts — Structured bridge logging with scoped levels
 
-import { LogLevel } from "./bridge-types.js";
+import type { LogLevel } from "./bridge-types.ts";
 
 export type LogContext = Record<string, unknown>;
 

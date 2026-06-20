@@ -37,6 +37,8 @@ export interface RuntimeBridgeHeartbeat {
   lastDispatchAt?: string | null;
   idleSince?: string | null;
   turnState?: "active" | "idle" | "waiting-approval" | "disconnected" | null;
+  lastNotificationMethod?: string | null;
+  lastNotificationAt?: string | null;
   lastError?: string | null;
   connected?: boolean;
   initialized?: boolean;

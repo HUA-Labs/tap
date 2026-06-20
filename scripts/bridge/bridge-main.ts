@@ -3,16 +3,16 @@
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
 import { pathToFileURL } from "url";
-import {
+import type {
   BridgeHealthState,
   HeartbeatRecord,
   ThreadStateRecord,
-} from "./bridge-types.js";
+} from "./bridge-types.ts";
 import {
   configureBridgeLogging,
   createBridgeLogger,
-} from "./bridge-logging.js";
-import { buildOptions } from "./bridge-config.js";
+} from "./bridge-logging.ts";
+import { buildOptions } from "./bridge-config.ts";
 import {
   maybeBootstrapHeadlessTurn,
   persistThreadState,
@@ -20,14 +20,20 @@ import {
   runScan,
   waitForTurnDrain,
   writeHeartbeat,
-} from "./bridge-dispatch.js";
-import { AppServerClient } from "./bridge-ws-client.js";
-import { sanitizeErrorForPersistence } from "./bridge-dispatch.js";
+} from "./bridge-dispatch.ts";
+import { AppServerClient } from "./bridge-ws-client.ts";
+import { sanitizeErrorForPersistence } from "./bridge-dispatch.ts";
+import { normalizePersistedThreadCwd } from "./bridge-routing.ts";
+import { sweepOrphanProcessedMarkers } from "./bridge-candidates.ts";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolvePromise) => {
     setTimeout(resolvePromise, ms);
   });
+}
+
+function getProcessRssMb(): number {
+  return Math.round(process.memoryUsage().rss / (1024 * 1024));
 }
 
 export function readHeartbeatState(stateDir: string): HeartbeatRecord | null {
@@ -105,11 +111,12 @@ export function loadResumableThreadState(
       savedThread?.appServerUrl ||
       fallbackAppServerUrl,
     ephemeral: savedThread?.ephemeral ?? false,
-    cwd:
+    cwd: normalizePersistedThreadCwd(
       heartbeat?.threadCwd ??
-      (savedThread?.threadId === heartbeatThreadId
-        ? (savedThread.cwd ?? null)
-        : null),
+        (savedThread?.threadId === heartbeatThreadId
+          ? (savedThread.cwd ?? null)
+          : null),
+    ),
   };
 
   let preferred = savedThread;
@@ -120,7 +127,9 @@ export function loadResumableThreadState(
       ...savedThread,
       updatedAt: heartbeatBackedThread.updatedAt ?? savedThread.updatedAt,
       appServerUrl: heartbeatBackedThread.appServerUrl,
-      cwd: heartbeatBackedThread.cwd ?? savedThread.cwd ?? null,
+      cwd: normalizePersistedThreadCwd(
+        heartbeatBackedThread.cwd ?? savedThread.cwd ?? null,
+      ),
     };
   } else if (
     parseUpdatedAt(heartbeat?.updatedAt) > parseUpdatedAt(savedThread.updatedAt)
@@ -176,6 +185,23 @@ export async function main(): Promise<void> {
   const options = buildOptions(process.argv.slice(2));
   configureBridgeLogging(options.logLevel);
   const logger = createBridgeLogger("bridge");
+
+  // M362: sweep orphan processed markers at startup. A marker whose source
+  // inbox file is gone (archived or manually removed) can no longer serve
+  // its dedupe purpose, so retiring it keeps the processed/ tree bounded.
+  const sweepLogger = createBridgeLogger("sweep");
+  const sweepResult = sweepOrphanProcessedMarkers(options.stateDir, {
+    logger: (msg, ctx) => sweepLogger.debug(msg, ctx),
+  });
+  if (sweepResult.scanned > 0) {
+    logger.info("processed marker sweep", {
+      scanned: sweepResult.scanned,
+      removed: sweepResult.removed,
+      kept: sweepResult.kept,
+      errors: sweepResult.errors,
+    });
+  }
+
   const cutoff = getGeneralInboxCutoff(
     options.stateDir,
     options.messageLookbackMinutes,
@@ -296,11 +322,15 @@ export async function main(): Promise<void> {
         throw new Error(sanitized ?? message);
       }
 
+      const pendingCount = client?.getPendingRequestCount() ?? 0;
       client?.disconnect().catch(() => undefined);
       client = null;
       logger.warn("reconnecting after bridge error", {
         reconnectSeconds: options.reconnectSeconds,
+        reconnectCount: health.consecutiveFailureCount,
         consecutiveFailureCount: health.consecutiveFailureCount,
+        pendingCount,
+        rssMb: getProcessRssMb(),
       });
       await delay(options.reconnectSeconds * 1_000);
     }

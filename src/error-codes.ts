@@ -100,6 +100,64 @@ export const TAP_SERVE_NO_SERVER = "TAP_SERVE_NO_SERVER" as const;
 /** `tap status` query succeeded. */
 export const TAP_STATUS_OK = "TAP_STATUS_OK" as const;
 
+/** Agent profile readiness is fully ready. */
+export const TAP_STATUS_PROFILE_READY = "TAP_STATUS_PROFILE_READY" as const;
+
+/** Agent profile readiness is usable but degraded. */
+export const TAP_STATUS_PROFILE_DEGRADED =
+  "TAP_STATUS_PROFILE_DEGRADED" as const;
+
+/** Agent profile readiness is blocked. */
+export const TAP_STATUS_PROFILE_BLOCKED = "TAP_STATUS_PROFILE_BLOCKED" as const;
+
+/** `tap setup` generated a read-only setup report. */
+export const TAP_SETUP_OK = "TAP_SETUP_OK" as const;
+
+/** `tap setup --apply` is intentionally unavailable in the read-only slice. */
+export const TAP_SETUP_APPLY_NOT_IMPLEMENTED =
+  "TAP_SETUP_APPLY_NOT_IMPLEMENTED" as const;
+
+/** `tap setup --apply` was blocked by fail-closed setup guards. */
+export const TAP_SETUP_APPLY_BLOCKED = "TAP_SETUP_APPLY_BLOCKED" as const;
+
+/** `tap doctor --setup` generated a read-only setup readiness report. */
+export const TAP_DOCTOR_SETUP_OK = "TAP_DOCTOR_SETUP_OK" as const;
+
+/** `tap doctor --setup --apply` is intentionally unavailable. */
+export const TAP_DOCTOR_SETUP_APPLY_NOT_IMPLEMENTED =
+  "TAP_DOCTOR_SETUP_APPLY_NOT_IMPLEMENTED" as const;
+
+/** `tap doctor --setup --apply` was blocked by fail-closed setup guards. */
+export const TAP_DOCTOR_SETUP_APPLY_BLOCKED =
+  "TAP_DOCTOR_SETUP_APPLY_BLOCKED" as const;
+
+/** `tap status --profile` was provided without a profile value. */
+export const TAP_STATUS_PROFILE_REQUIRED =
+  "TAP_STATUS_PROFILE_REQUIRED" as const;
+
+/** `tap status --profile` requested an unknown profile. */
+export const TAP_STATUS_UNKNOWN_PROFILE = "TAP_STATUS_UNKNOWN_PROFILE" as const;
+
+/** `tap flow-doctor` completed a read-only receiver/return-uplink diagnostic. */
+export const TAP_FLOW_DOCTOR_OK = "TAP_FLOW_DOCTOR_OK" as const;
+
+/** `tap reviews recover` completed review evidence recovery matching. */
+export const TAP_REVIEWS_RECOVERY_OK = "TAP_REVIEWS_RECOVERY_OK" as const;
+
+/** `tap reviews register` completed review outcome registration planning/apply. */
+export const TAP_REVIEWS_REGISTER_OK = "TAP_REVIEWS_REGISTER_OK" as const;
+
+// ── Receiver ───────────────────────────────────────────────────────────
+
+/** `tap receiver` surfaced local polling inbox state. */
+export const TAP_RECEIVER_OK = "TAP_RECEIVER_OK" as const;
+
+/** `tap ready` reported post-identity runtime-surface readiness. */
+export const TAP_READY_OK = "TAP_READY_OK" as const;
+
+/** `tap ready --apply` failed while performing an explicit apply action. */
+export const TAP_READY_APPLY_FAILED = "TAP_READY_APPLY_FAILED" as const;
+
 // ── Config ──────────────────────────────────────────────────────────────
 
 /** tap-config.json or tap-config.local.json is invalid. */
@@ -158,6 +216,24 @@ export type TapCode =
   | typeof TAP_SERVE_NO_SERVER
   // Status
   | typeof TAP_STATUS_OK
+  | typeof TAP_STATUS_PROFILE_READY
+  | typeof TAP_STATUS_PROFILE_DEGRADED
+  | typeof TAP_STATUS_PROFILE_BLOCKED
+  | typeof TAP_SETUP_OK
+  | typeof TAP_SETUP_APPLY_NOT_IMPLEMENTED
+  | typeof TAP_SETUP_APPLY_BLOCKED
+  | typeof TAP_DOCTOR_SETUP_OK
+  | typeof TAP_DOCTOR_SETUP_APPLY_NOT_IMPLEMENTED
+  | typeof TAP_DOCTOR_SETUP_APPLY_BLOCKED
+  | typeof TAP_STATUS_PROFILE_REQUIRED
+  | typeof TAP_STATUS_UNKNOWN_PROFILE
+  | typeof TAP_FLOW_DOCTOR_OK
+  | typeof TAP_REVIEWS_RECOVERY_OK
+  | typeof TAP_REVIEWS_REGISTER_OK
+  // Receiver
+  | typeof TAP_READY_OK
+  | typeof TAP_READY_APPLY_FAILED
+  | typeof TAP_RECEIVER_OK
   // Config
   | typeof TAP_CONFIG_INVALID
   | typeof TAP_LOCAL_SERVER_MISSING

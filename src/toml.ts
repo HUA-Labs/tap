@@ -111,15 +111,13 @@ export function parseTomlAssignments(
     if (!match) continue;
 
     const [, key, rawValue] = match;
-    const value = rawValue.trim();
+    const value = stripTomlInlineComment(rawValue.trim());
+    if (!value) continue;
 
     if (value.startsWith("[") && value.endsWith("]")) {
-      const items = value
-        .slice(1, -1)
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map(unquoteTomlString);
+      const items = splitTomlArrayItems(value.slice(1, -1)).map(
+        unquoteTomlString,
+      );
       values[key] = items;
       continue;
     }
@@ -145,4 +143,108 @@ function unquoteTomlString(value: string): string {
       : inner;
   }
   return value;
+}
+
+function stripTomlInlineComment(value: string): string {
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+
+    if (inDoubleQuote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      if (char === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+
+    if (char === "'") {
+      inSingleQuote = true;
+      continue;
+    }
+
+    if (char === "#" && (i === 0 || /\s/.test(value[i - 1] ?? ""))) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+
+  return value.trimEnd();
+}
+
+function splitTomlArrayItems(value: string): string[] {
+  const items: string[] = [];
+  let current = "";
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+
+    if (inDoubleQuote) {
+      current += char;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+
+    if (inSingleQuote) {
+      current += char;
+      if (char === "'") {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+
+    if (char === ",") {
+      const item = current.trim();
+      if (item) items.push(item);
+      current = "";
+      continue;
+    }
+
+    if (char === '"') {
+      inDoubleQuote = true;
+    } else if (char === "'") {
+      inSingleQuote = true;
+    }
+
+    current += char;
+  }
+
+  const tail = current.trim();
+  if (tail) items.push(tail);
+
+  return items;
 }

@@ -5,7 +5,7 @@ import {
 } from "./tap-identity.js";
 
 export const PEER_DM_WINDOW_MS = 5 * 60 * 1000;
-export const PEER_DM_MAX_MESSAGES = 3;
+export const PEER_DM_MAX_MESSAGES = 20;
 
 export type PeerDmHistoryStore = Map<string, number[]>;
 
@@ -50,7 +50,8 @@ function matchesTowerAddress(
 }
 
 function resolveTargetAddress(route: PeerDmRoute): string {
-  const candidate = normalizeAddress(route.resolvedTo) || normalizeAddress(route.to);
+  const candidate =
+    normalizeAddress(route.resolvedTo) || normalizeAddress(route.to);
   return isBroadcastRecipient(candidate)
     ? "broadcast"
     : canonicalizeAgentId(candidate);

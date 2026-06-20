@@ -237,47 +237,66 @@ describe("persisted bridge lifecycle", () => {
 });
 
 describe("findNextAvailableAppServerPort", () => {
-  it("skips ports already occupied on loopback", async () => {
+  function makeEmptyState(): TapState {
+    return {
+      schemaVersion: 2,
+      createdAt: "",
+      updatedAt: "",
+      commsDir: "",
+      repoRoot: "",
+      packageVersion: "0.2.0",
+      instances: {},
+    };
+  }
+
+  function makeStateWithClaim(instanceId: string, port: number): TapState {
+    const state = makeEmptyState();
+    state.instances[instanceId] = {
+      instanceId,
+      runtime: "codex",
+      defaultAgentName: null,
+      port,
+      installed: true,
+      configPath: "",
+      bridgeMode: "app-server",
+      restartRequired: false,
+      ownedArtifacts: [],
+      backupPath: "",
+      lastAppliedHash: "",
+      lastVerifiedAt: null,
+      bridge: null,
+      headless: null,
+      warnings: [],
+    };
+    return state;
+  }
+
+  async function withOccupiedPort<T>(
+    fn: (port: number) => Promise<T>,
+  ): Promise<T> {
     const server = net.createServer();
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => resolve());
     });
-
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("Failed to allocate an occupied test port");
       }
+      return await fn(address.port);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
 
-      const occupiedPort = address.port;
-      const state: TapState = {
-        schemaVersion: 2,
-        createdAt: "",
-        updatedAt: "",
-        commsDir: "",
-        repoRoot: "",
-        packageVersion: "0.2.0",
-        instances: {
-          codex: {
-            instanceId: "codex",
-            runtime: "codex",
-            agentName: null,
-            port: null,
-            installed: true,
-            configPath: "",
-            bridgeMode: "app-server",
-            restartRequired: false,
-            ownedArtifacts: [],
-            backupPath: "",
-            lastAppliedHash: "",
-            lastVerifiedAt: null,
-            bridge: null,
-            headless: null,
-            warnings: [],
-          },
-        },
-      };
+  it("skips ports already occupied on loopback", async () => {
+    await withOccupiedPort(async (occupiedPort) => {
+      const state = makeStateWithClaim("codex", null as unknown as number);
+      // clear the port claim so we only test the TCP-occupied path
+      state.instances["codex"]!.port = null;
 
       const nextPort = await findNextAvailableAppServerPort(
         state,
@@ -287,11 +306,81 @@ describe("findNextAvailableAppServerPort", () => {
       );
 
       expect(nextPort).toBe(occupiedPort + 1);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+
+  // M320 portMap — preferred port hint integration
+  describe("preferredPort (M320)", () => {
+    it("returns the preferred port when it is free", async () => {
+      await withOccupiedPort(async (takenPort) => {
+        // Scan base intentionally inside the taken region; preferred port is
+        // free, so it should win over the auto-assign sweep.
+        const freePort = takenPort + 10;
+        const state = makeEmptyState();
+        const result = await findNextAvailableAppServerPort(
+          state,
+          `ws://127.0.0.1:${takenPort}`,
+          takenPort,
+          "codex-tower",
+          freePort,
+        );
+        expect(result).toBe(freePort);
       });
-    }
+    });
+
+    it("falls through to auto-assign when preferred port is claimed in state", async () => {
+      const state = makeStateWithClaim("codex-other", 4511);
+      const result = await findNextAvailableAppServerPort(
+        state,
+        "ws://127.0.0.1:4501",
+        4501,
+        "codex-tower",
+        4511,
+      );
+      // Preferred 4511 is taken by codex-other; fallback scans from 4501 and
+      // returns the first free port (4501, or the next one if TCP-occupied).
+      expect(result).not.toBe(4511);
+    });
+
+    it("returns preferred port when excludeInstanceId holds the claim (restart case)", async () => {
+      const state = makeStateWithClaim("codex-tower", 4510);
+      const result = await findNextAvailableAppServerPort(
+        state,
+        "ws://127.0.0.1:4501",
+        4501,
+        "codex-tower",
+        4510,
+      );
+      expect(result).toBe(4510);
+    });
+
+    it("ignores preferred port when out of range", async () => {
+      const state = makeEmptyState();
+      const result = await findNextAvailableAppServerPort(
+        state,
+        "ws://127.0.0.1:4501",
+        4501,
+        "codex-tower",
+        99999,
+      );
+      // Out-of-range preferred silently drops to auto-assign
+      expect(result).toBeGreaterThanOrEqual(4501);
+      expect(result).toBeLessThan(65536);
+    });
+
+    it("skips preferred hint when it is TCP-occupied, returns next free port", async () => {
+      await withOccupiedPort(async (takenPort) => {
+        const state = makeEmptyState();
+        const result = await findNextAvailableAppServerPort(
+          state,
+          `ws://127.0.0.1:${takenPort}`,
+          takenPort,
+          "codex-tower",
+          takenPort,
+        );
+        expect(result).not.toBe(takenPort);
+      });
+    });
   });
 });
 
@@ -333,29 +422,27 @@ describe("startBridge agent name requirement", () => {
           ? "darwin"
           : "linux";
 
-    // With agentName provided, should NOT throw "No agent name"
-    // (spawn may succeed even with nonexistent script — node process starts then fails)
-    const result = await startBridge({
-      instanceId: "codex",
-      runtime: "codex",
-      stateDir,
-      commsDir: tmpDir,
-      bridgeScript: "/nonexistent/bridge.js",
-      platform,
-      agentName: "testAgent",
-      repoRoot: tmpDir,
-    });
-
-    expect(result.pid).toBeGreaterThan(0);
-    expect(result.runtimeStateDir).toBe(
-      path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
-    );
-
-    // Clean up spawned process
+    // With agentName provided, should NOT throw "No agent name".
+    // M198: With liveness gate, nonexistent scripts now throw "exited within"
+    // instead of silently returning a dead PID.
     try {
-      process.kill(result.pid);
-    } catch {
-      /* already exited */
+      await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript: "/nonexistent/bridge.js",
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+      });
+      // If we get here on Unix (spawn doesn't immediately fail), clean up
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Must NOT be "No agent name" — that's the regression this test guards
+      expect(msg).not.toContain("No agent name");
+      // M198: liveness gate catches the dead process
+      expect(msg).toContain("exited shortly after");
     }
     clearBridgeState(stateDir, "codex");
 
@@ -495,6 +582,162 @@ describe("startBridge agent name requirement", () => {
         }
       }
       clearBridgeState(stateDir, "codex");
+    }
+  });
+
+  it("M392: applies instanceIdSuffix to both TAP_AGENT_ID and TAP_INSTANCE_ID", async () => {
+    const outputPath = path.join(tmpDir, "m392-env.json");
+    const bridgeScript = path.join(tmpDir, "record-m392-env.js");
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    fs.writeFileSync(
+      bridgeScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({`,
+        "  TAP_AGENT_ID: process.env.TAP_AGENT_ID ?? null,",
+        "  TAP_INSTANCE_ID: process.env.TAP_INSTANCE_ID ?? null,",
+        "  TAP_BRIDGE_INSTANCE_ID: process.env.TAP_BRIDGE_INSTANCE_ID ?? null,",
+        "  TAP_ROUTING_SLOT: process.env.TAP_ROUTING_SLOT ?? null,",
+        "}));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pid: number | null = null;
+    try {
+      const result = await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+        instanceIdSuffix: "abc123",
+        routingSlot: "tower",
+      });
+      pid = result.pid;
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (fs.existsSync(outputPath)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      expect(fs.existsSync(outputPath)).toBe(true);
+      const recorded = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as {
+        TAP_AGENT_ID: string | null;
+        TAP_INSTANCE_ID: string | null;
+        TAP_BRIDGE_INSTANCE_ID: string | null;
+        TAP_ROUTING_SLOT: string | null;
+      };
+
+      // Bridge daemon's heartbeat key (via resolveAgentId reading TAP_AGENT_ID)
+      // must be the suffixed id so its heartbeats land in a different bucket
+      // from the MCP server's base-id heartbeats.
+      expect(recorded.TAP_AGENT_ID).toBe("codex-abc123");
+      expect(recorded.TAP_INSTANCE_ID).toBe("codex-abc123");
+      // TAP_BRIDGE_INSTANCE_ID stays on the base id so the runtime state dir
+      // is stable across sessions.
+      expect(recorded.TAP_BRIDGE_INSTANCE_ID).toBe("codex");
+      // TAP_ROUTING_SLOT is the explicit slot derived from the base id.
+      expect(recorded.TAP_ROUTING_SLOT).toBe("tower");
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex");
+    }
+  });
+
+  it("M392: defaults preserve current env shape (TAP_INSTANCE_ID absent, TAP_AGENT_ID = base)", async () => {
+    const outputPath = path.join(tmpDir, "m392-default-env.json");
+    const bridgeScript = path.join(tmpDir, "record-m392-default-env.js");
+    const platform =
+      process.platform === "win32"
+        ? "win32"
+        : process.platform === "darwin"
+          ? "darwin"
+          : "linux";
+
+    fs.writeFileSync(
+      bridgeScript,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify({`,
+        "  TAP_AGENT_ID: process.env.TAP_AGENT_ID ?? null,",
+        "  TAP_INSTANCE_ID: process.env.TAP_INSTANCE_ID ?? null,",
+        "  TAP_BRIDGE_INSTANCE_ID: process.env.TAP_BRIDGE_INSTANCE_ID ?? null,",
+        "  TAP_ROUTING_SLOT: process.env.TAP_ROUTING_SLOT ?? null,",
+        "}));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const previousInstanceId = process.env.TAP_INSTANCE_ID;
+    const previousRoutingSlot = process.env.TAP_ROUTING_SLOT;
+    delete process.env.TAP_INSTANCE_ID;
+    delete process.env.TAP_ROUTING_SLOT;
+
+    let pid: number | null = null;
+    try {
+      const result = await startBridge({
+        instanceId: "codex",
+        runtime: "codex",
+        stateDir,
+        commsDir: tmpDir,
+        bridgeScript,
+        platform,
+        agentName: "testAgent",
+        repoRoot: tmpDir,
+      });
+      pid = result.pid;
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (fs.existsSync(outputPath)) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      expect(fs.existsSync(outputPath)).toBe(true);
+      const recorded = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as {
+        TAP_AGENT_ID: string | null;
+        TAP_INSTANCE_ID: string | null;
+        TAP_BRIDGE_INSTANCE_ID: string | null;
+        TAP_ROUTING_SLOT: string | null;
+      };
+
+      // Default off: env shape matches pre-M392 behavior.
+      expect(recorded.TAP_AGENT_ID).toBe("codex");
+      expect(recorded.TAP_INSTANCE_ID).toBeNull();
+      expect(recorded.TAP_BRIDGE_INSTANCE_ID).toBe("codex");
+      expect(recorded.TAP_ROUTING_SLOT).toBeNull();
+    } finally {
+      if (pid != null) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* already exited */
+        }
+      }
+      clearBridgeState(stateDir, "codex");
+      if (previousInstanceId !== undefined) {
+        process.env.TAP_INSTANCE_ID = previousInstanceId;
+      }
+      if (previousRoutingSlot !== undefined) {
+        process.env.TAP_ROUTING_SLOT = previousRoutingSlot;
+      }
     }
   });
 

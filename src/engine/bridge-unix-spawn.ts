@@ -113,11 +113,18 @@ export function startUnixCodexAppServer(
   logPath: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: Platform = DEFAULT_UNIX_PLATFORM,
+  unsandboxed = false,
 ): number | null {
   const { command: exe, prefixArgs } = splitResolvedCommand(command);
   return startUnixDetachedProcess(
     exe,
-    [...prefixArgs, "app-server", "--listen", url],
+    [
+      ...prefixArgs,
+      ...(unsandboxed ? ["--dangerously-bypass-approvals-and-sandbox"] : []),
+      "app-server",
+      "--listen",
+      url,
+    ],
     repoRoot,
     logPath,
     env,

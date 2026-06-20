@@ -23,10 +23,24 @@ function resolveProbeCommand(candidate: string): string {
   return resolveCommandPath(candidate) ?? candidate;
 }
 
+function shouldProbeWithShell(command: string): boolean {
+  if (process.platform !== "win32") {
+    return false;
+  }
+
+  const ext = path.extname(command).toLowerCase();
+  if (!ext) {
+    return !path.isAbsolute(command);
+  }
+
+  return ext === ".cmd" || ext === ".bat" || ext === ".ps1";
+}
+
 function probeCommandVersion(command: string) {
   return spawnSync(command, ["--version"], {
     encoding: "utf-8",
     windowsHide: true,
+    shell: shouldProbeWithShell(command),
   });
 }
 
@@ -101,6 +115,19 @@ function resolveCommandPath(command: string): string | null {
 
 export function getHomeDir(): string {
   return os.homedir();
+}
+
+export function getCodexHomeDir(): string {
+  const override = process.env.CODEX_HOME?.trim();
+  if (override) {
+    return path.resolve(override);
+  }
+
+  return path.join(getHomeDir(), ".codex");
+}
+
+export function getCodexConfigPath(): string {
+  return path.join(getCodexHomeDir(), "config.toml");
 }
 
 export function toForwardSlashPath(filePath: string): string {
@@ -221,6 +248,9 @@ export function buildManagedMcpServerSpec(
     TAP_COMMS_DIR: toForwardSlashPath(ctx.commsDir),
     TAP_STATE_DIR: toForwardSlashPath(ctx.stateDir),
     TAP_REPO_ROOT: toForwardSlashPath(ctx.repoRoot),
+    TAP_CHANNEL_LOG_PATH: toForwardSlashPath(
+      path.join(ctx.stateDir, "logs", "tap-mcp.log"),
+    ),
   };
   if (instanceId) {
     env.TAP_AGENT_ID = instanceId;

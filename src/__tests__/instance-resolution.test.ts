@@ -26,7 +26,7 @@ function makeState(
     full.instances[id] = {
       instanceId: id,
       runtime: runtime as "codex" | "claude" | "gemini",
-      agentName: null,
+      defaultAgentName: null,
       port: port ?? null,
       installed: true,
       configPath: "",

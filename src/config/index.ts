@@ -22,10 +22,10 @@ export {
   loadSessionConfig,
   saveSharedConfig,
   saveLocalConfig,
-  normalizeTapPath,
 } from "./resolve.js";
 
 export type { ConfigOverrides, TrackedResolveOpts } from "./resolve.js";
+export { normalizeTapPath } from "../utils.js";
 
 export { computeConfigHash } from "./config-hash.js";
 

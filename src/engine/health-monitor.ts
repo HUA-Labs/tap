@@ -35,12 +35,25 @@ export interface HealthCheckResult {
 }
 
 type CommsHeartbeatRecord = {
+  id?: string;
+  agent?: string;
   timestamp?: string;
   lastActivity?: string;
   source?: "bridge-dispatch" | "mcp-direct";
   instanceId?: string | null;
   bridgePid?: number | null;
   connectHash?: string;
+  address?: {
+    routingAddress?: string | null;
+    aliases?: unknown;
+  } | null;
+};
+
+type LiveDispatchAliasInstance = {
+  instanceId?: string | null;
+  defaultAgentName?: string | null;
+  agentName?: string | null;
+  installed?: boolean;
 };
 
 export interface LiveDispatchEvidence {
@@ -80,27 +93,100 @@ const MAX_HISTORY_ENTRIES = 100;
 const DISPATCH_EVIDENCE_FRESH_THRESHOLD_MS = 2 * 60 * 1000;
 
 function getHeartbeatActivityMs(record: CommsHeartbeatRecord): number | null {
-  const timestamp = new Date(record.lastActivity ?? record.timestamp ?? 0).getTime();
-  return Number.isFinite(timestamp) ? timestamp : null;
+  // M144: Use the more recent of lastActivity and timestamp.
+  // timestamp = bridge poll freshness, lastActivity = real work.
+  const activityMs = new Date(record.lastActivity ?? 0).getTime();
+  const timestampMs = new Date(record.timestamp ?? 0).getTime();
+  const best = Math.max(
+    Number.isFinite(activityMs) ? activityMs : 0,
+    Number.isFinite(timestampMs) ? timestampMs : 0,
+  );
+  return best > 0 ? best : null;
+}
+
+function normalizeAliasCandidate(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function addAliasOwner(
+  owners: Map<string, Set<string>>,
+  ownerId: string,
+  value: string | null | undefined,
+): void {
+  const alias = normalizeAliasCandidate(value);
+  if (!alias) return;
+
+  const current = owners.get(alias) ?? new Set<string>();
+  current.add(ownerId);
+  owners.set(alias, current);
+}
+
+export function resolveUniqueLiveDispatchAliases(
+  instances: Record<string, LiveDispatchAliasInstance | undefined>,
+  instanceId: InstanceId,
+): string[] {
+  const target = instances[instanceId];
+  if (!target) return [];
+
+  const owners = new Map<string, Set<string>>();
+  for (const [key, instance] of Object.entries(instances)) {
+    if (!instance || instance.installed === false) continue;
+    const ownerId = normalizeAliasCandidate(instance.instanceId) ?? key;
+    addAliasOwner(owners, ownerId, key);
+    addAliasOwner(owners, ownerId, instance.instanceId);
+    addAliasOwner(owners, ownerId, instance.defaultAgentName);
+    addAliasOwner(owners, ownerId, instance.agentName);
+  }
+
+  const aliases = new Set<string>();
+  for (const value of [target.defaultAgentName, target.agentName]) {
+    const alias = normalizeAliasCandidate(value);
+    if (!alias) continue;
+    const aliasOwners = owners.get(alias);
+    if (aliasOwners?.size === 1 && aliasOwners.has(instanceId)) {
+      aliases.add(alias);
+    }
+  }
+  return [...aliases];
 }
 
 function isSameInstanceHeartbeat(
   key: string,
   heartbeat: CommsHeartbeatRecord,
   instanceId: InstanceId,
+  aliases: string[] = [],
 ): boolean {
-  if (heartbeat.instanceId === instanceId) return true;
-  if (heartbeat.connectHash === `instance:${instanceId}`) return true;
-  return (
-    key === instanceId ||
-    key.replace(/_/g, "-") === instanceId ||
-    key.replace(/-/g, "_") === instanceId
+  const candidates = new Set(
+    [instanceId, ...aliases]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
   );
+  const heartbeatAliases = Array.isArray(heartbeat.address?.aliases)
+    ? heartbeat.address.aliases.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+
+  for (const candidate of candidates) {
+    if (heartbeat.id === candidate) return true;
+    if (heartbeat.agent === candidate) return true;
+    if (heartbeat.instanceId === candidate) return true;
+    if (heartbeat.connectHash === `instance:${candidate}`) return true;
+    if (heartbeat.address?.routingAddress === candidate) return true;
+    if (heartbeatAliases.includes(candidate)) return true;
+    if (key === candidate) return true;
+    if (key.replace(/_/g, "-") === candidate) return true;
+    if (key.replace(/-/g, "_") === candidate) return true;
+  }
+
+  return false;
 }
 
 export function loadLiveDispatchEvidence(
   commsDir: string,
   instanceId: InstanceId,
+  aliases: Array<string | null | undefined> = [],
 ): LiveDispatchEvidence | null {
   const heartbeatsPath = path.join(commsDir, "heartbeats.json");
   if (!fs.existsSync(heartbeatsPath)) return null;
@@ -113,8 +199,13 @@ export function loadLiveDispatchEvidence(
     let best: LiveDispatchEvidence | null = null;
     let bestActivityMs = -1;
 
+    const normalizedAliases = aliases.filter(
+      (alias): alias is string => typeof alias === "string" && alias.trim() !== "",
+    );
+
     for (const [key, heartbeat] of Object.entries(store)) {
-      if (!isSameInstanceHeartbeat(key, heartbeat, instanceId)) continue;
+      if (!isSameInstanceHeartbeat(key, heartbeat, instanceId, normalizedAliases))
+        continue;
       if (heartbeat.source !== "bridge-dispatch") continue;
       if (heartbeat.bridgePid == null || !isProcessAlive(heartbeat.bridgePid)) {
         continue;
@@ -133,7 +224,9 @@ export function loadLiveDispatchEvidence(
         best = {
           bridgePid: heartbeat.bridgePid,
           lastActivity:
-            heartbeat.lastActivity ?? heartbeat.timestamp ?? new Date(activityMs).toISOString(),
+            heartbeat.lastActivity ??
+            heartbeat.timestamp ??
+            new Date(activityMs).toISOString(),
         };
       }
     }

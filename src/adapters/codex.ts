@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { backupFile, ensureBackupDir, fileHash } from "../state.js";
 import {
   artifactBackupPath,
@@ -25,10 +24,11 @@ import type {
   VerifyCheck,
   VerifyResult,
 } from "../types.js";
+import { resolvePackagedBridgeAsset } from "../engine/bridge-codex-command.js";
 import {
   buildManagedMcpServerSpec,
   canWriteOrCreate,
-  getHomeDir,
+  getCodexConfigPath,
   probeCommand,
 } from "./common.js";
 import type { ManagedMcpServerSpec } from "./common.js";
@@ -42,7 +42,7 @@ const OLD_MCP_SELECTOR = "mcp_servers.tap-comms";
 const OLD_ENV_SELECTOR = "mcp_servers.tap-comms.env";
 
 function findCodexConfigPath(): string {
-  return path.join(getHomeDir(), ".codex", "config.toml");
+  return getCodexConfigPath();
 }
 
 function canonicalizeTrustPath(targetPath: string): string {
@@ -441,42 +441,19 @@ export const codexAdapter: RuntimeAdapter = {
   },
 
   resolveBridgeScript(ctx: AdapterContext): string | null {
-    const distDir = path.dirname(fileURLToPath(import.meta.url));
-    const candidates = [
-      // 1. Relative to bundled CLI (npm install / npx)
-      path.join(distDir, "bridges", "codex-bridge-runner.mjs"),
-      // 2. Monorepo development — dist inside repo
-      path.join(
-        ctx.repoRoot,
-        "packages",
-        "tap-comms",
-        "dist",
-        "bridges",
-        "codex-bridge-runner.mjs",
-      ),
-      // 3. Source file — dev mode with strip-types
-      path.join(
-        ctx.repoRoot,
-        "packages",
-        "tap-comms",
-        "src",
-        "bridges",
-        "codex-bridge-runner.ts",
-      ),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) return candidate;
-    }
-
-    return null;
+    return resolvePackagedBridgeAsset(
+      ctx.repoRoot,
+      "codex-bridge-runner.mjs",
+      import.meta.url,
+    );
   },
 };
 
 // ─── Public helpers ──────────────────────────────────────────
 
 /**
- * Ensure Codex config.toml has approval_mode = "auto" for the tap MCP server.
+ * Ensure the active Codex config.toml has approval_mode = "auto" for the tap
+ * MCP server. Respects CODEX_HOME when set; otherwise uses ~/.codex/config.toml.
  * Codex resets this to "approve" on session restart, so we re-patch before
  * bridge startup. Only patches when [mcp_servers.tap] already exists
  * (i.e. tap was previously added to this Codex installation).

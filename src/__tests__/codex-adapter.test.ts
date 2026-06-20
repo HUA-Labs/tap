@@ -10,7 +10,7 @@ const buildManagedMcpServerSpecMock = vi.fn();
 vi.mock("../adapters/common.js", () => ({
   buildManagedMcpServerSpec: buildManagedMcpServerSpecMock,
   canWriteOrCreate: () => true,
-  getHomeDir: () => os.homedir(),
+  getCodexConfigPath: () => path.join(os.homedir(), ".codex", "config.toml"),
   probeCommand: () => ({ command: null, version: null }),
 }));
 
@@ -119,5 +119,31 @@ TAP_COMMS_DIR = "C:/old-comms"
 
     const verify = await codexAdapter.verify(ctx, plan);
     expect(verify.ok).toBe(true);
+  });
+});
+
+describe("codexAdapter.resolveBridgeScript", () => {
+  it("prefers packaged bridge assets from an ancestor monorepo dist", () => {
+    const repoRoot = path.join(tmpDir, ".tmp", "wt-2");
+    const bridgeScript = path.join(
+      tmpDir,
+      "packages",
+      "tap-comms",
+      "dist",
+      "bridges",
+      "codex-bridge-runner.mjs",
+    );
+
+    fs.mkdirSync(path.dirname(bridgeScript), { recursive: true });
+    fs.writeFileSync(bridgeScript, "// stub", "utf-8");
+
+    const resolved = codexAdapter.resolveBridgeScript!({
+      commsDir: path.join(tmpDir, "comms"),
+      repoRoot,
+      stateDir: path.join(tmpDir, ".tap-comms"),
+      platform: "win32",
+    });
+
+    expect(resolved).toBe(bridgeScript);
   });
 });

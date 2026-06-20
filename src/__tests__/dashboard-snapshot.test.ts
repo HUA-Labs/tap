@@ -12,6 +12,7 @@ let originalCwd: string;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-dashboard-test-"));
   commsDir = path.join(tmpDir, "comms");
+  process.env.TAP_HOST_ID = "dashboard-host";
   fs.writeFileSync(path.join(tmpDir, "package.json"), "{}", "utf-8");
   fs.mkdirSync(path.join(tmpDir, ".tap-comms", "pids"), { recursive: true });
   fs.mkdirSync(commsDir, { recursive: true });
@@ -22,6 +23,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.chdir(originalCwd);
+  delete process.env.TAP_HOST_ID;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -127,6 +129,14 @@ describe("collectDashboardSnapshot", () => {
       presence: "bridge-live",
       lifecycle: "ready",
       status: "active",
+      address: {
+        hostId: "dashboard-host",
+        clientId: "codex",
+        conversationId: "thread_live",
+        ownerClientId: "codex",
+        routingAddress: "codex",
+        slot: null,
+      },
     });
     expect(codex?.idleSeconds).not.toBeNull();
     expect(codex!.idleSeconds!).toBeGreaterThanOrEqual(120);
@@ -134,6 +144,14 @@ describe("collectDashboardSnapshot", () => {
       presence: "mcp-only",
       lifecycle: null,
       instanceId: null,
+      address: {
+        hostId: "dashboard-host",
+        clientId: null,
+        conversationId: null,
+        ownerClientId: null,
+        routingAddress: "reviewer_agent",
+        slot: null,
+      },
     });
   });
 });

@@ -17,11 +17,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import {
   buildManagedMcpServerSpec,
+  getCodexConfigPath,
   type ManagedMcpServerSpec,
   probeCommand,
 } from "../adapters/common.js";
@@ -33,8 +33,18 @@ import {
   loadRuntimeBridgeHeartbeat,
   loadRuntimeBridgeThreadState,
 } from "../engine/bridge.js";
+import {
+  loadLiveDispatchEvidence,
+  resolveUniqueLiveDispatchAliases,
+} from "../engine/health-monitor.js";
 import { resolveConfig } from "../config/index.js";
 import { checkAllDrift } from "../config/drift-detector.js";
+import {
+  detectCommsPathDrift,
+  type CommsPathSource,
+} from "../config/comms-path-drift.js";
+import { logFilePath, pidFilePath } from "../engine/bridge-paths.js";
+import { resolvePackagedBridgeAsset } from "../engine/bridge-codex-command.js";
 import {
   createAdapterContext,
   findRepoRoot,
@@ -42,6 +52,7 @@ import {
   logHeader,
   logSuccess,
   logWarn,
+  parseArgs,
 } from "../utils.js";
 import {
   extractTomlTable,
@@ -52,6 +63,15 @@ import {
 } from "../toml.js";
 import { version } from "../version.js";
 import type { CommandResult, TapState } from "../types.js";
+import {
+  buildSetupReport,
+  parseSetupProfile,
+  type SetupPhase,
+  type SetupProfile,
+  type SetupResidual,
+  type SetupStatus,
+  type TapSetupReport,
+} from "./setup.js";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -70,6 +90,26 @@ interface DoctorHeartbeatRecord {
   status?: "active" | "idle" | "signing-off" | string;
 }
 
+interface SetupDoctorReport extends Record<string, unknown> {
+  command: "doctor";
+  mode: "setup";
+  profile: SetupProfile;
+  dryRun: boolean;
+  apply: boolean;
+  status: SetupStatus;
+  generatedAt: string;
+  summary: string;
+  environment: TapSetupReport["environment"];
+  phases: SetupPhase[];
+  actions: TapSetupReport["actions"];
+  nextActions: TapSetupReport["nextActions"];
+  residual: SetupResidual[];
+  setupReport: Pick<
+    TapSetupReport,
+    "command" | "profile" | "status" | "generatedAt" | "summary" | "applyPlan"
+  >;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const PASS = "pass" as const;
@@ -84,6 +124,7 @@ const CODEX_ENV_DRIFT_KEYS = [
   "TAP_REPO_ROOT",
 ] as const;
 const CODEX_SESSION_NEUTRAL_NAME = "<set-per-session>";
+const CODEX_CONFIG_CHECK_NAME = "MCP config (Codex config.toml)";
 
 function normalizeComparablePath(value: string): string {
   return resolve(value).replace(/\\/g, "/").toLowerCase();
@@ -169,7 +210,7 @@ function appendWarningMessage(message: string, extra: string): string {
 }
 
 function findCodexConfigPath(): string {
-  return join(homedir(), ".codex", "config.toml");
+  return getCodexConfigPath();
 }
 
 function canonicalizeTrustPath(targetPath: string): string {
@@ -552,6 +593,54 @@ function checkComms(commsDir: string): Check[] {
   return checks;
 }
 
+function formatCommsPathSources(sources: CommsPathSource[]): string {
+  const lines: string[] = [];
+  for (const s of sources) {
+    if (!s.present) {
+      lines.push(`${s.name}: missing`);
+    } else if (!s.raw) {
+      lines.push(`${s.name}: no ${s.key}`);
+    } else {
+      lines.push(`${s.name}: ${s.resolved}`);
+    }
+  }
+  return lines.join("; ");
+}
+
+function checkCommsPathDrift(repoRoot: string, stateDir: string): Check[] {
+  const result = detectCommsPathDrift(repoRoot, stateDir);
+
+  if (result.status === "ok") {
+    return [
+      {
+        name: "comms path drift",
+        status: PASS,
+        message: `all 4 slots agree (${result.effective})`,
+      },
+    ];
+  }
+
+  if (result.status === "empty") {
+    return [
+      {
+        name: "comms path drift",
+        status: WARN,
+        message:
+          "No TAP_COMMS_DIR / commsDir configured anywhere. Runtime falls back to <repoRoot>/tap-comms (deprecated).",
+      },
+    ];
+  }
+
+  const detail = formatCommsPathSources(result.sources);
+  return [
+    {
+      name: "comms path drift",
+      status: WARN,
+      message: `effective=${result.effective}; ${detail}. See docs/areas/tap/comms-path-drift-runbook.md`,
+    },
+  ];
+}
+
 function checkStaleHeartbeats(
   repoRoot: string,
   commsDir: string,
@@ -627,6 +716,14 @@ function checkInstances(
       const heartbeatAge = getHeartbeatAge(stateDir, id);
       const runtimeHeartbeat = loadRuntimeBridgeHeartbeat(bridgeState);
       const savedThread = loadRuntimeBridgeThreadState(bridgeState);
+      const liveDispatch =
+        running && bridgeState
+          ? null
+          : loadLiveDispatchEvidence(
+              commsDir,
+              id,
+              resolveUniqueLiveDispatchAliases(state.instances, id),
+            );
 
       let status: "pass" | "warn" | "fail";
       let message: string;
@@ -640,6 +737,9 @@ function checkInstances(
           status = PASS;
           message = `PID ${bridgeState.pid}, port ${inst.port ?? "auto"}`;
         }
+      } else if (liveDispatch) {
+        status = PASS;
+        message = `Live dispatch PID ${liveDispatch.bridgePid} (no tracked bridge pid state)`;
       } else if (bridgeState && !running) {
         status = WARN;
         message = `Stale PID ${bridgeState.pid} (process dead)`;
@@ -734,7 +834,19 @@ function checkInstances(
         );
       }
 
+      // Always append active log path so users know where to look
+      const bridgeLogPath = logFilePath(stateDir, id);
+      message = `${message}; log: ${bridgeLogPath}`;
+
       checks.push({ name: `bridge: ${id}`, status, message, fix });
+
+      // M329: Check if bridge is running stale code (dist updated after bridge start)
+      if (running && inst.runtime === "codex") {
+        const staleCheck = checkBridgeCodeStaleness(repoRoot, stateDir, id);
+        if (staleCheck) {
+          checks.push(staleCheck);
+        }
+      }
     } else {
       checks.push({
         name: `instance: ${id}`,
@@ -745,6 +857,68 @@ function checkInstances(
   }
 
   return checks;
+}
+
+/**
+ * M329: Check if a running bridge is using stale code.
+ * Compares dist file mtime against the PID file mtime (≈ bridge start time).
+ * If dist is newer, the bridge needs a restart to pick up code changes.
+ */
+function checkBridgeCodeStaleness(
+  repoRoot: string,
+  stateDir: string,
+  instanceId: string,
+): Check | null {
+  const pidPath = pidFilePath(stateDir, instanceId);
+  let bridgeStartTime: number;
+  try {
+    bridgeStartTime = statSync(pidPath).mtimeMs;
+  } catch {
+    return null; // No PID file — can't determine start time
+  }
+
+  // Check bridge runner dist — the script the bridge process actually runs
+  const distFiles = [
+    resolvePackagedBridgeAsset(repoRoot, "codex-bridge-runner.mjs"),
+    resolvePackagedBridgeAsset(repoRoot, "codex-app-server-bridge.mjs"),
+  ].filter(Boolean) as string[];
+
+  if (distFiles.length === 0) {
+    return null; // Can't locate dist files
+  }
+
+  let newestDistTime = 0;
+  for (const distFile of distFiles) {
+    try {
+      const mtime = statSync(distFile).mtimeMs;
+      if (mtime > newestDistTime) {
+        newestDistTime = mtime;
+      }
+    } catch {
+      // Skip inaccessible files
+    }
+  }
+
+  if (newestDistTime === 0) {
+    return null;
+  }
+
+  if (newestDistTime > bridgeStartTime) {
+    const driftMinutes = Math.round(
+      (newestDistTime - bridgeStartTime) / 60_000,
+    );
+    return {
+      name: `code-drift: ${instanceId}`,
+      status: WARN,
+      message: `Bridge running stale code — dist updated ${driftMinutes}m after bridge start. Restart recommended: tap bridge restart ${instanceId}`,
+    };
+  }
+
+  return {
+    name: `code-drift: ${instanceId}`,
+    status: PASS,
+    message: "Bridge code is up to date",
+  };
 }
 
 function checkMessageLifecycle(commsDir: string): Check[] {
@@ -986,7 +1160,7 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
 
   if (!existsSync(spec.configPath)) {
     checks.push({
-      name: "MCP config (~/.codex/config.toml)",
+      name: CODEX_CONFIG_CHECK_NAME,
       status: WARN,
       message: `${spec.configPath} not found. ${fixHint}`,
       fix: () => repairCodexConfig(repoRoot, commsDir),
@@ -1071,7 +1245,7 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
 
   if (issues.length === 0) {
     checks.push({
-      name: "MCP config (~/.codex/config.toml)",
+      name: CODEX_CONFIG_CHECK_NAME,
       status: PASS,
       message: spec.configPath,
     });
@@ -1079,7 +1253,7 @@ function checkCodexConfig(repoRoot: string, commsDir: string): Check[] {
   }
 
   checks.push({
-    name: "MCP config (~/.codex/config.toml)",
+    name: CODEX_CONFIG_CHECK_NAME,
     status: WARN,
     message: `${issues.join("; ")}. ${fixHint}`,
     fix: () => repairCodexConfig(repoRoot, commsDir),
@@ -1102,8 +1276,8 @@ function checkBridgeTurnHealth(repoRoot: string): Check[] {
     for (const [id, inst] of Object.entries(state.instances)) {
       if (inst?.installed && inst.bridgeMode === "app-server") {
         activeMatchers.add(id);
-        // Also match agentName-based dirs (manual runbook pattern)
-        if (inst.agentName) activeMatchers.add(inst.agentName);
+        // Also match display-name-based dirs (manual runbook pattern)
+        if (inst.defaultAgentName) activeMatchers.add(inst.defaultAgentName);
       }
     }
   }
@@ -1264,12 +1438,18 @@ function renderCheck(check: Check, fixMode: boolean): string {
 const DOCTOR_HELP = `
 Usage:
   tap doctor [options]
+  tap doctor --setup --profile <codex-cli|codex-app|claude-channel> [--profile-pack <path>] [--json]
 
 Description:
   Diagnose tap infrastructure health: comms directory, instances, bridges,
   message lifecycle, and MCP server configuration.
 
 Options:
+  --setup               Run setup/config/warm-up readiness doctor
+  --profile <id>        Setup profile for --setup
+  --profile-pack <path> Validate a profile pack as data-only setup context
+  --agent <name>        Optional runtime identity for setup probes
+  --fresh-minutes <n>   Presence freshness window for setup probes
   --fix                 Auto-repair detected issues where possible
   --comms-dir <path>    Override comms directory
   --help, -h            Show help
@@ -1277,9 +1457,182 @@ Options:
 Examples:
   npx @hua-labs/tap doctor
   npx @hua-labs/tap doctor --fix
+  npx @hua-labs/tap doctor --setup --profile codex-cli --json
+  npx @hua-labs/tap doctor --setup --profile codex-cli --profile-pack ./tap-profile-pack.json --json
 `.trim();
 
 // ── Command ─────────────────────────────────────────────────────────────
+
+function parseDoctorSetupOptions(args: string[]):
+  | {
+      setup: false;
+    }
+  | {
+      setup: true;
+      profile: SetupProfile | null;
+      rawProfile: string | boolean | undefined;
+      apply: boolean;
+      commsDir?: string;
+      agent?: string;
+      freshMinutes?: number;
+      profilePackPath?: string;
+    } {
+  const { flags } = parseArgs(args);
+  if (flags.setup !== true) return { setup: false };
+
+  const rawProfile = flags.profile;
+  const commsDir =
+    typeof flags["comms-dir"] === "string" ? flags["comms-dir"] : undefined;
+  const agent = typeof flags.agent === "string" ? flags.agent : undefined;
+  const profilePackPath =
+    typeof flags["profile-pack"] === "string"
+      ? flags["profile-pack"]
+      : undefined;
+  const freshMinutes =
+    typeof flags["fresh-minutes"] === "string"
+      ? Number.parseInt(flags["fresh-minutes"], 10)
+      : undefined;
+  const apply = flags.apply === true || flags.fix === true;
+
+  return {
+    setup: true,
+    profile: parseSetupProfile(rawProfile),
+    rawProfile,
+    apply,
+    commsDir,
+    agent,
+    profilePackPath,
+    freshMinutes:
+      freshMinutes && Number.isFinite(freshMinutes) && freshMinutes > 0
+        ? freshMinutes
+        : undefined,
+  };
+}
+
+function buildSetupDoctorReport(
+  profile: SetupProfile,
+  apply: boolean,
+  options: {
+    commsDir?: string;
+    agent?: string;
+    freshMinutes?: number;
+    profilePackPath?: string;
+  } = {},
+): SetupDoctorReport {
+  const setupReport = buildSetupReport(profile, apply, options, {
+    executeApply: apply,
+  });
+  const phases = setupReport.phases.filter(
+    (phase) => !["delivery", "doctor"].includes(phase.id),
+  );
+  const residual: SetupResidual[] = [
+    ...setupReport.residual,
+    {
+      id: "delivery-doctor-separated",
+      severity: "info",
+      message:
+        "`tap doctor --setup` is setup/config/warm-up readiness only; use `tap comms-doctor` for delivery and evidence diagnostics.",
+      nextAction: "tap comms-doctor --json",
+    },
+  ];
+  if (apply) {
+    residual.push({
+      id: "doctor-setup-apply-reuses-setup-plan",
+      severity: "info",
+      message:
+        "`tap doctor --setup --apply` reuses the same guarded SetupApplyPlan as `tap setup --apply`; it does not run the broad infrastructure fixer.",
+      nextAction: `tap setup --profile ${profile} --apply --json`,
+    });
+  }
+
+  return {
+    command: "doctor",
+    mode: "setup",
+    profile,
+    dryRun: !apply,
+    apply,
+    status: setupReport.status,
+    generatedAt: setupReport.generatedAt,
+    summary: apply
+      ? `tap doctor --setup ${profile} apply reused setup apply plan: ${setupReport.applyPlan?.status ?? "unknown"}`
+      : `tap doctor --setup ${profile} read-only report generated`,
+    environment: setupReport.environment,
+    phases,
+    actions: phases.flatMap((phase) => phase.actions),
+    nextActions: setupReport.nextActions.filter(
+      (action) => action.id !== "run-setup-doctor",
+    ),
+    residual,
+    setupReport: {
+      command: setupReport.command,
+      profile: setupReport.profile,
+      status: setupReport.status,
+      generatedAt: setupReport.generatedAt,
+      summary: setupReport.summary,
+      applyPlan: setupReport.applyPlan,
+    },
+  };
+}
+
+function setupDoctorResult(
+  args: string[],
+): CommandResult<SetupDoctorReport | Record<string, unknown>> | null {
+  const parsed = parseDoctorSetupOptions(args);
+  if (!parsed.setup) return null;
+
+  if (parsed.rawProfile === undefined || parsed.rawProfile === true) {
+    return {
+      ok: false,
+      command: "doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: "Missing --profile <codex-cli|codex-app|claude-channel>.",
+      warnings: [],
+      data: {},
+    };
+  }
+  if (!parsed.profile) {
+    return {
+      ok: false,
+      command: "doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: `Unknown setup profile: ${String(parsed.rawProfile)}. Expected codex-cli, codex-app, or claude-channel.`,
+      warnings: [],
+      data: {},
+    };
+  }
+
+  const report = buildSetupDoctorReport(parsed.profile, parsed.apply, {
+    commsDir: parsed.commsDir,
+    agent: parsed.agent,
+    freshMinutes: parsed.freshMinutes,
+    profilePackPath: parsed.profilePackPath,
+  });
+  logHeader(`@hua-labs/tap doctor --setup (${parsed.profile})`);
+  log(report.summary);
+  if (parsed.apply) {
+    log(
+      `setup applyPlan: ${report.setupReport.applyPlan?.status ?? "missing"}`,
+    );
+  } else {
+    log(
+      "No files, config, permissions, inbox evidence, or processes were changed.",
+    );
+  }
+  const blocked =
+    parsed.apply &&
+    (report.setupReport.applyPlan?.status === "blocked" ||
+      report.setupReport.applyPlan?.status === "partial");
+  return {
+    ok: !blocked,
+    command: "doctor",
+    code: blocked ? "TAP_DOCTOR_SETUP_APPLY_BLOCKED" : "TAP_DOCTOR_SETUP_OK",
+    message: report.summary,
+    warnings: report.residual
+      .filter((item) => item.severity !== "info")
+      .map((item) => item.message),
+    data: report,
+  };
+}
 
 export async function doctorCommand(args: string[]): Promise<CommandResult> {
   if (args.includes("--help") || args.includes("-h")) {
@@ -1293,6 +1646,9 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
       data: {},
     };
   }
+
+  const setupResult = setupDoctorResult(args);
+  if (setupResult) return setupResult;
 
   const repoRoot = findRepoRoot();
 
@@ -1344,6 +1700,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
             const {
               loadInstanceConfig: loadInst,
               saveInstanceConfig: saveInst,
+              getInstanceConfigPath: getInstPath,
             } = require("../config/instance-config.js");
             const {
               computeFileHash: hashFile,
@@ -1358,12 +1715,13 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
             }
 
             // Sync state.json fields from instance config
-            inst.agentName = instConfig.agentName;
+            inst.defaultAgentName = instConfig.defaultAgentName;
             inst.port = instConfig.port;
             inst.configHash = instConfig.configHash;
-            inst.configSourceFile =
-              inst.configSourceFile ||
-              join(config.stateDir, "instances", `${result.instanceId}.json`);
+            inst.configSourceFile = getInstPath(
+              config.stateDir,
+              result.instanceId,
+            );
             saveState(repoRoot, state);
 
             // Resync runtime config hash if configPath exists
@@ -1385,12 +1743,158 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
     return checks;
   }
 
+  /**
+   * M310: Check identity state convergence across mutable stores.
+   * Warns when heartbeats, claims, and agent-name.txt disagree.
+   */
+  function checkIdentityConvergence(): Check[] {
+    const checks: Check[] = [];
+    const state = loadState(repoRoot);
+    if (!state) return checks;
+
+    const heartbeatsPath = join(commsDir, "heartbeats.json");
+    let heartbeatStore: Record<string, DoctorHeartbeatRecord> = {};
+    try {
+      if (existsSync(heartbeatsPath)) {
+        heartbeatStore = JSON.parse(readFileSync(heartbeatsPath, "utf-8"));
+      }
+    } catch {
+      // skip if unreadable
+    }
+
+    const claimsDir = join(commsDir, ".claims");
+    const claimNames = new Map<string, string>(); // name → instanceId
+    try {
+      if (existsSync(claimsDir)) {
+        for (const file of readdirSync(claimsDir)) {
+          if (!file.endsWith(".json") || file.endsWith(".lock")) continue;
+          try {
+            const raw = JSON.parse(
+              readFileSync(join(claimsDir, file), "utf-8"),
+            ) as {
+              name?: string;
+              claimedBy?: { instanceId?: string };
+            };
+            if (raw.name && raw.claimedBy?.instanceId) {
+              claimNames.set(raw.name, raw.claimedBy.instanceId);
+            }
+          } catch {
+            /* skip */
+          }
+        }
+      }
+    } catch {
+      /* skip */
+    }
+
+    const tmpDir = join(repoRoot, ".tmp");
+
+    for (const [instanceId, inst] of Object.entries(state.instances)) {
+      if (!inst.installed) continue;
+
+      const sources: Record<string, string | null> = {};
+
+      // 1. state.json name (bootstrap default)
+      // M310 → M350: defaultAgentName is the only identity field here.
+      sources["state.json"] = inst.defaultAgentName ?? null;
+
+      // 2. heartbeat name (session mutable)
+      const normalizedId = instanceId.replace(/-/g, "_");
+      const hbEntry =
+        heartbeatStore[instanceId] ?? heartbeatStore[normalizedId];
+      sources["heartbeats"] = hbEntry?.agent ?? null;
+
+      // 3. claims — find claim matching this instance
+      let claimName: string | null = null;
+      for (const [name, claimInstanceId] of claimNames) {
+        if (
+          claimInstanceId === instanceId ||
+          claimInstanceId === normalizedId
+        ) {
+          claimName = name;
+          break;
+        }
+      }
+      sources["claims"] = claimName;
+
+      // 4. agent-name.txt (runtime file)
+      let runtimeName: string | null = null;
+      try {
+        const runtimeDir = join(
+          tmpDir,
+          `codex-app-server-bridge-${instanceId}`,
+        );
+        const agentNamePath = join(runtimeDir, "agent-name.txt");
+        if (existsSync(agentNamePath)) {
+          runtimeName = readFileSync(agentNamePath, "utf-8").trim() || null;
+        }
+      } catch {
+        /* skip */
+      }
+      sources["agent-name.txt"] = runtimeName;
+
+      // Check convergence among mutable stores (heartbeats, claims, agent-name.txt)
+      const mutableValues = [
+        sources["heartbeats"],
+        sources["claims"],
+        sources["agent-name.txt"],
+      ].filter(
+        (v): v is string => v != null && v !== "unknown" && v !== "unnamed",
+      );
+
+      const uniqueValues = new Set(mutableValues);
+      if (uniqueValues.size > 1) {
+        const detail = Object.entries(sources)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => `${k}="${v}"`)
+          .join(", ");
+        checks.push({
+          name: `identity: ${instanceId}`,
+          status: WARN,
+          message: `Identity divergence — ${detail}`,
+        });
+      } else if (mutableValues.length > 0) {
+        checks.push({
+          name: `identity: ${instanceId}`,
+          status: PASS,
+          message: `Converged as "${mutableValues[0]}"`,
+        });
+      }
+
+      // M350: the deprecated `agentName` field is now stripped on load, so
+      // there is nothing to cross-check against `defaultAgentName` here.
+    }
+
+    // M310: Warn about deprecated instances/*.json files
+    const instancesDir = join(config.stateDir, "instances");
+    try {
+      if (existsSync(instancesDir)) {
+        const files = readdirSync(instancesDir).filter((f) =>
+          f.endsWith(".json"),
+        );
+        if (files.length > 0) {
+          checks.push({
+            name: "identity: instance-configs",
+            status: WARN,
+            message: `${files.length} deprecated instances/*.json file(s) found — identity now uses state.json defaultAgentName + heartbeats`,
+          });
+        }
+      }
+    } catch {
+      /* skip */
+    }
+
+    return checks;
+  }
+
   function runAllChecks(): Check[] {
     const checks: Check[] = [];
     checks.push(...checkComms(commsDir));
+    checks.push(...checkCommsPathDrift(repoRoot, config.stateDir));
     checks.push(...checkStaleHeartbeats(repoRoot, commsDir, config.stateDir));
     checks.push(...checkInstances(repoRoot, config.stateDir, commsDir));
     checks.push(...checkConfigDrift());
+    checks.push(...checkIdentityConvergence());
     checks.push(...checkMessageLifecycle(commsDir));
     checks.push(...checkMcpServer(repoRoot));
     checks.push(...checkCodexConfig(repoRoot, commsDir));
@@ -1403,6 +1907,7 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
   for (const section of [
     "Comms",
     "Instances",
+    "Identity",
     "Config Drift",
     "Messages",
     "MCP",
@@ -1417,14 +1922,17 @@ export async function doctorCommand(args: string[]): Promise<CommandResult> {
           "findings directory",
           "heartbeats",
           "stale heartbeats",
+          "comms path drift",
         ].includes(c.name),
       ),
       Instances: initialChecks.filter(
         (c) =>
           c.name.startsWith("bridge:") ||
+          c.name.startsWith("code-drift:") ||
           c.name.startsWith("instance:") ||
           c.name === "tap state",
       ),
+      Identity: initialChecks.filter((c) => c.name.startsWith("identity:")),
       "Config Drift": initialChecks.filter((c) => c.name.startsWith("drift:")),
       Messages: initialChecks.filter((c) =>
         ["message flow", "read receipts"].includes(c.name),

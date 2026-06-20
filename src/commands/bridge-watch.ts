@@ -80,6 +80,9 @@ export async function bridgeWatch(
           "crashed",
           "bridge pid not alive",
         ),
+        managedAppServer: inst.bridge?.appServer?.managed
+          ? inst.bridge.appServer
+          : (inst.managedAppServer ?? null),
       };
       stateChanged = true;
       cleaned.push(instanceId);
@@ -152,7 +155,7 @@ export async function bridgeWatch(
           repoRoot,
           ctx.stateDir,
         );
-        const newBridgeState = await restartBridge({
+        const restart = await restartBridge({
           instanceId,
           runtime: inst.runtime,
           stateDir: ctx.stateDir,
@@ -166,18 +169,24 @@ export async function bridgeWatch(
           port: inst.port ?? undefined,
           headless: inst.headless,
           drainTimeoutSeconds: 30,
+          force: true,
           manageAppServer,
           noAuth,
+          existingAppServer:
+            bridgeState?.appServer ?? inst.managedAppServer ?? null,
           previousLifecycle:
             inst.bridgeLifecycle ?? inst.bridge?.lifecycle ?? null,
         });
         // Backwrite new bridge state to state.json (mirrors bridgeRestart)
         const updatedInst = {
           ...inst,
-          agentName: recoveredAgentName ?? inst.agentName ?? null,
-          bridge: newBridgeState,
+          defaultAgentName: recoveredAgentName ?? inst.defaultAgentName ?? null,
+          bridge: restart.bridge,
           bridgeLifecycle:
-            newBridgeState.lifecycle ?? inst.bridgeLifecycle ?? null,
+            restart.bridge.lifecycle ?? inst.bridgeLifecycle ?? null,
+          managedAppServer: restart.bridge.appServer?.managed
+            ? restart.bridge.appServer
+            : null,
         };
         const updatedState = updateInstanceState(
           state,
@@ -187,7 +196,9 @@ export async function bridgeWatch(
         saveState(repoRoot, updatedState);
         state = updatedState;
         restarted.push(instanceId);
-        logSuccess(`${instanceId}: restarted`);
+        logSuccess(
+          `${instanceId}: restarted${restart.forced ? " (forced after drain timeout)" : ""}`,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`${instanceId}: restart failed — ${msg}`);

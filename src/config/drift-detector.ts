@@ -85,11 +85,13 @@ export function checkInstanceDrift(
   }
 
   // 2. Instance config ↔ state.json field comparison
+  // M350: identity drift check is now `defaultAgentName` only — the legacy
+  // `agentName` / `agentId` duplicates were removed from both shapes.
   const fieldMismatches: string[] = [];
 
-  if (instConfig.agentName !== stateInstance.agentName) {
+  if (instConfig.defaultAgentName !== stateInstance.defaultAgentName) {
     fieldMismatches.push(
-      `agentName: instance="${instConfig.agentName}" vs state="${stateInstance.agentName}"`,
+      `defaultAgentName: instance="${instConfig.defaultAgentName}" vs state="${stateInstance.defaultAgentName}"`,
     );
   }
   if (instConfig.port !== stateInstance.port) {

@@ -15,7 +15,11 @@ import { resolveNodeRuntime, buildRuntimeEnv } from "../runtime/index.js";
 import { pidFilePath, logFilePath } from "./bridge-paths.js";
 import { startWindowsDetachedProcess } from "./bridge-windows-spawn.js";
 import { startUnixDetachedProcess } from "./bridge-unix-spawn.js";
-import { isProcessAlive, stopManagedAppServer } from "./bridge-process-control.js";
+import {
+  isProcessAlive,
+  stopManagedAppServer,
+} from "./bridge-process-control.js";
+import { delay } from "./bridge-port-network.js";
 import { resolveAgentName } from "./bridge-config.js";
 import {
   loadBridgeState,
@@ -57,8 +61,24 @@ export interface BridgeStartOptions {
   manageAppServer?: boolean;
   /** Skip auth gateway — app-server listens directly on the public port (localhost only). */
   noAuth?: boolean;
+  /** Launch managed Codex app-server without the Codex sandbox. */
+  appServerUnsandboxed?: boolean;
+  /** Reuse previously managed app-server metadata even after bridge state is cleared. */
+  existingAppServer?: AppServerState | null;
   /** Persisted lifecycle from the previous session, used to track restarts. */
   previousLifecycle?: BridgeLifecycleRecord | null;
+  /**
+   * M392: per-session suffix appended to TAP_INSTANCE_ID for the bridge daemon.
+   * When set, bridge writes heartbeats under `${instanceId}-${suffix}` while the
+   * MCP server keeps the base id. Defense in depth alongside M354 1순위
+   * (ownership pruning) — different bucket, complementary defense.
+   */
+  instanceIdSuffix?: string;
+  /**
+   * M392: explicit routing slot to inject as TAP_ROUTING_SLOT. Set when the
+   * suffix decouples TAP_INSTANCE_ID from the slot regex in the bridge runner.
+   */
+  routingSlot?: string;
 }
 
 export function getBridgeRuntimeStateDir(
@@ -91,15 +111,22 @@ type CommsHeartbeatRecord = {
 };
 
 const STALE_DIRECT_HEARTBEAT_MS = 5 * 60 * 1000;
+const BRIDGE_STARTUP_LOCK_STALE_MS = 60 * 1000;
+const BRIDGE_STARTUP_WAIT_MS = 10 * 1000;
+const BRIDGE_STARTUP_POLL_MS = 100;
+
+interface BridgeStartupLock {
+  path: string;
+}
 
 function warnHeartbeatCleanup(instanceId: InstanceId, message: string): void {
-  console.warn(
-    `[tap] heartbeat cleanup skipped for ${instanceId}: ${message}`,
-  );
+  console.warn(`[tap] heartbeat cleanup skipped for ${instanceId}: ${message}`);
 }
 
 function getHeartbeatActivityMs(record: CommsHeartbeatRecord): number | null {
-  const timestamp = new Date(record.lastActivity ?? record.timestamp ?? 0).getTime();
+  const timestamp = new Date(
+    record.lastActivity ?? record.timestamp ?? 0,
+  ).getTime();
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
@@ -135,9 +162,10 @@ function cleanupStaleSameInstanceHeartbeats(
   try {
     let store: Record<string, CommsHeartbeatRecord> = {};
     try {
-      store = JSON.parse(
-        fs.readFileSync(heartbeatsPath, "utf-8"),
-      ) as Record<string, CommsHeartbeatRecord>;
+      store = JSON.parse(fs.readFileSync(heartbeatsPath, "utf-8")) as Record<
+        string,
+        CommsHeartbeatRecord
+      >;
     } catch {
       warnHeartbeatCleanup(instanceId, "heartbeat store unreadable");
       return;
@@ -182,6 +210,135 @@ function cleanupStaleSameInstanceHeartbeats(
   }
 }
 
+function bridgeStartupLockPath(
+  stateDir: string,
+  instanceId: InstanceId,
+): string {
+  return path.join(stateDir, "pids", `bridge-${instanceId}.startup.lock`);
+}
+
+function readBridgeStartupLock(
+  lockPath: string,
+): { pid?: number | null } | null {
+  if (!fs.existsSync(lockPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(lockPath, "utf-8")) as {
+      pid?: number | null;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isBridgeStartupLockStale(lockPath: string): boolean {
+  try {
+    const stats = fs.statSync(lockPath);
+    if (Date.now() - stats.mtimeMs > BRIDGE_STARTUP_LOCK_STALE_MS) {
+      return true;
+    }
+  } catch {
+    return true;
+  }
+
+  const record = readBridgeStartupLock(lockPath);
+  if (record?.pid == null) {
+    return false;
+  }
+
+  return !isProcessAlive(record.pid);
+}
+
+function tryAcquireBridgeStartupLock(
+  stateDir: string,
+  instanceId: InstanceId,
+): BridgeStartupLock | null {
+  const lockPath = bridgeStartupLockPath(stateDir, instanceId);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify(
+          {
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          },
+          null,
+          2,
+        ),
+        { flag: "wx" },
+      );
+      return { path: lockPath };
+    } catch {
+      if (!isBridgeStartupLockStale(lockPath)) {
+        return null;
+      }
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function acquireBridgeStartupLock(
+  stateDir: string,
+  instanceId: InstanceId,
+): Promise<
+  | {
+      lock: BridgeStartupLock;
+      existingState: null;
+    }
+  | {
+      lock: null;
+      existingState: BridgeState;
+    }
+> {
+  const deadline = Date.now() + BRIDGE_STARTUP_WAIT_MS;
+
+  while (true) {
+    const lock = tryAcquireBridgeStartupLock(stateDir, instanceId);
+    if (lock) {
+      return { lock, existingState: null };
+    }
+
+    const existingState = loadBridgeState(stateDir, instanceId);
+    if (existingState && isProcessAlive(existingState.pid)) {
+      return {
+        lock: null,
+        existingState,
+      };
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Bridge startup for ${instanceId} is already in progress`,
+      );
+    }
+
+    await delay(BRIDGE_STARTUP_POLL_MS);
+  }
+}
+
+function releaseBridgeStartupLock(lock: BridgeStartupLock | null): void {
+  if (!lock) {
+    return;
+  }
+
+  try {
+    fs.unlinkSync(lock.path);
+  } catch {
+    // lock already removed
+  }
+}
+
 export async function startBridge(
   options: BridgeStartOptions,
 ): Promise<BridgeState> {
@@ -207,7 +364,13 @@ export async function startBridge(
     );
   }
 
+  const startup = await acquireBridgeStartupLock(stateDir, instanceId);
+  if (startup.existingState) {
+    return startup.existingState;
+  }
+
   if (isBridgeRunning(stateDir, instanceId)) {
+    releaseBridgeStartupLock(startup.lock);
     const existing = loadBridgeState(stateDir, instanceId)!;
     throw new Error(
       `Bridge for ${instanceId} is already running (PID: ${existing.pid})`,
@@ -217,7 +380,8 @@ export async function startBridge(
   const previousBridgeState = loadBridgeState(stateDir, instanceId);
   const previousLifecycle =
     options.previousLifecycle ?? previousBridgeState?.lifecycle ?? null;
-  const previousAppServer = previousBridgeState?.appServer ?? null;
+  const previousAppServer =
+    options.existingAppServer ?? previousBridgeState?.appServer ?? null;
 
   clearBridgeState(stateDir, instanceId);
   cleanupStaleSameInstanceHeartbeats(commsDir, instanceId);
@@ -240,34 +404,47 @@ export async function startBridge(
   let bridgeAppServerUrl = effectiveAppServerUrl;
   const startedAt = new Date().toISOString();
 
-  if (runtime === "codex" && options.manageAppServer) {
-    appServer = await ensureCodexAppServer({
-      instanceId,
-      stateDir,
-      runtimeStateDir,
-      commsDir,
-      repoRoot,
-      platform: options.platform,
-      appServerUrl: effectiveAppServerUrl,
-      agentName: resolvedAgent,
-      existingAppServer: previousAppServer,
-      noAuth: options.noAuth,
-    });
-    if (appServer.auth) {
-      appServer = {
-        ...appServer,
-        auth: materializeGatewayTokenFile(
-          stateDir,
-          instanceId,
-          effectiveAppServerUrl,
-          appServer.auth,
-        ),
-      };
-    }
-    bridgeAppServerUrl = effectiveAppServerUrl;
-  }
-
   try {
+    if (runtime === "codex" && options.manageAppServer) {
+      appServer = await ensureCodexAppServer({
+        instanceId,
+        stateDir,
+        runtimeStateDir,
+        commsDir,
+        repoRoot,
+        platform: options.platform,
+        appServerUrl: effectiveAppServerUrl,
+        agentName: resolvedAgent,
+        existingAppServer: previousAppServer,
+        noAuth: options.noAuth,
+        unsandboxed: options.appServerUnsandboxed,
+      });
+      if (appServer.auth) {
+        appServer = {
+          ...appServer,
+          auth: materializeGatewayTokenFile(
+            stateDir,
+            instanceId,
+            effectiveAppServerUrl,
+            appServer.auth,
+          ),
+        };
+      }
+      bridgeAppServerUrl = effectiveAppServerUrl;
+    }
+
+    // M392: when an opt-in suffix is provided, the bridge daemon writes
+    // heartbeats / presence under `${instanceId}-${suffix}`. The daemon's
+    // heartbeat writer keys on `TAP_AGENT_ID` (scripts/bridge/bridge-routing.ts
+    // resolveAgentId), so both `TAP_AGENT_ID` and `TAP_INSTANCE_ID` must carry
+    // the suffix for the daemon's bucket to actually be different from the
+    // MCP server's base bucket. `TAP_BRIDGE_INSTANCE_ID` stays on the base id
+    // because the runtime-state dir (`.tmp/codex-app-server-bridge-<id>`) is
+    // intentionally stable across sessions.
+    const effectiveInstanceId = options.instanceIdSuffix
+      ? `${instanceId}-${options.instanceIdSuffix}`
+      : instanceId;
+
     const bridgeEnv = {
       ...runtimeEnv,
       TAP_COMMS_DIR: commsDir,
@@ -276,8 +453,12 @@ export async function startBridge(
       TAP_REPO_ROOT: repoRoot,
       TAP_BRIDGE_RUNTIME: runtime,
       TAP_BRIDGE_INSTANCE_ID: instanceId,
-      TAP_AGENT_ID: instanceId,
+      TAP_AGENT_ID: effectiveInstanceId,
       TAP_AGENT_NAME: resolvedAgent,
+      ...(options.instanceIdSuffix
+        ? { TAP_INSTANCE_ID: effectiveInstanceId }
+        : {}),
+      ...(options.routingSlot ? { TAP_ROUTING_SLOT: options.routingSlot } : {}),
       CODEX_TAP_AGENT_NAME: resolvedAgent,
       TAP_RESOLVED_NODE: resolved.command,
       TAP_STRIP_TYPES: resolved.supportsStripTypes ? "1" : "0",
@@ -342,9 +523,55 @@ export async function startBridge(
       throw new Error(`Failed to spawn bridge process for ${instanceId}`);
     }
 
+    // M198: Liveness gate — catches instant and very-early exits within ~200ms.
+    // Phase 1: immediate isProcessAlive() for instant death (bad path, exec fail).
+    // Phase 2: 200ms settle + recheck for very-early exits (missing deps, perms).
+    // Exits after ~200ms are caught by heartbeat timeout / health monitor.
+    // Trade-off: healthy processes pay ~200ms extra startup latency.
+    {
+      const SETTLE_MS = 200;
+      const reportDeath = () => {
+        let logSnippet = "";
+        try {
+          const logContent = fs.readFileSync(logPath, "utf-8").trim();
+          if (logContent) {
+            logSnippet = `\nLog output:\n${logContent.slice(0, 500)}`;
+          }
+          const stderrContent = fs
+            .readFileSync(`${logPath}.stderr`, "utf-8")
+            .trim();
+          if (stderrContent) {
+            logSnippet += `\nStderr:\n${stderrContent.slice(0, 500)}`;
+          }
+        } catch {
+          // log read failed — non-fatal
+        }
+        throw new Error(
+          `Bridge process for ${instanceId} (PID: ${bridgePid}) exited shortly after spawn.${logSnippet}`,
+        );
+      };
+
+      // Phase 1: immediate check — catches instant death (bad path, etc.)
+      if (!isProcessAlive(bridgePid)) {
+        await delay(SETTLE_MS); // wait for log flush
+        reportDeath();
+      }
+
+      // Phase 2: settle check — catches processes that die within ~300ms
+      await delay(SETTLE_MS);
+      if (!isProcessAlive(bridgePid)) {
+        reportDeath();
+      }
+    }
+
     const state: BridgeState = {
       pid: bridgePid,
       statePath: pidFilePath(stateDir, instanceId),
+      // M321: Runtime heartbeat.json is SSOT for process liveness.
+      // This seed covers the pre-first-poll gap (bridge start → first
+      // runtime heartbeat write) to prevent false-stale in health checks.
+      // Once runtime heartbeat.json is written, resolveHeartbeatTimestamp()
+      // prefers it over this value.
       lastHeartbeat: startedAt,
       appServer,
       runtimeStateDir,
@@ -374,5 +601,7 @@ export async function startBridge(
       }
     }
     throw err;
+  } finally {
+    releaseBridgeStartupLock(startup.lock);
   }
 }

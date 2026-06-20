@@ -165,7 +165,13 @@ export interface BridgeLifecycleRecord {
 export interface BridgeState {
   pid: number;
   statePath: string;
-  lastHeartbeat: string; // ISO
+  /**
+   * M321 — Seed heartbeat timestamp, set at bridge start.
+   * Covers the pre-first-poll gap before runtime heartbeat.json is written.
+   * `resolveHeartbeatTimestamp()` prefers runtime heartbeat.json when available.
+   * Not actively updated after startup — runtime heartbeat.json is the SSOT.
+   */
+  lastHeartbeat?: string; // ISO
   appServer?: AppServerState | null;
   /** Instance-specific daemon state dir (thread/heartbeat/processed markers). */
   runtimeStateDir?: string | null;
@@ -176,7 +182,13 @@ export interface BridgeState {
 export interface InstanceState {
   instanceId: InstanceId;
   runtime: RuntimeName;
-  agentName: string | null;
+  /**
+   * Bootstrap default name set at install time (`tap add`) — display seed only.
+   * NOT the active session name; session names live in heartbeats + claims.
+   * M350: `agentName` (deprecated duplicate) removed. Legacy state files are
+   * migrated on load by backfilling this field from the old `agentName`.
+   */
+  defaultAgentName: string | null;
   port: number | null;
   installed: boolean;
   configPath: string;
@@ -195,6 +207,10 @@ export interface InstanceState {
   manageAppServer?: boolean;
   /** Whether bridge runs without auth gateway. Saved for restart mode preservation. */
   noAuth?: boolean;
+  /** Whether managed Codex app-server bypasses the Codex sandbox at launch. */
+  appServerUnsandboxed?: boolean;
+  /** Retained managed app-server metadata when bridge stops with --keep-server. */
+  managedAppServer?: AppServerState | null;
   /** Stable hash of resolved config for drift detection (v3+). */
   configHash?: string;
   /** Path to the instance config file (v3+). */
@@ -246,15 +262,30 @@ export type CommandName =
   | "add"
   | "remove"
   | "status"
+  | "setup"
   | "serve"
   | "bridge"
   | "up"
   | "down"
   | "comms"
+  | "ready"
+  | "receiver"
+  | "headless"
+  | "projection"
+  | "uplink"
   | "dashboard"
   | "doctor"
   | "watch"
   | "gui"
+  | "remote-panel"
+  | "permissions"
+  | "reviews"
+  | "sessions"
+  | "infra"
+  | "windows-route-recover"
+  | "app-route-freshness"
+  | "comms-doctor"
+  | "flow-doctor"
   | "unknown";
 
 export type CommandCode =
@@ -263,7 +294,25 @@ export type CommandCode =
   | "TAP_ADD_OK"
   | "TAP_REMOVE_OK"
   | "TAP_STATUS_OK"
+  | "TAP_STATUS_PROFILE_READY"
+  | "TAP_STATUS_PROFILE_DEGRADED"
+  | "TAP_STATUS_PROFILE_BLOCKED"
+  | "TAP_SETUP_OK"
+  | "TAP_SETUP_APPLY_NOT_IMPLEMENTED"
+  | "TAP_SETUP_APPLY_BLOCKED"
+  | "TAP_DOCTOR_SETUP_OK"
+  | "TAP_DOCTOR_SETUP_APPLY_NOT_IMPLEMENTED"
+  | "TAP_DOCTOR_SETUP_APPLY_BLOCKED"
   | "TAP_SERVE_OK"
+  | "TAP_PERMISSIONS_RESTORE_OK"
+  | "TAP_REVIEWS_RECOVERY_OK"
+  | "TAP_REVIEWS_REGISTER_OK"
+  | "TAP_SESSIONS_ARCHIVE_OK"
+  | "TAP_INFRA_STATUS_OK"
+  | "TAP_WINDOWS_ROUTE_RECOVER_OK"
+  | "TAP_APP_ROUTE_FRESHNESS_OK"
+  | "TAP_COMMS_DOCTOR_OK"
+  | "TAP_FLOW_DOCTOR_OK"
   // Benign no-op
   | "TAP_NO_OP"
   | "TAP_ALREADY_INITIALIZED"
@@ -275,6 +324,8 @@ export type CommandCode =
   | "TAP_CONFIG_INVALID"
   | "TAP_LOCAL_SERVER_MISSING"
   | "TAP_INVALID_ARGUMENT"
+  | "TAP_STATUS_PROFILE_REQUIRED"
+  | "TAP_STATUS_UNKNOWN_PROFILE"
   // Instance errors
   | "TAP_INSTANCE_NOT_FOUND"
   | "TAP_INSTANCE_AMBIGUOUS"
@@ -285,6 +336,11 @@ export type CommandCode =
   | "TAP_ROLLBACK_FAILED"
   | "TAP_BRIDGE_START_OK"
   | "TAP_BRIDGE_START_FAILED"
+  | "TAP_BRIDGE_RESTART_OK"
+  | "TAP_BRIDGE_RESTART_FAILED"
+  | "TAP_BRIDGE_RESTART_EXTERNAL"
+  | "TAP_BRIDGE_RESTART_BLOCKED"
+  | "TAP_BRIDGE_DRAIN_TIMEOUT"
   | "TAP_BRIDGE_STOP_OK"
   | "TAP_BRIDGE_STATUS_OK"
   | "TAP_BRIDGE_NOT_RUNNING"
@@ -296,6 +352,11 @@ export type CommandCode =
   | "TAP_COMMS_PUSH_OK"
   | "TAP_COMMS_PUSH_FAILED"
   | "TAP_COMMS_NOT_REPO"
+  | "TAP_READY_OK"
+  | "TAP_READY_APPLY_FAILED"
+  | "TAP_RECEIVER_OK"
+  | "TAP_PROJECTION_OK"
+  | "TAP_UPLINK_OK"
   | "TAP_SERVE_NO_SERVER"
   | "TAP_SERVE_BUN_REQUIRED"
   // Review (headless)
@@ -310,6 +371,8 @@ export type CommandCode =
   | "TAP_PORT_IN_USE"
   | "TAP_GUI_ERROR"
   // Internal
+  | "TAP_WINDOWS_ROUTE_RECOVER_BLOCKED"
+  | "TAP_APP_ROUTE_FRESHNESS_BLOCKED"
   | "TAP_INTERNAL_ERROR";
 
 export interface CommandResult<T = Record<string, unknown>> {

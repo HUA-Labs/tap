@@ -2,18 +2,38 @@
 
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
-import { normalizeTapPath } from "../../src/config/resolve.js";
 import {
-  BusyMode,
+  type BridgeRoutingSlot,
+  type BusyMode,
   DEFAULT_APP_SERVER_URL,
-  LogLevel,
-  Options,
-} from "./bridge-types.js";
+  type LogLevel,
+  type Options,
+} from "./bridge-types.ts";
 import {
   persistAgentName,
   resolveAgentId,
   resolveAgentName,
-} from "./bridge-routing.js";
+} from "./bridge-routing.ts";
+
+// Inlined from packages/tap-comms/src/utils.ts to keep source-direct execution
+// (node --experimental-strip-types) free of cross-package transitive imports.
+// Keep in sync if the canonical utility changes.
+function normalizeTapPath(
+  input: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return trimmed;
+  }
+  if (platform === "win32") {
+    const match = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
+    if (match) {
+      return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, "\\")}`;
+    }
+  }
+  return trimmed;
+}
 
 function ensureDir(target: string): string {
   if (!existsSync(target)) {
@@ -26,7 +46,7 @@ function printHelp(): void {
   console.log(`Codex App Server bridge
 
 Usage:
-  node --experimental-strip-types scripts/codex-app-server-bridge.ts [options]
+  node --experimental-strip-types scripts/codex/codex-app-server-bridge.ts [options]
 
 Options:
   --repo-root=<path>
@@ -300,14 +320,21 @@ export function resolveTapConfigPath(repoRoot: string, input: string): string {
 }
 
 export function resolveCommsDir(repoRoot: string, explicit?: string): string {
+  // Priority: --comms-dir flag > TAP_COMMS_DIR env > .tap-config file
   if (explicit) {
     return resolve(normalizeTapPath(explicit));
+  }
+
+  // M312: env override — works across all machines without .tap-config edits
+  const envCommsDir = process.env.TAP_COMMS_DIR?.trim();
+  if (envCommsDir) {
+    return resolveTapConfigPath(repoRoot, envCommsDir);
   }
 
   const tapConfigPath = join(repoRoot, ".tap-config");
   if (!existsSync(tapConfigPath)) {
     throw new Error(
-      "Unable to resolve comms directory. Pass --comms-dir explicitly.",
+      "Unable to resolve comms directory. Pass --comms-dir or set TAP_COMMS_DIR.",
     );
   }
 
@@ -315,7 +342,7 @@ export function resolveCommsDir(repoRoot: string, explicit?: string): string {
   const match = configText.match(/^TAP_COMMS_DIR="?(.*?)"?$/m);
   if (!match?.[1]) {
     throw new Error(
-      "Unable to resolve comms directory. Pass --comms-dir explicitly.",
+      "Unable to resolve comms directory. Pass --comms-dir or set TAP_COMMS_DIR.",
     );
   }
 
@@ -379,6 +406,20 @@ export function readGatewayTokenFile(tokenFile: string): string {
   return token;
 }
 
+export function normalizeRoutingSlotEnv(
+  value: string | null | undefined,
+): BridgeRoutingSlot | null {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "tower") return "tower";
+  if (normalized === "reviewer") return "reviewer";
+  const worktreeMatch = normalized.match(/^wt[-_]?(\d+)$/);
+  if (worktreeMatch) {
+    return `wt-${Number.parseInt(worktreeMatch[1], 10)}` as BridgeRoutingSlot;
+  }
+  return null;
+}
+
 export function buildOptions(argv: string[]): Options {
   const parsed = parseArgs(argv);
   const repoRoot = resolveRepoRoot(parsed.repoRoot);
@@ -400,6 +441,11 @@ export function buildOptions(argv: string[]): Options {
     parsed.appServerUrl?.trim() ||
     process.env.CODEX_APP_SERVER_URL ||
     DEFAULT_APP_SERVER_URL;
+  // M392: capture launcher-injected routing slot so suffixed agent ids
+  // still advertise the correct slot. Falls back to null when env is
+  // absent or malformed; buildBridgeAddress derives from agentId in that
+  // case.
+  const routingSlot = normalizeRoutingSlotEnv(process.env.TAP_ROUTING_SLOT);
 
   return {
     repoRoot,
@@ -424,5 +470,6 @@ export function buildOptions(argv: string[]): Options {
     logLevel: parsed.logLevel ?? "info",
     threadId: parsed.threadId?.trim() || null,
     ephemeral: parsed.ephemeral,
+    routingSlot,
   };
 }

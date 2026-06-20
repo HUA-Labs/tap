@@ -37,6 +37,15 @@ export interface AgentInfo {
   lastActivity: string | null;
   joinedAt: string | null;
   idleSeconds: number | null;
+  address: {
+    hostId: string | null;
+    clientId: string | null;
+    conversationId: string | null;
+    ownerClientId: string | null;
+    routingAddress: string;
+    slot: "tower" | "reviewer" | `wt-${number}` | null;
+    aliases: string[];
+  };
 }
 
 export interface BridgeInfo {
@@ -101,6 +110,53 @@ function parseIsoAgeSeconds(value: string | null | undefined): number | null {
   return Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
 }
 
+function resolveHostId(): string | null {
+  const explicitHostId = process.env.TAP_HOST_ID?.trim();
+  if (explicitHostId) return explicitHostId;
+
+  const computerName = process.env.COMPUTERNAME?.trim();
+  if (computerName) return computerName;
+
+  const hostName = process.env.HOSTNAME?.trim();
+  if (hostName) return hostName;
+
+  return null;
+}
+
+function deriveRoutingSlot(
+  instanceId: string | null,
+): "tower" | "reviewer" | `wt-${number}` | null {
+  if (!instanceId) return null;
+  const normalized = instanceId.replace(/-/g, "_").toLowerCase();
+  if (
+    normalized === "tower" ||
+    normalized === "claude_main" ||
+    normalized === "codex_main"
+  ) {
+    return "tower";
+  }
+  if (
+    normalized === "reviewer" ||
+    normalized === "claude_reviewer" ||
+    normalized === "codex_reviewer"
+  ) {
+    return "reviewer";
+  }
+  const worktreeMatch = normalized.match(/^(?:(?:claude|codex)_)?wt_?(\d+)$/);
+  if (!worktreeMatch) return null;
+  return `wt-${Number.parseInt(worktreeMatch[1], 10)}` as `wt-${number}`;
+}
+
+function uniqueAliases(values: Array<string | null | undefined>): string[] {
+  const aliases: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || aliases.includes(normalized)) continue;
+    aliases.push(normalized);
+  }
+  return aliases;
+}
+
 function resolveHeartbeatInstanceId(
   heartbeatId: string,
   displayName: string | null,
@@ -117,7 +173,7 @@ function resolveHeartbeatInstanceId(
 
   if (!displayName) return null;
   const matches = Object.values(state.instances).filter(
-    (inst) => inst?.installed && inst.agentName === displayName,
+    (inst) => inst?.installed && inst.defaultAgentName === displayName,
   );
   return matches.length === 1 ? matches[0].instanceId : null;
 }
@@ -141,6 +197,15 @@ function collectAgents(
         lastActivity?: string;
         status?: string;
         joinedAt?: string;
+        address?: {
+          hostId?: string | null;
+          clientId?: string | null;
+          conversationId?: string | null;
+          ownerClientId?: string | null;
+          routingAddress?: string;
+          slot?: "tower" | "reviewer" | `wt-${number}` | null;
+          aliases?: string[];
+        };
       }
     >;
 
@@ -154,6 +219,14 @@ function collectAgents(
         ? (bridges.find((candidate) => candidate.instanceId === instanceId) ??
           null)
         : null;
+      const slot = deriveRoutingSlot(instanceId);
+      const routingAddress =
+        info.address?.routingAddress ?? slot ?? instanceId ?? agentId;
+      const conversationId =
+        info.address?.conversationId ??
+        bridge?.lifecycle?.threadId ??
+        bridge?.lifecycle?.savedThreadId ??
+        null;
       const presence =
         bridge?.status === "stale" ||
         bridge?.lifecycle?.status === "bridge-stale"
@@ -173,6 +246,24 @@ function collectAgents(
         lastActivity,
         joinedAt: info.joinedAt ?? null,
         idleSeconds: parseIsoAgeSeconds(idleBasis),
+        address: {
+          hostId: info.address?.hostId ?? resolveHostId(),
+          clientId: info.address?.clientId ?? instanceId,
+          conversationId,
+          ownerClientId:
+            info.address?.ownerClientId ??
+            (conversationId && instanceId ? instanceId : null),
+          routingAddress,
+          slot: info.address?.slot ?? slot,
+          aliases: uniqueAliases([
+            ...(info.address?.aliases ?? []),
+            routingAddress,
+            slot,
+            instanceId,
+            agentId,
+            info.agent ?? null,
+          ]),
+        },
       };
     });
   } catch {

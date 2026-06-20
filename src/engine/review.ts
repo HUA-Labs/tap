@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import type {
   ReviewFinding,
   ReviewRound,
@@ -22,13 +23,22 @@ export type AgentRole = "reviewer" | "validator" | "long-running";
 
 export interface ReviewRequest {
   sourcePath: string;
+  sourceMtimeMs: number;
+  requestTimestampMs: number;
   sender: string;
+  /** Intake matching — display name from filename, used by scanInboxForReviews filter. */
   recipient: string;
   prNumber: number;
   branch?: string;
+  prTipSha?: string;
   generation: string;
   isReReview: boolean;
   round: number;
+  /** M325: Stable message ID from frontmatter — primary dedupe key when present. */
+  messageId?: string;
+  /** M325: Logical routing target from frontmatter `to` — used in dedupe key.
+   *  Separate from `recipient` (intake) to avoid breaking scan filters. */
+  dedupeRecipient?: string;
 }
 
 export interface ReviewSession {
@@ -123,6 +133,59 @@ export function extractPrNumber(text: string): number | null {
   return null;
 }
 
+// ── Inbox Frontmatter ─────────────────────────────────────────────
+
+/**
+ * Parse inbox message frontmatter once, returning all fields needed
+ * by detection and timestamp extraction. Single parse point avoids
+ * regex duplication across detectReviewRequest / extractRequestTimestampMs.
+ */
+interface InboxFrontmatter {
+  sent_at?: string;
+  message_id?: string;
+  to?: string;
+}
+
+interface PullRequestHead {
+  headRefName?: string;
+  headRefOid?: string;
+}
+
+interface PrHeadCacheEntry {
+  value: PullRequestHead | null;
+  checkedAtMs: number;
+}
+
+export type PrHeadCache = Map<string, PrHeadCacheEntry>;
+const PR_HEAD_CACHE_REVALIDATE_MS = 30_000;
+
+export function computePendingRequestKey(request: ReviewRequest): string {
+  return request.messageId
+    ? `message:${request.messageId}`
+    : `source:${request.sourcePath}`;
+}
+
+function parseInboxContentFrontmatter(
+  content: string,
+): InboxFrontmatter | null {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match?.[1]) return null;
+
+  const fields: Record<string, string> = {};
+  for (const line of match[1].split("\n")) {
+    const kv = line.match(/^(\w+):\s*(.+)$/);
+    if (kv?.[1] && kv[2]) fields[kv[1]] = kv[2].trim();
+  }
+
+  return {
+    sent_at: fields.sent_at,
+    message_id: fields.message_id,
+    to: fields.to,
+  };
+}
+
+// ── Request Detection ─────────────────────────────────────────────
+
 /**
  * Detect if a file represents a review request.
  * Returns a ReviewRequest if detected, null otherwise.
@@ -134,6 +197,7 @@ export function detectReviewRequest(
 ): ReviewRequest | null {
   const parsed = parseInboxFilename(filePath);
   if (!parsed) return null;
+  if (parsed.subject.startsWith("headless-dispatch-")) return null;
 
   const fullText = `${parsed.subject} ${content}`;
 
@@ -147,15 +211,54 @@ export function detectReviewRequest(
   const prNumber = extractPrNumber(fullText);
   if (!prNumber) return null;
 
+  const sourceMtimeMs = fs.existsSync(filePath)
+    ? fs.statSync(filePath).mtimeMs
+    : 0;
+
+  // Parse frontmatter once — shared by timestamp extraction and M325 fields.
+  // Single parse point: no more independent regex per field.
+  const fm = parseInboxContentFrontmatter(content);
+
   return {
     sourcePath: filePath,
+    sourceMtimeMs,
+    requestTimestampMs: extractRequestTimestampMs(
+      parsed.date,
+      fm,
+      sourceMtimeMs,
+    ),
     sender: parsed.sender,
     recipient: parsed.recipient,
     prNumber,
     generation,
     isReReview,
     round: isReReview ? 2 : 1, // Will be adjusted by session tracking
+    messageId: fm?.message_id || undefined,
+    dedupeRecipient: fm?.to || undefined,
   };
+}
+
+function extractRequestTimestampMs(
+  inboxDate: string,
+  fm: InboxFrontmatter | null,
+  fallbackMtimeMs: number,
+): number {
+  if (fm?.sent_at) {
+    const sentAtMs = new Date(fm.sent_at).getTime();
+    if (Number.isFinite(sentAtMs) && sentAtMs > 0) return sentAtMs;
+  }
+
+  const dateMatch = inboxDate.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch;
+    return Date.UTC(
+      Number.parseInt(year, 10),
+      Number.parseInt(month, 10) - 1,
+      Number.parseInt(day, 10),
+    );
+  }
+
+  return fallbackMtimeMs;
 }
 
 // ── Review Prompt ──────────────────────────────────────────────────
@@ -353,13 +456,13 @@ export function parseReviewOutput(
 // ── Review File Path ───────────────────────────────────────────────
 
 export function reviewFilePath(
-  commsDir: string,
+  repoRoot: string,
   generation: string,
   prNumber: number,
   agentName: string,
 ): string {
   return path.join(
-    commsDir,
+    repoRoot,
     "reviews",
     generation,
     `review-PR${prNumber}-${agentName}.md`,
@@ -374,12 +477,12 @@ export function reviewFilePath(
  */
 export function isStaleReviewRequest(
   request: ReviewRequest,
-  commsDir: string,
+  repoRoot: string,
   agentName: string,
 ): boolean {
   // 1. Check if review file exists and is newer than request
   const revPath = reviewFilePath(
-    commsDir,
+    repoRoot,
     request.generation,
     request.prNumber,
     agentName,
@@ -393,19 +496,106 @@ export function isStaleReviewRequest(
   return false;
 }
 
+function resolvePrHead(
+  repoRoot: string,
+  request: ReviewRequest,
+  cache: PrHeadCache,
+): PullRequestHead | null {
+  const cacheKey = request.messageId
+    ? `message:${request.messageId}`
+    : `source:${request.sourcePath}:mtime:${request.sourceMtimeMs}`;
+
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAtMs < PR_HEAD_CACHE_REVALIDATE_MS) {
+    return cached.value;
+  }
+
+  let result: PullRequestHead | null = null;
+  try {
+    const command = spawnSync(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(request.prNumber),
+        "--json",
+        "headRefName,headRefOid",
+      ],
+      { cwd: repoRoot, encoding: "utf-8", timeout: 10_000 },
+    );
+
+    if (command.status === 0 && command.stdout.trim()) {
+      const parsed = JSON.parse(command.stdout) as PullRequestHead;
+      result = {
+        headRefName: parsed.headRefName,
+        headRefOid: parsed.headRefOid,
+      };
+    }
+  } catch {
+    result = null;
+  }
+
+  cache.set(cacheKey, {
+    value: result,
+    checkedAtMs: Date.now(),
+  });
+  return result;
+}
+
 // ── Processed Marker ───────────────────────────────────────────────
 
-export function computeRequestMarkerId(filePath: string): string {
-  const stat = fs.statSync(filePath);
-  const input = `${filePath}|${stat.mtimeMs}`;
+export function computeRequestMarkerId(request: ReviewRequest): string {
+  const recipient = request.dedupeRecipient || request.recipient;
+
+  // M338: PR tip is the logical review unit. Keep same-tip requests deduped
+  // even when towers resend with a new message_id, but allow re-review once
+  // the PR head changes.
+  if (request.prTipSha) {
+    return crypto
+      .createHash("sha1")
+      .update(
+        `pr:${request.prNumber}:tip:${request.prTipSha}:recipient:${recipient}`,
+      )
+      .digest("hex");
+  }
+
+  // M325: Use message_id as primary dedupe key when available — stable across
+  // file renames, relay copies, and sync collisions.
+  // Include dedupeRecipient (logical routing target from frontmatter `to`)
+  // to distinguish per-endpoint delivery. Falls back to filename recipient.
+  if (request.messageId) {
+    return crypto
+      .createHash("sha1")
+      .update(`message_id:${request.messageId}:recipient:${recipient}`)
+      .digest("hex");
+  }
+
+  // Fallback: content-hash-based marker for messages without message_id
+  let contentHash = "";
+  try {
+    const content = fs.readFileSync(request.sourcePath, "utf-8");
+    contentHash = crypto.createHash("sha1").update(content).digest("hex");
+  } catch {
+    // Best-effort: deleted/moved request files should still produce a stable ID.
+  }
+
+  const input = JSON.stringify({
+    sourcePath: request.sourcePath,
+    sender: request.sender,
+    recipient: request.recipient,
+    prNumber: request.prNumber,
+    generation: request.generation,
+    isReReview: request.isReReview,
+    contentHash,
+  });
   return crypto.createHash("sha1").update(input).digest("hex");
 }
 
 export function isAlreadyProcessed(
   stateDir: string,
-  filePath: string,
+  request: ReviewRequest,
 ): boolean {
-  const markerId = computeRequestMarkerId(filePath);
+  const markerId = computeRequestMarkerId(request);
   return fs.existsSync(path.join(stateDir, "processed", `${markerId}.done`));
 }
 
@@ -413,7 +603,7 @@ export function unmarkProcessed(
   stateDir: string,
   request: ReviewRequest,
 ): void {
-  const markerId = computeRequestMarkerId(request.sourcePath);
+  const markerId = computeRequestMarkerId(request);
   const markerPath = path.join(stateDir, "processed", `${markerId}.done`);
   if (fs.existsSync(markerPath)) {
     fs.unlinkSync(markerPath);
@@ -424,12 +614,13 @@ export function markAsProcessed(
   stateDir: string,
   request: ReviewRequest,
 ): void {
-  const markerId = computeRequestMarkerId(request.sourcePath);
+  const markerId = computeRequestMarkerId(request);
   const markerDir = path.join(stateDir, "processed");
   fs.mkdirSync(markerDir, { recursive: true });
   const markerPath = path.join(markerDir, `${markerId}.done`);
   const payload = {
     prNumber: request.prNumber,
+    prTipSha: request.prTipSha ?? null,
     sourcePath: request.sourcePath,
     processedAt: new Date().toISOString(),
   };
@@ -507,15 +698,22 @@ export function getHeadlessEnvConfig(): {
 export function scanInboxForReviews(
   commsDir: string,
   stateDir: string,
+  repoRoot: string,
   generation: string,
   agentName: string,
   agentId: string = agentName,
+  activeSessionPrNumber?: number | null,
+  prHeadCache?: PrHeadCache,
 ): ReviewRequest[] {
   const inboxDir = path.join(commsDir, "inbox");
   if (!fs.existsSync(inboxDir)) return [];
 
   const files = fs.readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
   const requests: ReviewRequest[] = [];
+  const shouldResolvePrHead = fs.existsSync(path.join(repoRoot, ".git"));
+  const activePrHeadCache = shouldResolvePrHead
+    ? (prHeadCache ?? new Map<string, PrHeadCacheEntry>())
+    : null;
 
   for (const file of files) {
     const filePath = path.join(inboxDir, file);
@@ -537,11 +735,40 @@ export function scanInboxForReviews(
 
     if (isOwnMessageAddress(request.sender, agentId, agentName)) continue;
 
-    if (isStaleReviewRequest(request, commsDir, agentName)) continue;
-    if (isAlreadyProcessed(stateDir, filePath)) continue;
+    if (activePrHeadCache) {
+      const prHead = resolvePrHead(repoRoot, request, activePrHeadCache);
+      if (prHead?.headRefName) request.branch = prHead.headRefName;
+      if (prHead?.headRefOid) request.prTipSha = prHead.headRefOid;
+    }
+
+    const bypassProcessedCheck =
+      request.isReReview &&
+      activeSessionPrNumber != null &&
+      request.prNumber === activeSessionPrNumber;
+    const bypassStaleCheck =
+      request.isReReview &&
+      activeSessionPrNumber != null &&
+      request.prNumber === activeSessionPrNumber;
+    if (!bypassStaleCheck && isStaleReviewRequest(request, repoRoot, agentName))
+      continue;
+    if (!bypassProcessedCheck && isAlreadyProcessed(stateDir, request))
+      continue;
 
     requests.push(request);
   }
+
+  requests.sort((a, b) => {
+    if (a.isReReview !== b.isReReview) {
+      return Number(b.isReReview) - Number(a.isReReview);
+    }
+    if (a.requestTimestampMs !== b.requestTimestampMs) {
+      return b.requestTimestampMs - a.requestTimestampMs;
+    }
+    if (a.sourceMtimeMs !== b.sourceMtimeMs) {
+      return b.sourceMtimeMs - a.sourceMtimeMs;
+    }
+    return b.prNumber - a.prNumber;
+  });
 
   return requests;
 }

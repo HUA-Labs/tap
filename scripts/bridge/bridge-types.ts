@@ -2,6 +2,8 @@
 
 export type BusyMode = "wait" | "steer";
 export type LogLevel = "debug" | "info" | "warn" | "error";
+export type CandidateScope = "observe" | "suggest" | "drive";
+export type DispatchMode = "start" | "steer" | "drive" | "blocked" | "rejected";
 
 export interface Options {
   repoRoot: string;
@@ -24,12 +26,27 @@ export interface Options {
   logLevel: LogLevel;
   threadId: string | null;
   ephemeral: boolean;
+  /**
+   * M392: explicit routing slot derived from the base instance id by the
+   * bridge launcher and forwarded via `TAP_ROUTING_SLOT`. When set, takes
+   * precedence over `resolveBridgeRoutingSlot(agentId)` in
+   * `buildBridgeAddress` so suffixed agent ids (`codex-wt1-abc123`) still
+   * advertise the correct slot in heartbeats / presence.
+   */
+  routingSlot: BridgeRoutingSlot | null;
 }
 
 export interface InboxRoute {
   sender: string;
   recipient: string;
   subject: string;
+  messageId?: string | null;
+  fromAddress?: HeartbeatAddressRecord | null;
+  toAddress?: HeartbeatAddressRecord | null;
+  scope?: CandidateScope | null;
+  action?: string | null;
+  consentRef?: string | null;
+  validationError?: string | null;
 }
 
 export interface Candidate {
@@ -41,6 +58,12 @@ export interface Candidate {
   subject: string;
   body: string;
   mtimeMs: number;
+  messageId?: string | null;
+  fromAddress?: HeartbeatAddressRecord | null;
+  toAddress?: HeartbeatAddressRecord | null;
+  scope?: CandidateScope | null;
+  action?: string | null;
+  consentRef?: string | null;
 }
 
 export interface ThreadStateRecord {
@@ -76,6 +99,18 @@ export interface HeartbeatRecord {
   lastSuccessfulAppServerMethod: string | null;
   consecutiveFailureCount: number;
   busyMode: BusyMode;
+}
+
+export type BridgeRoutingSlot = "tower" | "reviewer" | `wt-${number}`;
+
+export interface HeartbeatAddressRecord {
+  hostId?: string | null;
+  clientId?: string | null;
+  conversationId?: string | null;
+  ownerClientId?: string | null;
+  routingAddress?: string;
+  slot?: BridgeRoutingSlot | null;
+  aliases?: string[];
 }
 
 export interface BridgeHealthState {
@@ -115,6 +150,8 @@ export interface HeartbeatStoreRecord {
   instanceId?: string | null;
   bridgePid?: number | null;
   connectHash?: string;
+  address?: HeartbeatAddressRecord;
+  receiveTransports?: string[];
 }
 
 export type HeartbeatStore = Record<string, HeartbeatStoreRecord>;

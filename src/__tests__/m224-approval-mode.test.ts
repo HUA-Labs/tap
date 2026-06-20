@@ -79,6 +79,7 @@ function makeState(
         {
           instanceId: id,
           runtime: "codex",
+          defaultAgentName: null,
           agentName: null,
           port: null,
           installed: true,
@@ -183,8 +184,7 @@ describe("M224: hash resync after approval_mode patch", () => {
     const instConfig = createInstanceConfig({
       instanceId: "codex-main",
       runtime: "codex",
-      agentName: null,
-      agentId: null,
+      defaultAgentName: null,
       port: null,
       appServerUrl: "http://localhost:4501",
       commsDir: path.join(tmpDir, "tap-comms"),
@@ -232,8 +232,7 @@ describe("M224: hash resync after approval_mode patch", () => {
     const instConfig = createInstanceConfig({
       instanceId: "codex-main",
       runtime: "codex",
-      agentName: null,
-      agentId: null,
+      defaultAgentName: null,
       port: null,
       appServerUrl: "http://localhost:4501",
       commsDir: path.join(tmpDir, "tap-comms"),

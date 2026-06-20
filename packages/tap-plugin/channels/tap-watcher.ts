@@ -4,25 +4,51 @@
 import { existsSync, readFileSync, statSync, watch, type FSWatcher } from "fs";
 import { join } from "path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { classifyReviewMetaForOperator } from "../../../src/reviews/stale-meta.js";
 import {
+  COMMS_DIR,
   SERVER_START,
   stripBom,
   parseFilename,
   parseFrontmatter,
+  stripFrontmatter,
   isForMe,
+  isInboxFrontmatterForCurrentAgent,
   getAgentId,
   getAgentName,
+  isOwnMessageAddressForCurrentAgent,
   getSourceKey,
   debug,
+  logError,
+  logInfo,
+  logWarn,
   type ChannelSource,
 } from "./tap-utils.js";
 import { dbInsertMessage } from "./tap-db.js";
-import { readFiles, resolveAgentLabel } from "./tap-io.js";
-import { isOwnMessageAddress } from "./tap-identity.js";
+import {
+  getJoinedAtMs,
+  hasDurableReadReceipt,
+  hasReadFileContent,
+  hasReadFileAtMtime,
+  hashTapFileContent,
+  hasDisplayedNotification,
+  isBridgeProcessed,
+  markDisplayedNotification,
+  readFiles,
+  resolveAgentLabel,
+} from "./tap-io.js";
+import { buildCompactInboxDisplay } from "./tap-display.js";
 
 // ── State ───────────────────────────────────────────────────────────────
 
-const notifiedFiles = new Set<string>();
+// Values:
+//   - PRE_JOIN_SKIP: permanent backlog suppression for artifacts older than joinedAt
+//   - number > 0: last emitted mtime (re-emit if file.mtime > recorded)
+// Bridge-processed and durable-receipt skips must be re-evaluated on each
+// mtime change, so they are not cached here.
+const PRE_JOIN_SKIP = -1;
+const notifiedFiles = new Map<string, number>();
+const notifiedFileContentHashes = new Map<string, string>();
 const recentEvents = new Map<string, number>();
 const inFlightFiles = new Set<string>();
 const DEBOUNCE_MS = 200;
@@ -31,6 +57,49 @@ const READY_RETRY_MS = 40;
 const WATCH_RESTART_MS = 1_000;
 const RECENT_EVENT_TTL_MS = 5 * 60 * 1000;
 const RECENT_EVENT_CLEANUP_MS = 60 * 1000;
+
+type RealtimeNotificationMeta = {
+  from: string;
+  to: string;
+  subject: string;
+  filename: string;
+  source: ChannelSource;
+};
+
+function buildGenericRealtimePayload(
+  content: string,
+  meta: RealtimeNotificationMeta,
+  display?: string,
+) {
+  const visibleContent = display ?? content;
+  return {
+    level: "info",
+    logger: "tap-comms",
+    data: {
+      kind: "tap-message",
+      content: visibleContent,
+      ...(display ? { rawContent: content } : {}),
+      meta,
+      ...(display ? { display } : {}),
+    },
+  } as const;
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test(value?.trim() ?? "");
+}
+
+function isFalsyEnv(value: string | undefined): boolean {
+  return /^(0|false|no|off)$/i.test(value?.trim() ?? "");
+}
+
+function shouldSendClaudeChannelNotification(): boolean {
+  const override = process.env.TAP_CLAUDE_CHANNEL_PUSH;
+  if (isTruthyEnv(override)) return true;
+  if (isFalsyEnv(override)) return false;
+
+  return Boolean(process.env.CLAUDE_PLUGIN_ROOT?.trim());
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,7 +149,7 @@ function isOwnMessageArtifact(
   const agentId = getAgentId();
   const agentName = getAgentName();
 
-  if (parsed && isOwnMessageAddress(parsed.from, agentId, agentName)) {
+  if (parsed && isOwnMessageAddressForCurrentAgent(parsed.from)) {
     return true;
   }
 
@@ -109,6 +178,7 @@ recentEventsCleanupTimer.unref?.();
 // @internal test helper
 export function resetWatcherStateForTests() {
   notifiedFiles.clear();
+  notifiedFileContentHashes.clear();
   recentEvents.clear();
   inFlightFiles.clear();
 }
@@ -118,12 +188,19 @@ export async function processWatchFile(
   dir: string,
   source: ChannelSource,
   filename: string,
-  mcp: Pick<Server, "notification">,
+  mcp: Pick<Server, "notification" | "sendLoggingMessage">,
 ): Promise<boolean> {
   const key = getSourceKey(source, filename);
-  // Skip if already notified (watcher), in-flight, or read via tap_list_unread
-  if (notifiedFiles.has(key) || inFlightFiles.has(key) || readFiles.has(key))
+  const permanentlySkipped = notifiedFiles.get(key) === PRE_JOIN_SKIP;
+  if (permanentlySkipped || inFlightFiles.has(key)) {
+    debug("channel relay skipped before read", {
+      source,
+      filename,
+      permanentlySkipped,
+      inFlight: inFlightFiles.has(key),
+    });
     return false;
+  }
 
   inFlightFiles.add(key);
 
@@ -131,41 +208,291 @@ export async function processWatchFile(
     const filepath = join(dir, filename);
     const file = await waitForFileReady(filepath);
     if (file === "stale") {
-      notifiedFiles.add(key);
+      debug("channel relay skipped for stale file", {
+        source,
+        filename,
+      });
       return false;
     }
-    if (!file) return false;
+    if (!file) {
+      logWarn("channel relay aborted: file not ready", {
+        source,
+        filename,
+      });
+      return false;
+    }
+    if (hasReadFileAtMtime(key, file.mtime)) {
+      debug("channel relay skipped: file already read at same or newer mtime", {
+        source,
+        filename,
+        mtime: file.mtime,
+        lastReadMtime: readFiles.get(key) ?? null,
+      });
+      return false;
+    }
+    if (hasReadFileContent(key, file.content)) {
+      debug("channel relay skipped: file content already read", {
+        source,
+        filename,
+        mtime: file.mtime,
+      });
+      return false;
+    }
+    const joinedAtMs = getJoinedAtMs();
+    if (joinedAtMs && file.mtime < joinedAtMs) {
+      notifiedFiles.set(key, PRE_JOIN_SKIP);
+      debug("channel relay skipped: pre-join artifact", {
+        source,
+        filename,
+        joinedAtMs,
+        mtime: file.mtime,
+      });
+      return false;
+    }
+    if (
+      hasDurableReadReceipt(filename, {
+        content: file.content,
+        fileMtimeMs: file.mtime,
+      })
+    ) {
+      debug("channel relay skipped: durable read receipt exists", {
+        source,
+        filename,
+      });
+      return false;
+    }
+    if (isBridgeProcessed(filepath, file.mtime)) {
+      debug("channel relay skipped: bridge already processed file", {
+        source,
+        filename,
+      });
+      return false;
+    }
+
+    const fileContentHash = hashTapFileContent(file.content);
+    const lastEmittedContentHash = notifiedFileContentHashes.get(key);
+    if (lastEmittedContentHash === fileContentHash) {
+      debug("channel relay skipped: file content already emitted", {
+        source,
+        filename,
+        mtime: file.mtime,
+      });
+      return false;
+    }
+    if (hasDisplayedNotification(source, filename, file.content)) {
+      debug("channel relay skipped: durable displayed notification exists", {
+        source,
+        filename,
+        mtime: file.mtime,
+      });
+      notifiedFiles.set(key, file.mtime);
+      notifiedFileContentHashes.set(key, fileContentHash);
+      return false;
+    }
+
+    // Re-emit dedup: skip when the last emitted mtime is not strictly older
+    // than the current file.mtime. If mtime advances but content is unchanged,
+    // the content-hash guard above suppresses duplicate live projection.
+    const lastEmittedMtime = notifiedFiles.get(key);
+    if (
+      lastEmittedMtime !== undefined &&
+      lastEmittedMtime !== PRE_JOIN_SKIP &&
+      file.mtime <= lastEmittedMtime
+    ) {
+      debug("channel relay skipped: mtime not advanced since last emit", {
+        source,
+        filename,
+        mtime: file.mtime,
+        lastEmittedMtime,
+      });
+      return false;
+    }
 
     // M204: Frontmatter-first routing (matches tap-io getUnreadItems)
     let parsed: ReturnType<typeof parseFilename> = null;
+    let inboxFrontmatter: ReturnType<typeof parseFrontmatter> = null;
     if (source === "inbox") {
-      const fm = parseFrontmatter(file.content);
-      parsed = fm
-        ? { from: fm.from, to: fm.to, subject: fm.subject }
+      inboxFrontmatter = parseFrontmatter(file.content);
+      parsed = inboxFrontmatter
+        ? {
+            from: inboxFrontmatter.from,
+            to: inboxFrontmatter.to,
+            subject: inboxFrontmatter.subject,
+          }
         : parseFilename(filename);
     } else {
       parsed = parseFilename(filename);
     }
 
-    if (source === "inbox" && (!parsed || !isForMe(parsed.to))) return false;
-    if (isOwnMessageArtifact(source, filename, parsed)) return false;
+    if (
+      source === "inbox" &&
+      (!parsed ||
+        (inboxFrontmatter
+          ? !isInboxFrontmatterForCurrentAgent(inboxFrontmatter)
+          : !isForMe(parsed.to)))
+    ) {
+      debug("channel relay skipped: inbox item not addressed to agent", {
+        source,
+        filename,
+        parsedTo: parsed?.to ?? null,
+      });
+      return false;
+    }
+    if (isOwnMessageArtifact(source, filename, parsed)) {
+      debug("channel relay skipped: self-authored artifact", {
+        source,
+        filename,
+      });
+      return false;
+    }
+
+    if (source === "inbox" && parsed) {
+      const reviewMeta = classifyReviewMetaForOperator({
+        root: COMMS_DIR,
+        filename,
+        subject: parsed.subject,
+        body: inboxFrontmatter ? stripFrontmatter(file.content) : file.content,
+        sourceRelativePath: `inbox/${filename}`,
+      });
+      if (reviewMeta.status === "collapsed-stale-meta") {
+        debug("channel relay skipped: collapsed stale review-meta", {
+          source,
+          filename,
+          prNumber: reviewMeta.prNumber,
+          terminalEvidencePath: reviewMeta.terminalEvidencePath,
+        });
+        notifiedFiles.set(key, file.mtime);
+        notifiedFileContentHashes.set(key, fileContentHash);
+        return false;
+      }
+    }
 
     const rawFrom = parsed?.from || source;
     const rawTo = parsed?.to || "all";
-    const from = parsed ? resolveAgentLabel(parsed.from) : source;
-    const to = parsed ? resolveAgentLabel(parsed.to) : "all";
+    const from = parsed
+      ? resolveAgentLabel(inboxFrontmatter?.from_name ?? parsed.from)
+      : source;
+    const to = parsed
+      ? resolveAgentLabel(inboxFrontmatter?.to_name ?? parsed.to)
+      : "all";
     const subject = parsed?.subject || filename.replace(/\.md$/, "");
+    const content =
+      source === "inbox" && inboxFrontmatter
+        ? stripFrontmatter(file.content)
+        : file.content;
+    const display =
+      source === "inbox"
+        ? buildCompactInboxDisplay({
+            agentName: to,
+            sender: from,
+            recipient: to,
+            subject,
+            filename,
+            body: content,
+            replyTo: rawFrom,
+            fromAddress: inboxFrontmatter?.from_address,
+          })
+        : undefined;
+    const meta: RealtimeNotificationMeta = {
+      from,
+      to,
+      subject,
+      filename,
+      source,
+    };
 
     dbInsertMessage(filename, rawFrom, rawTo, subject, source, Date.now());
-    debug(`sending notification [${source}]: from=${from} to=${to}`);
-    await mcp.notification({
-      method: "notifications/claude/channel",
-      params: {
-        content: file.content,
-        meta: { from, to, subject, filename, source },
-      },
+    const genericPayload = buildGenericRealtimePayload(content, meta, display);
+    const visibleContent = display ?? content;
+    const sendClaudeChannel = shouldSendClaudeChannelNotification();
+    const primaryMethod = sendClaudeChannel
+      ? "notifications/claude/channel"
+      : "notifications/message";
+
+    logInfo("channel relay attempt", {
+      source,
+      filename,
+      from,
+      to,
+      subject,
+      method: primaryMethod,
+      genericFallbackMethod: sendClaudeChannel ? "notifications/message" : null,
     });
-    notifiedFiles.add(key);
+
+    try {
+      if (sendClaudeChannel) {
+        await mcp.notification({
+          method: primaryMethod,
+          params: {
+            content: visibleContent,
+            meta,
+            ...(display ? { display } : {}),
+            ...(display
+              ? {
+                  rawContent: content,
+                  debugEnvelope: { meta },
+                }
+              : {}),
+          },
+        });
+      } else {
+        await mcp.sendLoggingMessage(genericPayload);
+      }
+    } catch (error) {
+      logError("channel relay failed", {
+        source,
+        filename,
+        from,
+        to,
+        subject,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    if (sendClaudeChannel) {
+      try {
+        await mcp.sendLoggingMessage(genericPayload);
+        logInfo("generic realtime notification sent", {
+          source,
+          filename,
+          from,
+          to,
+          subject,
+          method: "notifications/message",
+        });
+      } catch (error) {
+        logWarn("generic realtime notification failed", {
+          source,
+          filename,
+          subject,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    logInfo("channel relay sent", {
+      source,
+      filename,
+      from,
+      to,
+      subject,
+      primaryMethod,
+      genericMethod: sendClaudeChannel ? "notifications/message" : null,
+    });
+    // Record the emitted mtime so that a later mtime bump (git pull + touch,
+    // rsync over, edited-in-place file) is re-evaluated without duplicating
+    // unchanged append-only inbox content.
+    notifiedFiles.set(key, file.mtime);
+    notifiedFileContentHashes.set(key, fileContentHash);
+    try {
+      markDisplayedNotification(source, filename, file.content);
+    } catch (error) {
+      logWarn("channel relay displayed marker write failed", {
+        source,
+        filename,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return true;
   } finally {
     inFlightFiles.delete(key);
@@ -182,11 +509,18 @@ export function watchDir(dir: string, source: ChannelSource, mcp: Server) {
 
   const scheduleRestart = (reason: string) => {
     if (restartTimer) return;
-    debug(`fs.watch restart scheduled [${source}]: ${reason}`);
+    logWarn("fs.watch restart scheduled", {
+      source,
+      reason,
+      dir,
+    });
     restartTimer = setTimeout(() => {
       restartTimer = null;
       if (!existsSync(dir)) {
-        debug(`fs.watch restart skipped [${source}]: missing ${dir}`);
+        logWarn("fs.watch restart skipped: directory missing", {
+          source,
+          dir,
+        });
         return;
       }
       startWatcher();
@@ -210,7 +544,12 @@ export function watchDir(dir: string, source: ChannelSource, mcp: Server) {
 
     try {
       watcher = watch(dir, (eventType, filename) => {
-        debug(`fs.watch [${source}]: ${eventType} ${filename}`);
+        debug("fs.watch event", {
+          source,
+          dir,
+          eventType,
+          filename: filename ?? null,
+        });
         if (!filename || !filename.endsWith(".md")) return;
 
         const key = getSourceKey(source, filename);
@@ -228,22 +567,32 @@ export function watchDir(dir: string, source: ChannelSource, mcp: Server) {
       });
 
       watcher.on("error", (error) => {
-        debug(
-          `fs.watch error [${source}]: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        logError("fs.watch error", {
+          source,
+          dir,
+          error: error instanceof Error ? error.message : String(error),
+        });
         scheduleRestart("error");
       });
 
       watcher.on("close", () => {
-        debug(`fs.watch closed [${source}]`);
+        logWarn("fs.watch closed", {
+          source,
+          dir,
+        });
         scheduleRestart("close");
       });
 
-      debug(`fs.watch active [${source}]: ${dir}`);
+      logInfo("fs.watch active", {
+        source,
+        dir,
+      });
     } catch (error) {
-      debug(
-        `fs.watch start failed [${source}]: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      logError("fs.watch start failed", {
+        source,
+        dir,
+        error: error instanceof Error ? error.message : String(error),
+      });
       scheduleRestart("start-failed");
     }
   };

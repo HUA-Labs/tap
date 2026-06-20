@@ -10,7 +10,7 @@ function makeInstance(
   },
 ): InstanceState {
   return {
-    agentName: null,
+    defaultAgentName: null,
     port: null,
     installed: true,
     configPath: "",
@@ -59,33 +59,34 @@ describe("agent-name persistence logic", () => {
     const instance = state.instances["codex"];
 
     // Simulate: --agent-name provided
-    const agentName = "빛";
-    const updated = { ...instance, agentName };
+    const defaultAgentName = "빛";
+    const updated = { ...instance, defaultAgentName };
 
-    expect(updated.agentName).toBe("빛");
+    expect(updated.defaultAgentName).toBe("빛");
   });
 
   it("uses stored agent-name when flag is not provided", () => {
     const state = makeState({
-      codex: { runtime: "codex", agentName: "빛" },
+      codex: { runtime: "codex", defaultAgentName: "빛" },
     });
     const instance = state.instances["codex"];
 
     // Simulate: no --agent-name flag, fall back to stored
-    const resolvedAgentName = instance.agentName ?? undefined;
+    const resolvedAgentName = instance.defaultAgentName ?? undefined;
 
     expect(resolvedAgentName).toBe("빛");
   });
 
   it("flag overrides stored agent-name", () => {
     const state = makeState({
-      codex: { runtime: "codex", agentName: "빛" },
+      codex: { runtime: "codex", defaultAgentName: "빛" },
     });
     const instance = state.instances["codex"];
 
     // Simulate: --agent-name flag takes precedence
     const flagName = "달";
-    const resolvedAgentName = flagName ?? instance.agentName ?? undefined;
+    const resolvedAgentName =
+      flagName ?? instance.defaultAgentName ?? undefined;
 
     expect(resolvedAgentName).toBe("달");
   });
@@ -94,7 +95,7 @@ describe("agent-name persistence logic", () => {
     const state = makeState({ codex: { runtime: "codex" } });
     const instance = state.instances["codex"];
 
-    const resolvedAgentName = instance.agentName ?? undefined;
+    const resolvedAgentName = instance.defaultAgentName ?? undefined;
 
     expect(resolvedAgentName).toBeUndefined();
   });

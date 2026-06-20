@@ -46,6 +46,33 @@ const logWarnMock = vi.fn();
 const buildManagedMcpServerSpecMock = vi.fn();
 const probeCommandMock = vi.fn();
 
+function getMockStatePath(repoRoot: string): string {
+  return path.join(repoRoot, ".tap-comms", "state.json");
+}
+
+function createInitialStateMock(
+  commsDir: string,
+  repoRoot: string,
+  packageVersion: string,
+): TapState {
+  const timestamp = new Date().toISOString();
+  return {
+    schemaVersion: 3,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    commsDir,
+    repoRoot,
+    packageVersion,
+    instances: {},
+  };
+}
+
+function writeSetupState(repoRoot: string, state: TapState): void {
+  const statePath = getMockStatePath(repoRoot);
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
 vi.mock("node:os", async () => {
   const actual = await vi.importActual<typeof import("node:os")>("node:os");
   return {
@@ -56,8 +83,10 @@ vi.mock("node:os", async () => {
 
 vi.mock("../state.js", () => ({
   loadState: loadStateMock,
-  saveState: saveStateMock,
+  saveState: writeSetupState,
   getInstalledInstances: getInstalledInstancesMock,
+  createInitialState: createInitialStateMock,
+  getStatePath: getMockStatePath,
 }));
 
 vi.mock("../engine/bridge.js", () => ({
@@ -80,10 +109,17 @@ vi.mock("../config/index.js", async () => {
   };
 });
 
-vi.mock("../adapters/common.js", () => ({
-  buildManagedMcpServerSpec: buildManagedMcpServerSpecMock,
-  probeCommand: probeCommandMock,
-}));
+vi.mock("../adapters/common.js", async () => {
+  const actual = await vi.importActual<typeof import("../adapters/common.js")>(
+    "../adapters/common.js",
+  );
+  return {
+    ...actual,
+    buildManagedMcpServerSpec: buildManagedMcpServerSpecMock,
+    getCodexConfigPath: () => path.join(mockHomeDir(), ".codex", "config.toml"),
+    probeCommand: probeCommandMock,
+  };
+});
 
 vi.mock("../utils.js", async () => {
   const actual =
@@ -103,6 +139,54 @@ vi.mock("../version.js", () => ({
 }));
 
 const { doctorCommand } = await import("../commands/doctor.js");
+
+function writeProfilePack(filePath: string, options: { valid?: boolean } = {}) {
+  const valid = options.valid !== false;
+  fs.writeFileSync(
+    filePath,
+    `${JSON.stringify(
+      {
+        schemaVersion: "tap-profile-pack.v0",
+        packId: "doctor-pack",
+        label: "Doctor Profile Pack",
+        profiles: [
+          {
+            id: "doctor-cli",
+            label: "Doctor CLI",
+            runtimeSurface: "codex-cli",
+            agent: "doctor",
+            paths: {
+              repoRoot: "/doctor/repo",
+              commsDir: "/doctor/comms",
+            },
+            capabilities: {
+              ready: true,
+              status: true,
+              apply: false,
+            },
+            commands: {
+              ready: {
+                shell: valid
+                  ? "echo doctor-profile-pack-command-sentinel"
+                  : "echo invalid-doctor-profile-pack-command-sentinel",
+                risk: "read-only",
+                reviewRequired: valid,
+                defaultEnabled: false,
+              },
+            },
+            ready: {
+              surface: "codex-cli",
+              commandRef: "ready",
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
 
 describe("doctorCommand", () => {
   const createdDirs: string[] = [];
@@ -170,7 +254,7 @@ describe("doctorCommand", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
-          agentName: "온",
+          defaultAgentName: "온",
           port: 4510,
           installed: true,
           configPath: path.join(repoRoot, ".codex", "config.toml"),
@@ -198,12 +282,14 @@ describe("doctorCommand", () => {
       runtimeStateDir,
       appServer: null,
     });
-    resolveConfigMock.mockReturnValue({
-      config: {
-        commsDir,
-        stateDir,
-      },
-    });
+    resolveConfigMock.mockImplementation(
+      (overrides: { commsDir?: string; stateDir?: string } = {}) => ({
+        config: {
+          commsDir: overrides.commsDir ?? commsDir,
+          stateDir: overrides.stateDir ?? stateDir,
+        },
+      }),
+    );
     findRepoRootMock.mockReturnValue(repoRoot);
     probeCommandMock.mockImplementation((candidates: string[]) => ({
       command: candidates[0] ?? null,
@@ -247,6 +333,511 @@ describe("doctorCommand", () => {
       ].join("\n"),
       "utf8",
     );
+  });
+
+  it("documents setup profile-pack validation in doctor help", async () => {
+    const result = await doctorCommand(["--help"]);
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain("--profile-pack <path>");
+    expect(result.message).toContain(
+      "Validate a profile pack as data-only setup context",
+    );
+    expect(result.message).toContain(
+      "tap doctor --setup --profile codex-cli --profile-pack ./tap-profile-pack.json --json",
+    );
+  });
+
+  it("returns a read-only setup doctor report without running infrastructure checks", async () => {
+    const result = await doctorCommand([
+      "--setup",
+      "--profile",
+      "codex-cli",
+      "--comms-dir",
+      path.join(repoRoot, "custom-comms"),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      profile: "codex-cli",
+      dryRun: true,
+      apply: false,
+      status: "partial",
+      environment: {
+        repoRoot: repoRoot.replace(/\\/g, "/"),
+        commsDir: path.join(repoRoot, "custom-comms").replace(/\\/g, "/"),
+      },
+      setupReport: {
+        command: "setup",
+        profile: "codex-cli",
+      },
+      residual: expect.arrayContaining([
+        expect.objectContaining({
+          id: "delivery-doctor-separated",
+          severity: "info",
+        }),
+      ]),
+    });
+    const phases = (
+      result.data as {
+        phases: Array<{
+          id: string;
+          actions: Array<{
+            risk: string;
+            defaultEnabled: boolean;
+            appliesWith: string;
+          }>;
+        }>;
+      }
+    ).phases;
+    expect(phases.map((phase) => phase.id)).not.toContain("delivery");
+    expect(phases.map((phase) => phase.id)).not.toContain("doctor");
+    const processActions = phases
+      .flatMap((phase) => phase.actions)
+      .filter((action) =>
+        ["process-start", "process-restart"].includes(action.risk),
+      );
+    expect(processActions).not.toEqual([]);
+    expect(processActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          defaultEnabled: false,
+          appliesWith: "future-explicit-flag",
+        }),
+      ]),
+    );
+    const nextActions = (result.data as { nextActions: Array<{ id: string }> })
+      .nextActions;
+    expect(nextActions.map((action) => action.id)).not.toContain(
+      "run-setup-doctor",
+    );
+    expect(fs.existsSync(path.join(repoRoot, "custom-comms"))).toBe(false);
+  });
+
+  it("accepts equals-form setup doctor flags", async () => {
+    const customCommsDir = path.join(repoRoot, "custom-comms-equals");
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=codex-cli",
+      `--comms-dir=${customCommsDir}`,
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      profile: "codex-cli",
+      environment: {
+        commsDir: customCommsDir.replace(/\\/g, "/"),
+      },
+    });
+    expect(fs.existsSync(customCommsDir)).toBe(false);
+  });
+
+  it("passes profile-pack validation through setup doctor reports", async () => {
+    const profilePackPath = path.join(repoRoot, "doctor-profile-pack.json");
+    writeProfilePack(profilePackPath);
+
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=codex-cli",
+      `--profile-pack=${profilePackPath}`,
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      environment: {
+        profilePack: {
+          summary: expect.objectContaining({
+            path: profilePackPath.replace(/\\/g, "/"),
+            status: "valid",
+            packId: "doctor-pack",
+            profileIds: ["doctor-cli"],
+          }),
+        },
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          id: "config",
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "profile-pack-validation",
+              status: "pass",
+            }),
+          ]),
+        }),
+      ]),
+      setupReport: {
+        applyPlan: expect.objectContaining({
+          guards: expect.arrayContaining([
+            expect.objectContaining({
+              id: "guard-profile-pack-validation",
+              status: "pass",
+            }),
+          ]),
+        }),
+      },
+    });
+    expect(JSON.stringify(result.data)).not.toContain(
+      "doctor-profile-pack-command-sentinel",
+    );
+  });
+
+  it("includes codex-app route health in setup doctor without delivery phases", async () => {
+    const presencePath = path.join(commsDir, "presence", "app-agent.json");
+    fs.mkdirSync(path.dirname(presencePath), { recursive: true });
+    fs.writeFileSync(
+      presencePath,
+      JSON.stringify(
+        {
+          timestamp: new Date().toISOString(),
+          receiveTransports: ["consent-drive"],
+          address: {
+            conversationId: "thread-live",
+            ownerClientId: "owner-live",
+          },
+          consentDriveStatus: "ready",
+          health: { status: "ready" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=codex-app",
+      "--agent=app-agent",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      profile: "codex-app",
+      environment: {
+        agent: "app-agent",
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          id: "runtime",
+          status: "pass",
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "codex-app-route-tuple",
+              status: "pass",
+            }),
+            expect.objectContaining({
+              id: "codex-app-runtime-health",
+              status: "pass",
+            }),
+          ]),
+        }),
+      ]),
+    });
+    const phaseIds = (
+      result.data as { phases: Array<{ id: string }> }
+    ).phases.map((phase) => phase.id);
+    expect(phaseIds).not.toContain("delivery");
+    expect(phaseIds).not.toContain("doctor");
+  });
+
+  it("includes claude-channel readiness in setup doctor without delivery phases", async () => {
+    const presencePath = path.join(commsDir, "presence", "claude-agent.json");
+    fs.mkdirSync(path.dirname(presencePath), { recursive: true });
+    fs.writeFileSync(
+      presencePath,
+      JSON.stringify(
+        {
+          timestamp: new Date().toISOString(),
+          receiveTransports: ["mcp-channel"],
+          health: { status: "ready" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=claude-channel",
+      "--agent=claude-agent",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      profile: "claude-channel",
+      environment: {
+        agent: "claude-agent",
+      },
+      phases: expect.arrayContaining([
+        expect.objectContaining({
+          id: "runtime",
+          status: "pass",
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              id: "claude-channel-transport",
+              status: "pass",
+            }),
+            expect.objectContaining({
+              id: "claude-channel-runtime-health",
+              status: "pass",
+            }),
+            expect.objectContaining({
+              id: "claude-channel-durable-evidence",
+              status: "pass",
+            }),
+          ]),
+        }),
+      ]),
+    });
+    const phaseIds = (
+      result.data as { phases: Array<{ id: string }> }
+    ).phases.map((phase) => phase.id);
+    expect(phaseIds).not.toContain("delivery");
+    expect(phaseIds).not.toContain("doctor");
+  });
+
+  it("reuses setup apply plan from setup doctor apply without running the infrastructure fixer", async () => {
+    const result = await doctorCommand([
+      "--setup",
+      "--profile",
+      "codex-cli",
+      "--apply",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(saveStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      dryRun: false,
+      apply: true,
+      status: "partial",
+      residual: expect.arrayContaining([
+        expect.objectContaining({
+          id: "doctor-setup-apply-reuses-setup-plan",
+          severity: "info",
+          message:
+            "`tap doctor --setup --apply` reuses the same guarded SetupApplyPlan as `tap setup --apply`; it does not run the broad infrastructure fixer.",
+        }),
+      ]),
+      setupReport: {
+        applyPlan: expect.objectContaining({
+          status: "applied",
+          mutations: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "json-file-create",
+              targetPath: path.join(repoRoot, ".mcp.json").replace(/\\/g, "/"),
+              status: "applied",
+            }),
+          ]),
+        }),
+      },
+    });
+    expect(fs.existsSync(path.join(repoRoot, ".mcp.json"))).toBe(true);
+    expect(fs.statSync(stateDir).isDirectory()).toBe(true);
+  });
+
+  it("reuses setup apply plan from setup doctor --fix without running infrastructure repair", async () => {
+    const result = await doctorCommand([
+      "--setup",
+      "--profile",
+      "codex-cli",
+      "--fix",
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_OK");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(saveStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      apply: true,
+      status: "partial",
+      setupReport: {
+        applyPlan: expect.objectContaining({
+          status: "applied",
+        }),
+      },
+    });
+    expect(fs.existsSync(path.join(repoRoot, ".mcp.json"))).toBe(true);
+  });
+
+  it("fails closed from setup doctor apply when setup apply guards block", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, ".mcp.json"),
+      JSON.stringify(
+        {
+          mcpServers: {
+            tap: {
+              command: "node",
+              args: ["custom-server.js"],
+              env: { USER_VALUE: "do-not-print" },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=codex-cli",
+      "--apply",
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_APPLY_BLOCKED");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(saveStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      apply: true,
+      status: "blocked",
+      setupReport: {
+        applyPlan: expect.objectContaining({
+          status: "blocked",
+          guards: expect.arrayContaining([
+            expect.objectContaining({
+              status: "fail",
+              message:
+                "repo .mcp.json mcpServers.tap exists but is not recognizably tap-managed",
+            }),
+          ]),
+        }),
+      },
+    });
+    expect(fs.existsSync(stateDir)).toBe(false);
+    expect(fs.readFileSync(path.join(repoRoot, ".mcp.json"), "utf8")).toContain(
+      "custom-server.js",
+    );
+  });
+
+  it("fails closed from setup doctor apply when profile pack validation fails", async () => {
+    const profilePackPath = path.join(repoRoot, "invalid-doctor-pack.json");
+    writeProfilePack(profilePackPath, { valid: false });
+
+    const result = await doctorCommand([
+      "--setup",
+      "--profile=codex-cli",
+      "--apply",
+      `--profile-pack=${profilePackPath}`,
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("TAP_DOCTOR_SETUP_APPLY_BLOCKED");
+    expect(loadStateMock).not.toHaveBeenCalled();
+    expect(saveStateMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({
+      command: "doctor",
+      mode: "setup",
+      status: "blocked",
+      setupReport: {
+        applyPlan: expect.objectContaining({
+          status: "blocked",
+          guards: expect.arrayContaining([
+            expect.objectContaining({
+              id: "guard-profile-pack-validation",
+              status: "fail",
+            }),
+          ]),
+          mutations: expect.arrayContaining([
+            expect.objectContaining({
+              id: "validate-profile-pack",
+              status: "blocked",
+            }),
+            expect.objectContaining({
+              kind: "directory-create",
+              targetPath: stateDir.replace(/\\/g, "/"),
+              status: "blocked",
+            }),
+            expect.objectContaining({
+              kind: "json-file-create",
+              targetPath: path.join(repoRoot, ".mcp.json").replace(/\\/g, "/"),
+              status: "blocked",
+            }),
+          ]),
+        }),
+      },
+    });
+    const nextActions = (
+      result.data as {
+        nextActions: Array<{
+          id: string;
+          command?: string;
+          file?: string;
+          reason?: string;
+        }>;
+      }
+    ).nextActions;
+    expect(nextActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "review-blocked-setup",
+          command: undefined,
+          reason:
+            "setup is fail-closed; repair the blocker or choose an explicit manual path before rerunning apply",
+        }),
+        expect.objectContaining({
+          id: "repair-profile-pack-data",
+          command: `tap setup --profile codex-cli --profile-pack ${profilePackPath} --json`,
+          file: profilePackPath,
+        }),
+        expect.objectContaining({
+          id: "run-comms-doctor",
+          command: "tap comms-doctor --json",
+        }),
+      ]),
+    );
+    expect(nextActions.map((action) => action.id)).not.toContain(
+      "run-setup-doctor",
+    );
+    expect(nextActions.map((action) => action.id)).not.toContain(
+      "apply-reviewed-setup",
+    );
+    expect(fs.existsSync(stateDir)).toBe(false);
+    expect(fs.existsSync(path.join(repoRoot, ".mcp.json"))).toBe(false);
+    expect(JSON.stringify(result.data)).not.toContain(
+      "invalid-doctor-profile-pack-command-sentinel",
+    );
+  });
+
+  it("rejects unknown setup doctor profiles before infrastructure checks", async () => {
+    const result = await doctorCommand([
+      "--setup",
+      "--profile",
+      "sumback-yoon",
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("TAP_INVALID_ARGUMENT");
+    expect(result.message).toContain("Unknown setup profile");
+    expect(loadStateMock).not.toHaveBeenCalled();
   });
 
   it("warns about legacy tap-comms MCP key in .mcp.json", async () => {
@@ -401,6 +992,55 @@ describe("doctorCommand", () => {
     );
   });
 
+  it("treats default-name live dispatch evidence as a running bridge", async () => {
+    isBridgeRunningMock.mockReturnValue(false);
+    loadBridgeStateMock.mockReturnValue(null);
+    const state = loadStateMock() as TapState;
+    if (state?.instances.codex) {
+      state.instances.codex.defaultAgentName = "윤";
+    }
+    fs.writeFileSync(
+      path.join(commsDir, "heartbeats.json"),
+      JSON.stringify(
+        {
+          윤: {
+            id: "윤",
+            agent: "윤",
+            timestamp: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            status: "active",
+            source: "bridge-dispatch",
+            instanceId: "윤",
+            bridgePid: process.pid,
+            connectHash: "instance:윤",
+            address: {
+              routingAddress: "윤",
+              aliases: ["윤"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const result = await doctorCommand([]);
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toEqual(
+      expect.objectContaining({
+        checks: expect.arrayContaining([
+          expect.objectContaining({
+            name: "bridge: codex",
+            status: "pass",
+            message: expect.stringContaining("Live dispatch PID"),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("warns when saved and active thread state diverge from the repo cwd", async () => {
     fs.writeFileSync(
       path.join(runtimeStateDir, "heartbeat.json"),
@@ -464,7 +1104,7 @@ describe("doctorCommand", () => {
       message?: string;
     }>;
     const codexCheck = checks.find(
-      (c) => c.name === "MCP config (~/.codex/config.toml)",
+      (c) => c.name === "MCP config (Codex config.toml)",
     );
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("warn");
@@ -507,7 +1147,7 @@ describe("doctorCommand", () => {
       message?: string;
     }>;
     const codexCheck = checks.find(
-      (c) => c.name === "MCP config (~/.codex/config.toml)",
+      (c) => c.name === "MCP config (Codex config.toml)",
     );
     expect(codexCheck?.status).toBe("warn");
     expect(codexCheck?.message).toContain("tap MCP command drift (node)");
@@ -547,7 +1187,7 @@ describe("doctorCommand", () => {
       message?: string;
     }>;
     const codexCheck = checks.find(
-      (c) => c.name === "MCP config (~/.codex/config.toml)",
+      (c) => c.name === "MCP config (Codex config.toml)",
     );
     expect(codexCheck?.status).toBe("warn");
     expect(codexCheck?.message).toContain('legacy "tap-comms" key present');
@@ -639,7 +1279,7 @@ describe("doctorCommand", () => {
       message?: string;
     }>;
     const codexCheck = checks.find(
-      (c) => c.name === "MCP config (~/.codex/config.toml)",
+      (c) => c.name === "MCP config (Codex config.toml)",
     );
     expect(codexCheck?.status).toBe("warn");
     expect(codexCheck?.message).toContain(
@@ -662,7 +1302,7 @@ describe("doctorCommand", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
-          agentName: "온",
+          defaultAgentName: "온",
           port: 4510,
           installed: true,
           configPath: path.join(repoRoot, ".codex", "config.toml"),
@@ -679,7 +1319,7 @@ describe("doctorCommand", () => {
         "codex-reviewer": {
           instanceId: "codex-reviewer",
           runtime: "codex",
-          agentName: "덱",
+          defaultAgentName: "덱",
           port: 4511,
           installed: true,
           configPath: path.join(repoRoot, ".codex", "config.toml"),

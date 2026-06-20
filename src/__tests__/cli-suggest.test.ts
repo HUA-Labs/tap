@@ -29,6 +29,7 @@ describe("suggestCommand", () => {
     expect(suggestCommand("statsu")).toBe("status");
     expect(suggestCommand("brdige")).toBe("bridge");
     expect(suggestCommand("docotr")).toBe("doctor");
+    expect(suggestCommand("raedy")).toBe("ready");
     expect(suggestCommand("init-worktree")).toBe("init-worktree");
   });
 

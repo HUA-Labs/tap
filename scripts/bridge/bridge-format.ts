@@ -2,9 +2,14 @@
 
 import { writeFileSync } from "fs";
 import { join } from "path";
-import { Candidate, HeartbeatStore } from "./bridge-types.js";
-import { resolveAddressLabel } from "./bridge-routing.js";
-import { getProcessedMarkerPath } from "./bridge-candidates.js";
+import type {
+  Candidate,
+  DispatchMode,
+  HeartbeatStore,
+} from "./bridge-types.ts";
+import { buildTapMessagePrompt } from "../../src/routing/tap-message-prompt.ts";
+import { resolveAddressLabel } from "./bridge-routing.ts";
+import { getProcessedMarkerPath } from "./bridge-candidates.ts";
 
 export function buildUserInput(
   candidate: Candidate,
@@ -17,33 +22,25 @@ export function buildUserInput(
     heartbeats,
   );
   const subject = candidate.subject || "(none)";
-  const body = candidate.body.trim();
-
-  return [
-    `Tap-comms inbox message for ${agentName}.`,
-    `Sender: ${sender}`,
-    `Recipient: ${recipient}`,
-    `Subject: ${subject}`,
-    `File: ${candidate.fileName}`,
-    "",
-    "Message body:",
-    body || "(empty)",
-    "",
-    "---",
-    "Instructions: Read the message above and respond using the tap_reply tool.",
-    `Use tap_reply(to: "${candidate.sender || "unknown"}", subject: "<your-subject>", content: "<your-response>") to send your response.`,
-    "If the message is a review request, perform the review and reply with your findings.",
-    "If the message is informational, acknowledge briefly via tap_reply.",
-    "Do NOT respond with plain text only — you MUST use the tap_reply tool.",
-  ].join("\n");
+  return buildTapMessagePrompt({
+    agentName,
+    sender,
+    recipient,
+    subject,
+    fileName: candidate.fileName,
+    body: candidate.body,
+    replyTo: candidate.sender || "unknown",
+    returnAddress: candidate.fromAddress,
+  });
 }
 
 export function writeProcessedMarker(
   stateDir: string,
   candidate: Candidate,
-  dispatchMode: "start" | "steer",
+  dispatchMode: DispatchMode,
   threadId: string | null,
   turnId: string | null,
+  blockedReason?: string | null,
 ): void {
   const payload = {
     requestFile: candidate.filePath,
@@ -54,6 +51,7 @@ export function writeProcessedMarker(
     dispatchMode,
     threadId,
     turnId,
+    blockedReason: blockedReason?.trim() || null,
     markedAt: new Date().toISOString(),
   };
   writeFileSync(
@@ -66,9 +64,10 @@ export function writeProcessedMarker(
 export function writeLastDispatch(
   stateDir: string,
   candidate: Candidate,
-  dispatchMode: "start" | "steer",
+  dispatchMode: DispatchMode,
   threadId: string | null,
   turnId: string | null,
+  blockedReason?: string | null,
 ): void {
   const payload = {
     requestFile: candidate.filePath,
@@ -80,6 +79,7 @@ export function writeLastDispatch(
     dispatchMode,
     threadId,
     turnId,
+    blockedReason: blockedReason?.trim() || null,
     dispatchedAt: new Date().toISOString(),
   };
   writeFileSync(

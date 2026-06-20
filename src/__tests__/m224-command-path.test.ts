@@ -95,7 +95,9 @@ vi.mock("../engine/bridge.js", () => ({
 vi.mock("../commands/bridge-helpers.js", () => ({
   formatAppServerState: vi.fn().mockReturnValue(""),
   redactProtectedUrl: vi.fn((url: string) => url),
-  resolveRecoveredAgentName: vi.fn((_id: string, storedName?: string) => storedName),
+  resolveRecoveredAgentName: vi.fn(
+    (_id: string, storedName?: string) => storedName,
+  ),
 }));
 
 vi.mock("../commands/bridge-heartbeat.js", () => ({
@@ -131,7 +133,7 @@ function makeState(overrides: Record<string, unknown> = {}): TapState {
       codex: {
         instanceId: "codex",
         runtime: "codex",
-        agentName: "담",
+        defaultAgentName: "담",
         port: 4510,
         installed: true,
         configPath: "D:/repo/.codex/config.toml",
@@ -306,6 +308,25 @@ describe("M224 command-path coverage", () => {
     );
     expect(checkAppServerHealthMock).toHaveBeenCalledWith(
       "ws://127.0.0.1:4510",
+    );
+  });
+
+  it("forwards --unsandboxed to managed codex app-server launch", async () => {
+    loadStateMock.mockReturnValue(makeState());
+    inferRestartModeMock.mockReturnValue({
+      manageAppServer: true,
+      noAuth: false,
+      appServerUnsandboxed: true,
+    });
+
+    const result = await bridgeCommand(["start", "codex", "--unsandboxed"]);
+
+    expect(result.ok).toBe(true);
+    expect(startBridgeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appServerUnsandboxed: true,
+        manageAppServer: true,
+      }),
     );
   });
 });

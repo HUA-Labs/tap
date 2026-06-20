@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { resolveConfig } from "../config/index.js";
+import { ensureCodexWorktreeCoverage } from "../permissions.js";
 import {
   findRepoRoot,
   parseArgs,
@@ -37,6 +38,7 @@ interface WorktreeOptions {
   base: string;
   mission?: string;
   commsDir: string;
+  stateDir: string;
   skipInstall: boolean;
   repoRoot: string;
 }
@@ -122,7 +124,7 @@ function findBun(): string | null {
 // ─── Step 1: Create worktree ───────────────────────────────────
 
 function step1CreateWorktree(opts: WorktreeOptions): boolean {
-  log("Step 1/9: Creating worktree...");
+  log("Step 1/10: Creating worktree...");
 
   if (fs.existsSync(opts.worktreePath)) {
     logWarn(`Directory already exists: ${opts.worktreePath}`);
@@ -165,7 +167,7 @@ function step1CreateWorktree(opts: WorktreeOptions): boolean {
 // ─── Step 2: Merge origin/main ─────────────────────────────────
 
 function step2MergeMain(opts: WorktreeOptions, warnings: string[]): void {
-  log("Step 2/9: Merging origin/main...");
+  log("Step 2/10: Merging origin/main...");
 
   try {
     run("git fetch origin main", { cwd: opts.worktreePath });
@@ -195,45 +197,60 @@ function step2MergeMain(opts: WorktreeOptions, warnings: string[]): void {
   }
 }
 
-// ─── Step 3: Copy permissions ──────────────────────────────────
+// ─── Step 3: Verify tracked Claude settings ────────────────────
 
-function step3CopyPermissions(opts: WorktreeOptions, warnings: string[]): void {
-  log("Step 3/9: Copying permissions...");
+function step3VerifyClaudeSettings(
+  opts: WorktreeOptions,
+  warnings: string[],
+): void {
+  log("Step 3/10: Verifying tracked Claude settings...");
 
-  const srcSettings = path.join(
-    opts.repoRoot,
-    ".claude",
-    "settings.local.json",
-  );
-  const destDir = path.join(opts.worktreePath, ".claude");
-  const destSettings = path.join(destDir, "settings.local.json");
-
-  if (!fs.existsSync(srcSettings)) {
+  const settingsPath = path.join(opts.worktreePath, ".claude", "settings.json");
+  if (!fs.existsSync(settingsPath)) {
     warn(
       warnings,
-      "No .claude/settings.local.json found in main repo. Skipping.",
+      "No .claude/settings.json found in worktree after merge. Check branch drift or sync main.",
     );
     return;
   }
 
-  fs.mkdirSync(destDir, { recursive: true });
-  fs.copyFileSync(srcSettings, destSettings);
-  logSuccess("Copied settings.local.json");
+  logSuccess("settings.json present (tracked team SSOT).");
+}
+
+// ─── Step 4: Patch Codex permissions ───────────────────────────
+
+function step4PatchCodexPermissions(
+  opts: WorktreeOptions,
+  warnings: string[],
+): void {
+  log("Step 4/10: Updating Codex worktree coverage...");
 
   try {
-    run("git update-index --skip-worktree .claude/settings.local.json", {
-      cwd: opts.worktreePath,
-    });
-    logSuccess("Marked skip-worktree");
-  } catch {
-    warn(warnings, "Could not set skip-worktree. File may show as modified.");
+    const result = ensureCodexWorktreeCoverage(
+      opts.repoRoot,
+      opts.commsDir,
+      opts.worktreePath,
+      { stateDir: opts.stateDir },
+    );
+    warnings.push(...result.warnings);
+    logSuccess(`Codex worktree coverage updated (${result.mode} mode).`);
+    if (result.syncedRuntimeConfigs > 0) {
+      logSuccess(
+        `Resynced runtime config hash for ${result.syncedRuntimeConfigs} Codex instance(s).`,
+      );
+    }
+  } catch (err) {
+    warn(
+      warnings,
+      `Could not update Codex worktree coverage: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
-// ─── Step 4: Generate .mcp.json ────────────────────────────────
+// ─── Step 5: Generate .mcp.json ────────────────────────────────
 
 function step4GenerateMcpJson(opts: WorktreeOptions, warnings: string[]): void {
-  log("Step 4/9: Generating .mcp.json...");
+  log("Step 5/10: Generating .mcp.json...");
 
   const bunPath = findBun();
   if (!bunPath) {
@@ -280,11 +297,11 @@ function step4GenerateMcpJson(opts: WorktreeOptions, warnings: string[]): void {
 
 function step5Install(opts: WorktreeOptions, warnings: string[]): void {
   if (opts.skipInstall) {
-    log("Step 5/9: Skipping pnpm install (--skip-install).");
+    log("Step 6/10: Skipping pnpm install (--skip-install).");
     return;
   }
 
-  log("Step 5/9: Installing dependencies...");
+  log("Step 6/10: Installing dependencies...");
 
   try {
     run("pnpm install --prefer-offline", { cwd: opts.worktreePath });
@@ -304,11 +321,11 @@ function step6BuildEslintPlugin(
   warnings: string[],
 ): void {
   if (opts.skipInstall) {
-    log("Step 6/9: Skipping eslint plugin build (--skip-install).");
+    log("Step 7/10: Skipping eslint plugin build (--skip-install).");
     return;
   }
 
-  log("Step 6/9: Building eslint-plugin-i18n...");
+  log("Step 7/10: Building eslint-plugin-i18n...");
 
   try {
     run("pnpm build --filter @hua-labs/eslint-plugin-i18n", {
@@ -323,7 +340,7 @@ function step6BuildEslintPlugin(
 // ─── Step 7: Verify comms ──────────────────────────────────────
 
 function step7VerifyComms(opts: WorktreeOptions, warnings: string[]): void {
-  log("Step 7/9: Verifying comms directory...");
+  log("Step 8/10: Verifying comms directory...");
 
   if (!fs.existsSync(opts.commsDir)) {
     warn(warnings, `Comms directory not found: ${opts.commsDir}`);
@@ -346,7 +363,7 @@ function step7VerifyComms(opts: WorktreeOptions, warnings: string[]): void {
 // ─── Step 8: Verify bun ────────────────────────────────────────
 
 function step8VerifyBun(warnings: string[]): void {
-  log("Step 8/9: Verifying bun...");
+  log("Step 9/10: Verifying bun...");
 
   const bunPath = findBun();
   if (!bunPath) {
@@ -434,6 +451,7 @@ export async function initWorktreeCommand(
     base,
     mission,
     commsDir: path.resolve(commsDir),
+    stateDir: path.resolve(config.stateDir),
     skipInstall,
     repoRoot,
   };
@@ -462,7 +480,8 @@ export async function initWorktreeCommand(
   }
 
   step2MergeMain(opts, warnings);
-  step3CopyPermissions(opts, warnings);
+  step3VerifyClaudeSettings(opts, warnings);
+  step4PatchCodexPermissions(opts, warnings);
   step4GenerateMcpJson(opts, warnings);
   step5Install(opts, warnings);
   step6BuildEslintPlugin(opts, warnings);

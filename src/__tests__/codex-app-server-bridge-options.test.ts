@@ -17,7 +17,7 @@ import {
   STALE_TURN_MS,
   stripBridgeFrontmatter,
   threadCwdMatches,
-} from "../../scripts/codex-app-server-bridge.js";
+} from "../../scripts/codex/codex-app-server-bridge.js";
 
 describe("codex app-server bridge option building", () => {
   const createdDirs: string[] = [];
@@ -51,6 +51,26 @@ describe("codex app-server bridge option building", () => {
 
     expect(options.commsDir).toBe(path.resolve(repoRoot, "../hua-comms"));
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "normalizes explicit MSYS commsDir values to Windows paths",
+    () => {
+      const repoRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "bridge-options-msys-"),
+      );
+      createdDirs.push(repoRoot);
+
+      const options = buildOptions([
+        "--repo-root",
+        repoRoot,
+        "--comms-dir",
+        "/c/hua-comms",
+        "--run-once",
+      ]);
+
+      expect(options.commsDir).toBe("C:\\hua-comms");
+    },
+  );
 
   it("keeps explicit agent-name ahead of stale agent-name.txt", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-agent-"));
@@ -255,8 +275,35 @@ describe("codex app-server bridge option building", () => {
       heartbeats,
     );
 
-    expect(prompt).toContain("Sender: 초 [claude]");
-    expect(prompt).toContain("Recipient: 덱 [codex]");
+    expect(prompt).toContain("From: 초 [claude]");
+    expect(prompt).toContain("To: 덱 [codex]");
+  });
+
+  it("formats bridge prompts with structured return routes", () => {
+    const prompt = buildUserInput(
+      {
+        markerId: "m1",
+        filePath: "/tmp/20260602-unknown-jun.md",
+        fileName: "20260602-unknown-jun.md",
+        sender: "unknown",
+        recipient: "준",
+        subject: "structured",
+        body: "body",
+        mtimeMs: Date.now(),
+        fromAddress: {
+          routingAddress: "codex",
+          hostId: "/home/devin/hua-comms",
+        },
+      },
+      "준",
+      {},
+    );
+
+    expect(prompt).toContain("Reply available: codex");
+    expect(prompt).not.toContain("Use tap_reply");
+    expect(prompt).not.toContain("Return route: routingAddress=codex");
+    expect(prompt).not.toContain("No valid structured return route");
+    expect(prompt).not.toContain('tap_reply(to: "unknown"');
   });
 
   it("refreshes the bridge agent name from heartbeat id entries", () => {
@@ -282,7 +329,16 @@ describe("codex app-server bridge option building", () => {
     expect(threadCwdMatches("C:/hua-wt-review", "C:/hua-wt-1")).toBe(false);
   });
 
-  it("chooses the active loaded thread whose cwd matches the repo", () => {
+  it("matches thread cwd when the saved path uses a Windows namespace prefix", () => {
+    expect(
+      threadCwdMatches("D:/HUA/hua-platform", "\\\\?\\D:\\HUA\\hua-platform"),
+    ).toBe(true);
+    expect(
+      threadCwdMatches("\\\\?\\D:\\HUA\\hua-platform", "D:\\HUA\\hua-platform"),
+    ).toBe(true);
+  });
+
+  it("prefers a reusable idle loaded thread over an active match", () => {
     const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
       {
         id: "thread-mismatch",
@@ -307,7 +363,69 @@ describe("codex app-server bridge option building", () => {
       },
     ]);
 
-    expect(chosen?.id).toBe("thread-match-active");
+    expect(chosen?.id).toBe("thread-match-idle");
+  });
+
+  it("ignores matching active loaded threads when auto-attaching by cwd", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-match-active",
+        cwd: "c:\\hua-wt-review",
+        updatedAt: 100,
+        statusType: "active",
+        thread: { id: "thread-match-active", cwd: "c:\\hua-wt-review" },
+      },
+    ]);
+
+    expect(chosen).toBeNull();
+  });
+
+  it("ignores loaded threads whose thread status is waiting on approval", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-waiting-approval",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 100,
+        statusType: "idle",
+        thread: {
+          id: "thread-waiting-approval",
+          cwd: "C:/hua-wt-review",
+          status: {
+            activeFlags: ["waitingOnApproval"],
+          },
+          turns: [],
+        },
+      },
+    ]);
+
+    expect(chosen).toBeNull();
+  });
+
+  it("ignores loaded threads whose in-progress turn is waiting on approval", () => {
+    const chosen = chooseLoadedThreadForCwd("C:/hua-wt-review", [
+      {
+        id: "thread-turn-waiting-approval",
+        cwd: "C:/hua-wt-review",
+        updatedAt: 100,
+        statusType: "idle",
+        thread: {
+          id: "thread-turn-waiting-approval",
+          cwd: "C:/hua-wt-review",
+          status: {
+            activeFlags: [],
+          },
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              activeFlags: ["waitingOnApproval"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(chosen).toBeNull();
   });
 
   it("ignores matching loaded threads that are notLoaded", () => {
@@ -566,6 +684,34 @@ describe("codex app-server bridge option building", () => {
     const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
 
     expect(resolved).toBeNull();
+  });
+
+  it("normalizes Windows namespace-prefixed cwd values from saved thread state", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-thread-"));
+    createdDirs.push(repoRoot);
+    const stateDir = path.join(repoRoot, ".tmp", "codex-app-server-bridge");
+    fs.mkdirSync(stateDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(stateDir, "thread.json"),
+      JSON.stringify({
+        threadId: "thread-current",
+        updatedAt: "2026-03-27T23:40:38.698Z",
+        appServerUrl: "ws://127.0.0.1:4501",
+        ephemeral: false,
+        cwd: "\\\\?\\D:\\HUA\\hua-platform",
+      }),
+      "utf8",
+    );
+
+    const resolved = loadResumableThreadState(stateDir, "ws://127.0.0.1:4501");
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        threadId: "thread-current",
+        cwd: "D:\\HUA\\hua-platform",
+      }),
+    );
   });
 
   // ── M202: Frontmatter strip regression ──────────────────────────────

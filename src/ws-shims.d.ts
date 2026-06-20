@@ -21,6 +21,7 @@ declare module "ws" {
       event: "message",
       listener: (data: RawData, isBinary: boolean) => void,
     ): this;
+    on(event: "open", listener: () => void): this;
     on(event: "close", listener: (code: number, reason: Buffer) => void): this;
     on(event: "error", listener: (error: Error) => void): this;
   }

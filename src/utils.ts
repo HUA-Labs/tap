@@ -8,7 +8,7 @@ import type {
   RuntimeName,
   TapState,
 } from "./types.js";
-import { resolveConfig, normalizeTapPath } from "./config/index.js";
+import { resolveConfig } from "./config/resolve.js";
 
 const VALID_RUNTIMES: RuntimeName[] = ["claude", "codex", "gemini"];
 
@@ -18,6 +18,26 @@ export function isValidRuntime(name: string): name is RuntimeName {
 
 export function detectPlatform(): Platform {
   return process.platform as Platform;
+}
+
+export function normalizeTapPath(
+  input: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const trimmed = input.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (/^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return trimmed;
+  }
+
+  // Git Bash/MSYS drive roots need canonical Windows paths before resolve().
+  if (platform === "win32") {
+    const match = trimmed.match(/^\/([A-Za-z])\/(.*)$/);
+    if (match) {
+      return `${match[1].toUpperCase()}:\\${match[2].replace(/\//g, "\\")}`;
+    }
+  }
+
+  return trimmed;
 }
 
 /** Shared flag: suppress duplicate no-git warnings across modules. */
@@ -100,6 +120,16 @@ export function parseArgs(args: string[]): {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith("--")) {
+      // M392 P2-1: support `--key=value` in addition to `--key value`. Split
+      // on the first `=` so values containing `=` (URLs, query strings) round-
+      // trip intact. Empty value (`--key=`) yields an empty string flag.
+      const eqIdx = arg.indexOf("=");
+      if (eqIdx > 2) {
+        const key = arg.slice(2, eqIdx);
+        const value = arg.slice(eqIdx + 1);
+        flags[key] = value;
+        continue;
+      }
       const key = arg.slice(2);
       const next = args[i + 1];
       if (next && !next.startsWith("--")) {

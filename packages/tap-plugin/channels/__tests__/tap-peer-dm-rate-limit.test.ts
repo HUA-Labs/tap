@@ -4,6 +4,7 @@ import {
   checkPeerDmRateLimit,
   getPeerDmRateLimitKey,
   isPeerDmRateLimitExempt,
+  PEER_DM_MAX_MESSAGES,
   recordPeerDm,
   type PeerDmHistoryStore,
 } from "../tap-peer-dm-rate-limit.ts";
@@ -13,7 +14,7 @@ function createStore(): PeerDmHistoryStore {
 }
 
 describe("tap peer DM rate limit", () => {
-  it("allows up to three peer DMs and blocks the fourth within five minutes", () => {
+  it("allows up to PEER_DM_MAX_MESSAGES peer DMs and blocks the next within five minutes", () => {
     const store = createStore();
     const route = {
       fromId: "codex-reviewer",
@@ -23,15 +24,21 @@ describe("tap peer DM rate limit", () => {
     };
     const baseMs = Date.parse("2026-04-02T12:00:00.000Z");
 
-    recordPeerDm(store, route, baseMs);
-    recordPeerDm(store, route, baseMs + 60_000);
-    recordPeerDm(store, route, baseMs + 120_000);
+    for (let i = 0; i < PEER_DM_MAX_MESSAGES; i += 1) {
+      recordPeerDm(store, route, baseMs + i * 1_000);
+    }
 
-    expect(checkPeerDmRateLimit(store, route, baseMs + 180_000)).toMatchObject({
+    expect(
+      checkPeerDmRateLimit(
+        store,
+        route,
+        baseMs + PEER_DM_MAX_MESSAGES * 1_000,
+      ),
+    ).toMatchObject({
       allowed: false,
       exempt: false,
       target: "codex_worker",
-      recentCount: 3,
+      recentCount: PEER_DM_MAX_MESSAGES,
     });
   });
 

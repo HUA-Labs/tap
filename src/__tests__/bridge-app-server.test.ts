@@ -64,16 +64,21 @@ function newTapSpawnWrappers(): string[] {
 }
 
 function createAuthGatewayScriptStub(repoRoot: string): void {
+  // resolvePackagedBridgeAsset (src/engine/bridge-codex-command.ts)
+  // looks for `codex-app-server-auth-gateway.mjs` under
+  // `<repoRoot>/packages/tap-comms/dist/bridges/` (ancestor scan) or the
+  // packaged node_modules layout. The test tmpDir is isolated from the
+  // real repo, so seed the dist path with a matching .mjs stub.
   const gatewayDir = path.join(
     repoRoot,
     "packages",
     "tap-comms",
-    "src",
+    "dist",
     "bridges",
   );
   fs.mkdirSync(gatewayDir, { recursive: true });
   fs.writeFileSync(
-    path.join(gatewayDir, "codex-app-server-auth-gateway.ts"),
+    path.join(gatewayDir, "codex-app-server-auth-gateway.mjs"),
     "// stub for tests",
     "utf-8",
   );
@@ -179,7 +184,11 @@ describe("ensureCodexAppServer", () => {
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
-      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      runtimeStateDir: path.join(
+        tmpDir,
+        ".tmp",
+        "codex-app-server-bridge-codex",
+      ),
       commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "win32",
@@ -198,7 +207,11 @@ describe("ensureCodexAppServer", () => {
       ensureCodexAppServer({
         instanceId: "codex",
         stateDir: tmpDir,
-        runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+        runtimeStateDir: path.join(
+          tmpDir,
+          ".tmp",
+          "codex-app-server-bridge-codex",
+        ),
         commsDir: path.join(tmpDir, "comms"),
         repoRoot: tmpDir,
         platform: "win32",
@@ -226,7 +239,11 @@ describe("ensureCodexAppServer", () => {
     const appServer = await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
-      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      runtimeStateDir: path.join(
+        tmpDir,
+        ".tmp",
+        "codex-app-server-bridge-codex",
+      ),
       commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "linux",
@@ -239,8 +256,7 @@ describe("ensureCodexAppServer", () => {
       "nohup",
       expect.arrayContaining([
         process.execPath,
-        "--experimental-strip-types",
-        expect.stringContaining("codex-app-server-auth-gateway.ts"),
+        expect.stringContaining("codex-app-server-auth-gateway.mjs"),
       ]),
       expect.objectContaining({
         cwd: tmpDir,
@@ -321,7 +337,11 @@ describe("ensureCodexAppServer", () => {
       ensureCodexAppServer({
         instanceId: "codex",
         stateDir: tmpDir,
-        runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+        runtimeStateDir: path.join(
+          tmpDir,
+          ".tmp",
+          "codex-app-server-bridge-codex",
+        ),
         commsDir: path.join(tmpDir, "comms"),
         repoRoot: tmpDir,
         platform: "win32",
@@ -479,7 +499,11 @@ describe("ensureCodexAppServer", () => {
     await ensureCodexAppServer({
       instanceId: "codex",
       stateDir: tmpDir,
-      runtimeStateDir: path.join(tmpDir, ".tmp", "codex-app-server-bridge-codex"),
+      runtimeStateDir: path.join(
+        tmpDir,
+        ".tmp",
+        "codex-app-server-bridge-codex",
+      ),
       commsDir: path.join(tmpDir, "comms"),
       repoRoot: tmpDir,
       platform: "win32",

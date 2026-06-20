@@ -40,7 +40,7 @@ function makeState(overrides?: Partial<TapState>): TapState {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tap-identity-test-"));
   stateDir = path.join(tmpDir, ".tap-comms");
-  commsDir = path.join(tmpDir, "comms");
+  commsDir = path.join(tmpDir, "tap-comms");
   fs.mkdirSync(path.join(stateDir, "pids"), { recursive: true });
   fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
   fs.mkdirSync(path.join(commsDir, "inbox"), { recursive: true });
@@ -73,7 +73,7 @@ describe("resolveAgentName", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
-          agentName: "빛",
+          defaultAgentName: "빛",
           port: null,
           installed: true,
           configPath: "",
@@ -116,7 +116,7 @@ describe("resolveAgentName", () => {
         codex: {
           instanceId: "codex",
           runtime: "codex",
-          agentName: "빛",
+          defaultAgentName: "빛",
           port: null,
           installed: true,
           configPath: "",
@@ -154,6 +154,121 @@ describe("resolveAgentName", () => {
     } finally {
       if (origAgent) process.env.TAP_AGENT_NAME = origAgent;
       else delete process.env.TAP_AGENT_NAME;
+    }
+  });
+
+  it("recovers name from heartbeats when recent (< 24h)", () => {
+    // Create heartbeats.json in commsDir (not stateDir — regression for .tap-comms path bug)
+    const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+    fs.writeFileSync(
+      heartbeatsPath,
+      JSON.stringify({
+        codex: {
+          agent: "률",
+          timestamp: new Date().toISOString(),
+          lastActivity: new Date().toISOString(),
+          instanceId: "codex",
+        },
+      }),
+    );
+
+    const origAgent = process.env.TAP_AGENT_NAME;
+    const origCodex = process.env.CODEX_TAP_AGENT_NAME;
+    const origCommsDir = process.env.TAP_COMMS_DIR;
+    delete process.env.TAP_AGENT_NAME;
+    delete process.env.CODEX_TAP_AGENT_NAME;
+    delete process.env.TAP_COMMS_DIR;
+
+    try {
+      const result = resolveAgentName("codex", undefined, {
+        repoRoot: tmpDir,
+        stateDir,
+      });
+      expect(result).toBe("률"); // heartbeat name wins over state.json
+    } finally {
+      if (origAgent) process.env.TAP_AGENT_NAME = origAgent;
+      else delete process.env.TAP_AGENT_NAME;
+      if (origCodex) process.env.CODEX_TAP_AGENT_NAME = origCodex;
+      else delete process.env.CODEX_TAP_AGENT_NAME;
+      if (origCommsDir) process.env.TAP_COMMS_DIR = origCommsDir;
+      else delete process.env.TAP_COMMS_DIR;
+    }
+  });
+
+  it("ignores stale heartbeats (> 24h)", () => {
+    const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+    fs.writeFileSync(
+      heartbeatsPath,
+      JSON.stringify({
+        codex: {
+          agent: "률",
+          timestamp: staleDate,
+          lastActivity: staleDate,
+          instanceId: "codex",
+        },
+      }),
+    );
+
+    const origAgent = process.env.TAP_AGENT_NAME;
+    const origCodex = process.env.CODEX_TAP_AGENT_NAME;
+    const origCommsDir = process.env.TAP_COMMS_DIR;
+    delete process.env.TAP_AGENT_NAME;
+    delete process.env.CODEX_TAP_AGENT_NAME;
+    delete process.env.TAP_COMMS_DIR;
+
+    try {
+      const result = resolveAgentName("codex", undefined, {
+        repoRoot: tmpDir,
+        stateDir,
+      });
+      expect(result).toBeNull(); // stale heartbeat ignored, no other source
+    } finally {
+      if (origAgent) process.env.TAP_AGENT_NAME = origAgent;
+      else delete process.env.TAP_AGENT_NAME;
+      if (origCodex) process.env.CODEX_TAP_AGENT_NAME = origCodex;
+      else delete process.env.CODEX_TAP_AGENT_NAME;
+      if (origCommsDir) process.env.TAP_COMMS_DIR = origCommsDir;
+      else delete process.env.TAP_COMMS_DIR;
+    }
+  });
+
+  it("uses canonical resolveConfig commsDir for heartbeat lookup", () => {
+    // Set up heartbeats in the commsDir that TAP_COMMS_DIR points to
+    const heartbeatsPath = path.join(commsDir, "heartbeats.json");
+    fs.writeFileSync(
+      heartbeatsPath,
+      JSON.stringify({
+        codex: {
+          agent: "맥",
+          timestamp: new Date().toISOString(),
+          lastActivity: new Date().toISOString(),
+          instanceId: "codex",
+        },
+      }),
+    );
+
+    // Point TAP_COMMS_DIR to the commsDir that has heartbeats
+    const origCommsDir = process.env.TAP_COMMS_DIR;
+    const origAgent = process.env.TAP_AGENT_NAME;
+    const origCodex = process.env.CODEX_TAP_AGENT_NAME;
+    process.env.TAP_COMMS_DIR = commsDir;
+    delete process.env.TAP_AGENT_NAME;
+    delete process.env.CODEX_TAP_AGENT_NAME;
+
+    try {
+      const result = resolveAgentName("codex", undefined, {
+        repoRoot: tmpDir,
+        stateDir,
+      });
+      expect(result).toBe("맥"); // resolveConfig finds heartbeat via env commsDir
+    } finally {
+      if (origCommsDir) process.env.TAP_COMMS_DIR = origCommsDir;
+      else delete process.env.TAP_COMMS_DIR;
+      if (origAgent) process.env.TAP_AGENT_NAME = origAgent;
+      else delete process.env.TAP_AGENT_NAME;
+      if (origCodex) process.env.CODEX_TAP_AGENT_NAME = origCodex;
+      else delete process.env.CODEX_TAP_AGENT_NAME;
     }
   });
 
@@ -242,6 +357,7 @@ describe("inferRestartMode", () => {
     const mode = inferRestartMode(bridgeState);
     expect(mode.manageAppServer).toBe(true);
     expect(mode.noAuth).toBe(false); // auth existed
+    expect(mode.appServerUnsandboxed).toBe(false);
   });
 
   it("explicit --no-server flag overrides inferred managed mode", () => {
@@ -265,10 +381,50 @@ describe("inferRestartMode", () => {
     expect(mode.manageAppServer).toBe(false); // flag overrides
   });
 
+  it("preserves unsandboxed mode from manual command", () => {
+    const bridgeState: BridgeState = {
+      pid: 999999,
+      statePath: "",
+      lastHeartbeat: new Date().toISOString(),
+      appServer: {
+        url: "ws://127.0.0.1:4501",
+        pid: 12345,
+        managed: true,
+        healthy: true,
+        lastCheckedAt: new Date().toISOString(),
+        lastHealthyAt: new Date().toISOString(),
+        logPath: null,
+        manualCommand:
+          "codex --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:4501",
+        auth: null,
+      },
+    };
+
+    const mode = inferRestartMode(bridgeState);
+    expect(mode.appServerUnsandboxed).toBe(true);
+  });
+
+  it("preserves saved unsandboxed mode when bridge state is absent", () => {
+    const mode = inferRestartMode(null, undefined, {
+      appServerUnsandboxed: true,
+    });
+    expect(mode.appServerUnsandboxed).toBe(true);
+  });
+
+  it("explicit unsandboxed flag overrides saved mode", () => {
+    const mode = inferRestartMode(
+      null,
+      { unsandboxed: true },
+      { appServerUnsandboxed: false },
+    );
+    expect(mode.appServerUnsandboxed).toBe(true);
+  });
+
   it("handles null bridge state gracefully", () => {
     const mode = inferRestartMode(null);
     expect(mode.manageAppServer).toBe(false); // no previous state
     expect(mode.noAuth).toBe(true); // no previous auth
+    expect(mode.appServerUnsandboxed).toBe(false);
   });
 });
 
