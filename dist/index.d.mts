@@ -7,7 +7,7 @@ export { B as BuildCodexBindingRegistryOptions, C as CodexA2AAdapterKind, a as C
 type RuntimeName = "claude" | "codex" | "gemini";
 type BridgeMode = "native-push" | "app-server" | "polling";
 type Platform = "win32" | "darwin" | "linux";
-/** Unique, immutable identifier for a runtime instance. e.g. "codex", "codex-reviewer" */
+/** Unique, immutable identifier for a runtime instance. e.g. "codex", "codex-agent-a" */
 type InstanceId = string;
 interface AdapterContext {
     commsDir: string;
@@ -136,7 +136,7 @@ interface BridgeState {
     runtimeStateDir?: string | null;
     lifecycle?: BridgeLifecycleRecord | null;
 }
-/** Runtime instance state. Supports multiple instances per runtime (e.g. codex-reviewer, codex-builder). */
+/** Runtime instance state. Supports multiple instances per runtime (e.g. codex-agent-a, codex-builder). */
 interface InstanceState {
     instanceId: InstanceId;
     runtime: RuntimeName;
@@ -310,10 +310,11 @@ interface TapSharedConfig {
      * error.
      *
      * Convention (non-enforced, for multi-instance setups):
-     *   4510 codex-tower, 4511 codex-wt1, 4512 codex-wt2
-     *   4520 codex-reviewer
-     *   4530 codex-probe
-     *   451x = active workers, 452x = reviewers, 453x = diagnostic/probe
+     *   4510 codex-agent-a, 4511 codex-agent-b, 4512 codex-agent-c
+     *   4520 codex-agent-d
+     *   4530 codex-diagnostic-a
+     *   451x = active workers, 452x = review/evaluation lanes,
+     *   453x = diagnostic/probe lanes
      */
     portMap?: Record<string, number>;
 }

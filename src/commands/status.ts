@@ -29,6 +29,7 @@ import {
   type ProfileConfig,
   type RemotePanelProfileConfig,
 } from "./status-profiles.js";
+import { findStatusProfileInProfilePack } from "./profile-pack-loader.js";
 import type {
   BridgeLifecycleSnapshot,
   CodexSessionSnapshot,
@@ -37,18 +38,17 @@ import type {
 const STATUS_HELP = `
 Usage:
   tap status
-  tap status --profile <sumback-yoon|sumback-sol|mac-jun-ssh-tui|remote-panel-yoon> [--json]
+  tap status --profile <profile-id> [--profile-pack <path>] [--json]
 
 Description:
   Show all installed instances, their bridge status, and configuration info.
-  With --profile, show AX-oriented readiness diagnostics for a known agent
+  With --profile, show AX-oriented readiness diagnostics for a reviewed local
   surface, including stable checks and suggested next commands.
 
 Examples:
   npx @hua-labs/tap status
-  npx @hua-labs/tap status --profile sumback-yoon --json
-  npx @hua-labs/tap status --profile sumback-sol --json
-  npx @hua-labs/tap status --profile remote-panel-yoon --json
+  npx @hua-labs/tap status --json
+  npx @hua-labs/tap status --profile local-agent-a-cli --profile-pack ./tap-profile-pack.json --json
 `.trim();
 
 type ProfileCheckStatus = "pass" | "warn" | "fail";
@@ -188,7 +188,6 @@ let flowSupervisorStatusRunnerForTests: FlowSupervisorStatusRunner | null =
   null;
 let headlessRunnerStatusRunnerForTests: HeadlessRunnerStatusRunner | null =
   null;
-let sumBackLocalHostCheckerForTests: (() => boolean) | null = null;
 
 export function __setProfileProbeRunnerForTests(
   runner: ProfileProbeRunner | null,
@@ -212,12 +211,6 @@ export function __setHeadlessRunnerStatusRunnerForTests(
   runner: HeadlessRunnerStatusRunner | null,
 ): void {
   headlessRunnerStatusRunnerForTests = runner;
-}
-
-export function __setSumBackLocalHostCheckerForTests(
-  checker: (() => boolean) | null,
-): void {
-  sumBackLocalHostCheckerForTests = checker;
 }
 
 interface ResolvedStatus {
@@ -436,31 +429,20 @@ function profileSyncCommand(
   );
 }
 
-function isSumBackLocalHost(): boolean {
-  if (sumBackLocalHostCheckerForTests) {
-    return sumBackLocalHostCheckerForTests();
-  }
-  return fs.existsSync("/home/devin/hua-platform");
-}
-
-function wrapFlowSupervisorCommand(command: string): string {
-  return isSumBackLocalHost() ? command : `ssh sum-back ${shellQuote(command)}`;
-}
-
 function runFlowSupervisorStatus(
   supervisor: FlowSupervisorConfig,
 ): ProfileProbeResult {
   if (flowSupervisorStatusRunnerForTests) {
     return flowSupervisorStatusRunnerForTests(supervisor);
   }
-  const command =
-    supervisor.host === "sum-back"
-      ? wrapFlowSupervisorCommand(supervisor.statusCommand)
-      : supervisor.statusCommand;
-  const result = childProcess.spawnSync("bash", ["-lc", command], {
-    encoding: "utf8",
-    timeout: 8000,
-  });
+  const result = childProcess.spawnSync(
+    "bash",
+    ["-lc", supervisor.statusCommand],
+    {
+      encoding: "utf8",
+      timeout: 8000,
+    },
+  );
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",
@@ -497,14 +479,8 @@ function summarizeFlowSupervisor(
           : output
             ? `could not classify ${supervisor.tmuxSession}: ${output}`
             : `could not inspect ${supervisor.tmuxSession}`,
-    startCommand:
-      supervisor.host === "sum-back"
-        ? wrapFlowSupervisorCommand(supervisor.startCommand)
-        : supervisor.startCommand,
-    statusCommand:
-      supervisor.host === "sum-back"
-        ? wrapFlowSupervisorCommand(supervisor.statusCommand)
-        : supervisor.statusCommand,
+    startCommand: supervisor.startCommand,
+    statusCommand: supervisor.statusCommand,
   };
 }
 
@@ -1331,23 +1307,56 @@ export async function statusCommand(args: string[]): Promise<CommandResult> {
       command: "status",
       code: "TAP_STATUS_PROFILE_REQUIRED",
       message: "Missing --profile value.",
-      warnings: [`Known profiles: ${Object.keys(AGENT_PROFILES).join(", ")}`],
+      warnings: ["Use a reviewed local status profile id."],
       data: {
-        knownProfiles: Object.keys(AGENT_PROFILES),
+        knownProfiles: [],
       },
     };
   }
   if (typeof profileFlag === "string") {
-    const profile = AGENT_PROFILES[profileFlag as AgentProfileId];
+    const profilePackPath =
+      typeof parsed.flags["profile-pack"] === "string"
+        ? parsed.flags["profile-pack"].trim()
+        : null;
+    if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+      return {
+        ok: false,
+        command: "status",
+        code: "TAP_STATUS_PROFILE_REQUIRED",
+        message: "Missing --profile-pack <path> value.",
+        warnings: ["Pass a reviewed local profile pack path."],
+        data: {
+          knownProfiles: [],
+        },
+      };
+    }
+    let profile: ProfileConfig | null | undefined =
+      AGENT_PROFILES[profileFlag as AgentProfileId];
+    if (!profile && profilePackPath) {
+      try {
+        profile = findStatusProfileInProfilePack(profilePackPath, profileFlag);
+      } catch (error) {
+        return {
+          ok: false,
+          command: "status",
+          code: "TAP_STATUS_UNKNOWN_PROFILE",
+          message: error instanceof Error ? error.message : String(error),
+          warnings: ["Pass a valid reviewed local profile pack path."],
+          data: {
+            knownProfiles: [],
+          },
+        };
+      }
+    }
     if (!profile) {
       return {
         ok: false,
         command: "status",
         code: "TAP_STATUS_UNKNOWN_PROFILE",
         message: `Unknown status profile: ${profileFlag}`,
-        warnings: [`Known profiles: ${Object.keys(AGENT_PROFILES).join(", ")}`],
+        warnings: ["Use a reviewed local status profile id."],
         data: {
-          knownProfiles: Object.keys(AGENT_PROFILES),
+          knownProfiles: [],
         },
       };
     }

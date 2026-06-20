@@ -25,9 +25,9 @@ Modes:
   watch   Poll local source until eligible records appear or --max-iterations is reached.
 
 Options:
-  --source-comms-dir <path>   Device-local comms dir, e.g. /Users/devin/HUA/hua-comms.
+  --source-comms-dir <path>   Device-local comms dir, e.g. ./tap-comms.
   --source-ssh <host>         Treat --source-comms-dir as a remote path on this SSH host.
-  --target-comms-dir <path>   Canonical/central comms dir, e.g. /home/devin/hua-comms.
+  --target-comms-dir <path>   Canonical/central comms dir, e.g. /path/to/central-comms.
   --agent <name>              Local sender display/routing name, e.g. agent-a.
   --alias <name[,name...]>    Additional local sender aliases. Repeatable/comma-separated.
   --dir <name[,name...]>      Append-only dirs to uplink. Default: inbox.
@@ -47,7 +47,7 @@ Options:
 
 Contract:
   Uplink is append-only and polling/file-backed. It copies eligible device-local
-  records to the canonical sum-back comms bus. It never syncs heartbeats,
+  records to the canonical central comms bus. It never syncs heartbeats,
   presence, owner tuples, locks, claims, or live IPC state.
 
   With --source-ssh, uplink first mirrors allowed append-only source dirs with

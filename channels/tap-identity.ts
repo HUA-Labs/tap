@@ -11,7 +11,12 @@ function trimAddress(value?: string | null): string {
 }
 
 export function canonicalizeAgentId(value: string): string {
-  return trimAddress(value).replace(/-/g, "_");
+  // M204: dash ↔ underscore normalization (`codex-1` ≡ `codex_1`).
+  // M352: ASCII case normalization — `Codex` ≡ `codex`. Lowercasing is a
+  // no-op on non-ASCII names, so this only collapses ASCII instance IDs such
+  // as `Agent-A`/`agent-a` that drift across devices with differing case
+  // conventions.
+  return trimAddress(value).replace(/-/g, "_").toLowerCase();
 }
 
 export function isBroadcastRecipient(value: string): boolean {

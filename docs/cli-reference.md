@@ -27,19 +27,16 @@ tap init
 
 ### `add <runtime>`
 
-Add a runtime instance. Patches the runtime's config file with an MCP server
-entry when verification allows it.
+Add a runtime instance. Claude and Codex are the public first-run paths; Gemini
+is legacy compatibility.
 
 ```bash
 tap add claude
 tap add codex
 tap add codex --agent-name agent-a
 tap add codex --name agent-a --port 4502
+tap add gemini # legacy compatibility
 ```
-
-`gemini` is still accepted for legacy compatibility, but it is deprecated for
-new first-run docs. If your workflow has moved to Antigravity CLI, model it as
-a custom profile-pack surface until tap ships a dedicated adapter.
 
 **Options:**
 
@@ -68,7 +65,7 @@ Remove an instance and rollback its config changes.
 
 ```bash
 tap remove codex
-tap remove codex-reviewer
+tap remove codex-agent-a
 ```
 
 | Code                  | Meaning                                     |

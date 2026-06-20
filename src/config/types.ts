@@ -31,10 +31,11 @@ export interface TapSharedConfig {
    * error.
    *
    * Convention (non-enforced, for multi-instance setups):
-   *   4510 codex-tower, 4511 codex-wt1, 4512 codex-wt2
-   *   4520 codex-reviewer
-   *   4530 codex-probe
-   *   451x = active workers, 452x = reviewers, 453x = diagnostic/probe
+   *   4510 codex-agent-a, 4511 codex-agent-b, 4512 codex-agent-c
+   *   4520 codex-agent-d
+   *   4530 codex-diagnostic-a
+   *   451x = active workers, 452x = review/evaluation lanes,
+   *   453x = diagnostic/probe lanes
    */
   portMap?: Record<string, number>;
 }

@@ -1,5 +1,18 @@
 # @hua-labs/tap
 
+## 0.6.2
+
+### Patch Changes
+
+- Remove bundled HUA-local operator profile defaults from public runtime
+  registries. Reviewed local topology now belongs in explicit profile-pack data
+  instead of package defaults.
+- Add profile-pack loading for status/ready/infra diagnostics while keeping
+  profile-pack commands guarded as data-only unless a reviewed apply path allows
+  execution.
+- Make blocked `ready --apply` profile-pack commands fail closed with a nonzero
+  result instead of reporting top-level success.
+
 ## 0.6.1
 
 ### Patch Changes

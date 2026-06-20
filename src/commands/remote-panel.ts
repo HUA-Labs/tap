@@ -45,8 +45,8 @@ Options:
   --help, -h           Show help.
 
 Examples:
-  tap remote-panel --host 100.121.45.22 --port 8765 --agent 윤 --read-only
-  tap remote-panel --host 100.121.45.22 --port 8765 --agent 윤 --send-enabled --token-env TAP_REMOTE_PANEL_TOKEN
+  tap remote-panel --host 127.0.0.1 --port 8765 --agent agent-a --read-only
+  tap remote-panel --host 127.0.0.1 --port 8765 --agent agent-a --send-enabled --token-env TAP_REMOTE_PANEL_TOKEN
 `.trim();
 
 type RemotePanelStatus = "read-only" | "send-enabled" | "blocked";
@@ -817,7 +817,7 @@ export function buildRemotePanelHtml(snapshot: RemotePanelSnapshot): string {
       <p class="hint">Writes durable inbox evidence only. No live IPC, consent-drive, or turn promotion is attempted.</p>
       <form method="post" action="/api/send">
         <label>Token/PIN <input name="token" type="password" autocomplete="off" required></label>
-        <label>To <input name="to" maxlength="80" placeholder="준" required></label>
+        <label>To <input name="to" maxlength="80" placeholder="agent-b" required></label>
         <label>Subject <input name="subject" maxlength="120" placeholder="remote-panel-ping" required></label>
         <label>Content <textarea name="content" maxlength="4000" rows="5" required></textarea></label>
         <button type="submit">Write inbox evidence</button>

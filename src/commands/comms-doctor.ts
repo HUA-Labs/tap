@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { appRouteFreshnessCommand } from "./app-route-freshness.js";
 import { AGENT_PROFILES, type ProfileConfig } from "./status-profiles.js";
+import { statusProfilesFromProfilePack } from "./profile-pack-loader.js";
 import { resolveConfig } from "../config/index.js";
 import { resolvePresenceRecord } from "../presence-lookup.js";
 import type { CommandResult } from "../types.js";
@@ -26,7 +27,8 @@ Description:
 Options:
   --agent <name>              Target agent to diagnose. Default: agent-a.
   --all-known                 Diagnose local installed instances plus known presence files.
-  --include-profile-pack      Also include bundled operator profile-pack agents.
+  --profile-pack <path>       Load reviewed local profile-pack surfaces.
+  --include-profile-pack      Include agents from --profile-pack when used with --all-known.
   --surface <kind>            Limit surfaces. Default: all.
   --plan-send                 Include a compact safe send plan.
   --evidence-file <path[,p]>  Inspect one or more message/evidence files.
@@ -93,6 +95,8 @@ interface ParsedOptions {
   evidenceFiles: string[];
   appProofFlags: Record<string, string>;
   includeProfilePack: boolean;
+  profilePackPath: string | null;
+  profilePackProfiles: ProfileConfig[];
 }
 
 interface PresenceSummary {
@@ -414,9 +418,8 @@ function resolveStateDir(
 }
 
 function safeAgentLabel(agent: string): string {
-  if (agent === "솔") return "sol";
   const safe = agent
-    .normalize("NFKD")
+    .normalize("NFKC")
     .replace(/[^\p{L}\p{N}_-]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
@@ -470,15 +473,33 @@ function parseOptions(args: string[]): ParsedOptions | CommandResult {
   const repoRoot = findRepoRoot();
   const stateDir = resolveStateDir(parsed.flags["state-dir"], repoRoot);
   if (!stateDir.ok) return invalid(stateDir.message);
+  const profilePackPath =
+    typeof parsed.flags["profile-pack"] === "string"
+      ? parsed.flags["profile-pack"].trim()
+      : null;
+  if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+    return invalid("Missing --profile-pack <path> value.");
+  }
+  let profilePackProfiles: ProfileConfig[] = [];
+  if (profilePackPath) {
+    try {
+      profilePackProfiles = statusProfilesFromProfilePack(profilePackPath);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : String(error));
+    }
+  }
   const commsDir = path.resolve(
     str(parsed.flags.central) ?? resolveCommsDir(args, repoRoot),
   );
   const evidenceFiles = parseEvidenceFiles(parsed.flags["evidence-file"]);
+  const includeProfilePack =
+    parsed.flags["include-profile-pack"] === true || Boolean(profilePackPath);
   const agents =
     parsed.flags["all-known"] === true
       ? knownAgents(commsDir, {
           fallbackAgent: agent.value,
-          includeProfilePack: parsed.flags["include-profile-pack"] === true,
+          includeProfilePack,
+          profilePackProfiles,
           stateDir: stateDir.value,
         })
       : [agent.value];
@@ -496,7 +517,9 @@ function parseOptions(args: string[]): ParsedOptions | CommandResult {
     stateDir: stateDir.value,
     evidenceFiles,
     appProofFlags: collectAppProofFlags(parsed.flags),
-    includeProfilePack: parsed.flags["include-profile-pack"] === true,
+    includeProfilePack,
+    profilePackPath,
+    profilePackProfiles,
   };
 }
 
@@ -505,11 +528,15 @@ function knownAgents(
   options: {
     fallbackAgent: string;
     includeProfilePack: boolean;
+    profilePackProfiles: ProfileConfig[];
     stateDir: string;
   },
 ): string[] {
   const fromProfiles = options.includeProfilePack
-    ? Object.values(AGENT_PROFILES).map((profile) => profile.agent)
+    ? [
+        ...Object.values(AGENT_PROFILES).map((profile) => profile.agent),
+        ...options.profilePackProfiles.map((profile) => profile.agent),
+      ]
     : [];
   const fromState = knownAgentsFromState(options.stateDir);
   const fromPresence = knownAgentsFromPresence(commsDir);
@@ -611,9 +638,9 @@ function routeLeaseSummary(commsDir: string, agent: string): RouteLeaseSummary {
   const expiresTime = expiresAt ? Date.parse(expiresAt) : NaN;
   const active = Boolean(
     record &&
-    Number.isFinite(expiresTime) &&
-    expiresTime > Date.now() &&
-    bool(record?.liveAuthority) === false,
+      Number.isFinite(expiresTime) &&
+      expiresTime > Date.now() &&
+      bool(record?.liveAuthority) === false,
   );
   const routeRecord = rec(record?.route);
   const capability = rec(record?.capability);
@@ -821,7 +848,7 @@ function buildMcpChannelSurface(
 }
 
 function shouldCheckAppSurface(
-  agent: string,
+  _agent: string,
   presence: PresenceSummary,
   routeLease: RouteLeaseSummary,
   filter: SurfaceFilter,
@@ -829,7 +856,6 @@ function shouldCheckAppSurface(
   return (
     filter === "app" ||
     filter === "windows-app" ||
-    agent === "솔" ||
     presence.receiveTransports.includes("consent-drive") ||
     routeLease.receiveTransports.includes("consent-drive")
   );
@@ -1139,8 +1165,9 @@ async function buildAppSurface(
 function profileSurfaces(
   agent: string,
   filter: SurfaceFilter,
+  profilePackProfiles: ProfileConfig[],
 ): SurfaceReport[] {
-  return Object.values(AGENT_PROFILES)
+  return [...Object.values(AGENT_PROFILES), ...profilePackProfiles]
     .filter((profile) => profile.agent === agent)
     .map((profile) => surfaceFromProfile(profile))
     .filter((surface) => matchesSurface(surface.kind, filter));
@@ -1416,7 +1443,7 @@ async function buildSurfacesForAgent(
     options.freshMinutes,
   );
   const profileSurfaceReports = options.includeProfilePack
-    ? profileSurfaces(agent, options.surface)
+    ? profileSurfaces(agent, options.surface, options.profilePackProfiles)
     : [];
   const surfaces = [
     ...profileSurfaceReports,

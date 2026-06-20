@@ -46,13 +46,14 @@ import {
   type ReadyProfileConfig,
   type ReadyProfileId,
 } from "./ready-profiles.js";
+import { findReadyProfileInProfilePack } from "./profile-pack-loader.js";
 
 export { __setWindowsAppRouteSmokeTransportFactoryForTests } from "./ready-windows-route.js";
 
 const READY_HELP = `
 Usage:
   tap ready --surface <codex-cli|codex-app|windows-app|claude|remote-panel> --agent <name> [options]
-  tap ready --profile <sumback-yoon|sumback-sol|mac-jun-ssh-tui|mac-aux-ssh-headless|remote-panel-yoon|sumback-yoon-appserver|sumback-yoon-bridge> [--apply] [--dry-run]
+  tap ready --profile <profile-id> [--apply] [--dry-run]
 
 Description:
   Report post-tap_set_name readiness for a runtime surface. This command does
@@ -62,7 +63,8 @@ Description:
 Options:
   --surface <name>            Runtime surface to prepare/diagnose.
   --agent <name>              Active agent display/routing name.
-  --profile <name>            Known ready profile: sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless, remote-panel-yoon, sumback-yoon-appserver, sumback-yoon-bridge.
+  --profile <name>            Reviewed local ready profile id.
+  --profile-pack <path>       Load reviewed local ready profile data from a profile pack.
   --conversation-id <id>      Codex App conversation/thread id for owner discovery.
   --apply                     Apply safe local setup steps for this surface.
   --dry-run                   With --apply, report setup steps without writing.
@@ -96,6 +98,11 @@ Contract:
   does not mint consent receipts, does not sync mutable heartbeats/claims, and
   does not make CLI polling look like realtime push. Windows App route refresh
   is opt-in and writes only guarded per-agent presence evidence.
+
+  Local operator profiles are compatibility surfaces, not public package
+  defaults. Public first-run flows should prefer --surface with a concrete
+  neutral --agent such as agent-a unless a reviewed local profile pack/runbook
+  says otherwise.
 `.trim();
 
 type ReadySurface =
@@ -650,14 +657,45 @@ export async function readyCommand(
   }
 
   const { flags } = parseArgs(args);
-  const readyProfile = parseReadyProfile(flags.profile);
+  const profilePackPath =
+    typeof flags["profile-pack"] === "string"
+      ? flags["profile-pack"].trim()
+      : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return {
+      ok: false,
+      command: "ready",
+      code: "TAP_INVALID_ARGUMENT",
+      message: "Missing --profile-pack <path> value.",
+      warnings: [],
+      data: {} as ReadyReport,
+    };
+  }
+  let readyProfile = parseReadyProfile(flags.profile);
+  if (!readyProfile && typeof flags.profile === "string" && profilePackPath) {
+    try {
+      readyProfile = findReadyProfileInProfilePack(
+        profilePackPath,
+        flags.profile,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        command: "ready",
+        code: "TAP_INVALID_ARGUMENT",
+        message: error instanceof Error ? error.message : String(error),
+        warnings: [],
+        data: {} as ReadyReport,
+      };
+    }
+  }
   if (flags.profile !== undefined && !readyProfile) {
     return {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
       message:
-        "Invalid --profile. Use sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless, remote-panel-yoon, sumback-yoon-appserver, or sumback-yoon-bridge.",
+        "Invalid --profile. Use a reviewed local ready profile id or run without --profile and pass --surface/--agent.",
       warnings: [],
       data: {} as ReadyReport,
     };
@@ -725,16 +763,6 @@ export async function readyCommand(
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
       message: `Profile ${readyProfile.id} requires --agent <name> or ${readyProfile.agentEnv}.`,
-      warnings: [],
-      data: {} as ReadyReport,
-    };
-  }
-  if (readyProfile?.agentEnv && agent === "준") {
-    return {
-      ok: false,
-      command: "ready",
-      code: "TAP_INVALID_ARGUMENT",
-      message: `Profile ${readyProfile.id} must not reuse 준; choose a separate one-character agent name.`,
       warnings: [],
       data: {} as ReadyReport,
     };
@@ -883,13 +911,18 @@ export async function readyCommand(
   const applyEnabled = flags.apply === true;
   const dryRun = flags["dry-run"] === true;
   const repairPermissions = flags["repair-permissions"] === true;
-  if (repairPermissions && (!readyProfile || surface !== "codex-cli")) {
+  if (
+    repairPermissions &&
+    (!readyProfile ||
+      surface !== "codex-cli" ||
+      readyProfile.source === "profile-pack")
+  ) {
     return {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
       message:
-        "--repair-permissions is only available for known Codex CLI ready profiles.",
+        "--repair-permissions is only available for built-in Codex CLI ready profiles.",
       warnings: [],
       data: {} as ReadyReport,
     };
@@ -925,7 +958,7 @@ export async function readyCommand(
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
       message:
-        "--apply-headless-runner is only available for supported Codex CLI worker profiles: sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless.",
+        "--apply-headless-runner is only available for reviewed Codex CLI worker profiles.",
       warnings: [],
       data: {} as ReadyReport,
     };
@@ -941,7 +974,7 @@ export async function readyCommand(
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
       message:
-        "--check-loaded-thread is only available for known Codex CLI/TUI profiles: sumback-yoon, sumback-sol, mac-jun-ssh-tui.",
+        "--check-loaded-thread is only available for reviewed Codex CLI/TUI profiles.",
       warnings: [],
       data: {} as ReadyReport,
     };
@@ -1235,6 +1268,24 @@ export async function readyCommand(
           command: effectiveReadyProfile.command,
           message: `skipped ready profile ${effectiveReadyProfile.id}: ${codexPermissionProfile?.message ?? "Codex permission profile is not ready"}`,
         });
+      } else if (
+        effectiveReadyProfile.source === "profile-pack" &&
+        !effectiveReadyProfile.allowApply
+      ) {
+        appliedActions.push({
+          name: "ready-profile",
+          status: "skipped",
+          command: effectiveReadyProfile.command,
+          message:
+            "profile-pack commands are loaded as data-only guidance; reviewed command execution is not enabled in this package slice",
+        });
+        readyProfileApplyFailed = true;
+        addCheck(
+          checks,
+          "block",
+          "profile-pack-command-guard",
+          "profile-pack command execution is blocked; run the reviewed local command manually or wait for a dedicated loader/apply contract",
+        );
       } else if (dryRun) {
         appliedActions.push({
           name: "ready-profile",
@@ -2139,7 +2190,9 @@ export async function readyCommand(
   }
 
   const commandFailed =
-    windowsRouteRefreshApplyFailed || windowsRouteSmokeApplyFailed;
+    windowsRouteRefreshApplyFailed ||
+    windowsRouteSmokeApplyFailed ||
+    readyProfileApplyFailed;
   return {
     ok: !commandFailed,
     command: "ready",

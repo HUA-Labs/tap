@@ -821,7 +821,7 @@ var init_drift_detector = __esm({
 });
 
 // src/engine/termination.ts
-import * as fs35 from "fs";
+import * as fs36 from "fs";
 import * as crypto4 from "crypto";
 function isAtOrAbove(severity, floor) {
   return SEVERITY_RANK[severity] >= SEVERITY_RANK[floor];
@@ -832,7 +832,7 @@ function computeFindingHash(findings) {
   return crypto4.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 function evalManualStop(ctx) {
-  if (fs35.existsSync(ctx.stopSignalPath)) {
+  if (fs36.existsSync(ctx.stopSignalPath)) {
     return {
       verdict: "stop",
       reason: `Manual stop signal found at ${ctx.stopSignalPath}`,
@@ -957,8 +957,8 @@ var init_termination = __esm({
 });
 
 // src/engine/review.ts
-import * as fs36 from "fs";
-import * as path30 from "path";
+import * as fs37 from "fs";
+import * as path31 from "path";
 import * as crypto5 from "crypto";
 import { spawnSync as spawnSync7 } from "child_process";
 function trimAddress(value) {
@@ -973,7 +973,7 @@ function isOwnMessageAddress(sender, agentId, agentName) {
   return canonicalizeAgentId(normalizedSender) === canonicalizeAgentId(agentId) || normalizedSender.toLowerCase() === trimAddress(agentName).toLowerCase();
 }
 function parseInboxFilename(filename) {
-  const base = path30.basename(filename, ".md");
+  const base = path31.basename(filename, ".md");
   const match = base.match(/^(\d{8})-([^-]+)-([^-]+)-(.+)$/);
   if (!match) return null;
   return {
@@ -1017,7 +1017,7 @@ function detectReviewRequest(filePath, content, generation) {
   if (!isReview && !isReReview) return null;
   const prNumber = extractPrNumber2(fullText);
   if (!prNumber) return null;
-  const sourceMtimeMs = fs36.existsSync(filePath) ? fs36.statSync(filePath).mtimeMs : 0;
+  const sourceMtimeMs = fs37.existsSync(filePath) ? fs37.statSync(filePath).mtimeMs : 0;
   const fm = parseInboxContentFrontmatter(content);
   return {
     sourcePath: filePath,
@@ -1069,7 +1069,7 @@ function buildReviewPrompt(request, agentName, round) {
     `4. Write structured findings`,
     ``,
     `## Output`,
-    `Write review to: ${path30.join("reviews", request.generation, `review-PR${request.prNumber}-${agentName}.md`)}`,
+    `Write review to: ${path31.join("reviews", request.generation, `review-PR${request.prNumber}-${agentName}.md`)}`,
     ``,
     `### Review File Format`,
     `\`\`\`markdown`,
@@ -1155,8 +1155,8 @@ function extractFindings(content) {
   return findings;
 }
 function parseReviewOutput(reviewFilePath2, round) {
-  if (!fs36.existsSync(reviewFilePath2)) return null;
-  const content = fs36.readFileSync(reviewFilePath2, "utf-8");
+  if (!fs37.existsSync(reviewFilePath2)) return null;
+  const content = fs37.readFileSync(reviewFilePath2, "utf-8");
   const findings = extractFindings(content);
   const suggestedDiffLines = extractSuggestedDiffLines(content);
   return {
@@ -1169,7 +1169,7 @@ function parseReviewOutput(reviewFilePath2, round) {
   };
 }
 function reviewFilePath(repoRoot, generation, prNumber, agentName) {
-  return path30.join(
+  return path31.join(
     repoRoot,
     "reviews",
     generation,
@@ -1183,9 +1183,9 @@ function isStaleReviewRequest(request, repoRoot, agentName) {
     request.prNumber,
     agentName
   );
-  if (fs36.existsSync(revPath) && fs36.existsSync(request.sourcePath)) {
-    const reviewStat = fs36.statSync(revPath);
-    const requestStat = fs36.statSync(request.sourcePath);
+  if (fs37.existsSync(revPath) && fs37.existsSync(request.sourcePath)) {
+    const reviewStat = fs37.statSync(revPath);
+    const requestStat = fs37.statSync(request.sourcePath);
     if (reviewStat.mtimeMs > requestStat.mtimeMs) return true;
   }
   return false;
@@ -1237,7 +1237,7 @@ function computeRequestMarkerId(request) {
   }
   let contentHash = "";
   try {
-    const content = fs36.readFileSync(request.sourcePath, "utf-8");
+    const content = fs37.readFileSync(request.sourcePath, "utf-8");
     contentHash = crypto5.createHash("sha1").update(content).digest("hex");
   } catch {
   }
@@ -1254,20 +1254,20 @@ function computeRequestMarkerId(request) {
 }
 function isAlreadyProcessed(stateDir, request) {
   const markerId = computeRequestMarkerId(request);
-  return fs36.existsSync(path30.join(stateDir, "processed", `${markerId}.done`));
+  return fs37.existsSync(path31.join(stateDir, "processed", `${markerId}.done`));
 }
 function unmarkProcessed(stateDir, request) {
   const markerId = computeRequestMarkerId(request);
-  const markerPath = path30.join(stateDir, "processed", `${markerId}.done`);
-  if (fs36.existsSync(markerPath)) {
-    fs36.unlinkSync(markerPath);
+  const markerPath = path31.join(stateDir, "processed", `${markerId}.done`);
+  if (fs37.existsSync(markerPath)) {
+    fs37.unlinkSync(markerPath);
   }
 }
 function markAsProcessed(stateDir, request) {
   const markerId = computeRequestMarkerId(request);
-  const markerDir = path30.join(stateDir, "processed");
-  fs36.mkdirSync(markerDir, { recursive: true });
-  const markerPath = path30.join(markerDir, `${markerId}.done`);
+  const markerDir = path31.join(stateDir, "processed");
+  fs37.mkdirSync(markerDir, { recursive: true });
+  const markerPath = path31.join(markerDir, `${markerId}.done`);
   const payload = {
     prNumber: request.prNumber,
     prTipSha: request.prTipSha ?? null,
@@ -1275,8 +1275,8 @@ function markAsProcessed(stateDir, request) {
     processedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   const tmp = `${markerPath}.tmp.${process.pid}`;
-  fs36.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
-  fs36.renameSync(tmp, markerPath);
+  fs37.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+  fs37.renameSync(tmp, markerPath);
 }
 function writeReviewReceipt(commsDir, request, agentName) {
   const date = (/* @__PURE__ */ new Date()).toISOString().split("T")[0].replace(/-/g, "");
@@ -1286,14 +1286,14 @@ function writeReviewReceipt(commsDir, request, agentName) {
     ``,
     `- PR #${request.prNumber} review request received.`,
     `- headless reviewer processing.`,
-    `- request: ${path30.basename(request.sourcePath)}`
+    `- request: ${path31.basename(request.sourcePath)}`
   ].join("\n");
-  const inboxDir = path30.join(commsDir, "inbox");
-  fs36.mkdirSync(inboxDir, { recursive: true });
-  const inboxPath = path30.join(inboxDir, filename);
+  const inboxDir = path31.join(commsDir, "inbox");
+  fs37.mkdirSync(inboxDir, { recursive: true });
+  const inboxPath = path31.join(inboxDir, filename);
   const tmp = `${inboxPath}.tmp.${process.pid}`;
-  fs36.writeFileSync(tmp, content, "utf-8");
-  fs36.renameSync(tmp, inboxPath);
+  fs37.writeFileSync(tmp, content, "utf-8");
+  fs37.renameSync(tmp, inboxPath);
   return inboxPath;
 }
 function isHeadlessReviewer() {
@@ -1308,15 +1308,15 @@ function getHeadlessEnvConfig() {
   };
 }
 function scanInboxForReviews(commsDir, stateDir, repoRoot, generation, agentName, agentId = agentName, activeSessionPrNumber, prHeadCache) {
-  const inboxDir = path30.join(commsDir, "inbox");
-  if (!fs36.existsSync(inboxDir)) return [];
-  const files = fs36.readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
+  const inboxDir = path31.join(commsDir, "inbox");
+  if (!fs37.existsSync(inboxDir)) return [];
+  const files = fs37.readdirSync(inboxDir).filter((f) => f.endsWith(".md"));
   const requests = [];
-  const shouldResolvePrHead = fs36.existsSync(path30.join(repoRoot, ".git"));
+  const shouldResolvePrHead = fs37.existsSync(path31.join(repoRoot, ".git"));
   const activePrHeadCache = shouldResolvePrHead ? prHeadCache ?? /* @__PURE__ */ new Map() : null;
   for (const file of files) {
-    const filePath = path30.join(inboxDir, file);
-    const content = fs36.readFileSync(filePath, "utf-8");
+    const filePath = path31.join(inboxDir, file);
+    const content = fs37.readFileSync(filePath, "utf-8");
     const request = detectReviewRequest(filePath, content, generation);
     if (!request) continue;
     const to = request.recipient.toLowerCase();
@@ -1390,8 +1390,8 @@ __export(headless_loop_exports, {
   mergePendingRequests: () => mergePendingRequests,
   sortRequests: () => sortRequests
 });
-import * as fs37 from "fs";
-import * as path31 from "path";
+import * as fs38 from "fs";
+import * as path32 from "path";
 function sortRequests(requests, consecutiveReReviews) {
   const reReviewQuotaExhausted = consecutiveReReviews >= MAX_CONSECUTIVE_REREVIEWS;
   return [...requests].sort((a, b) => {
@@ -1447,12 +1447,12 @@ function createHeadlessLoop(options) {
   let lastWatchWakeMs = 0;
   function startInboxWatcher() {
     disposeInboxWatcher();
-    const inboxDir = path31.join(options.commsDir, "inbox");
-    if (!fs37.existsSync(inboxDir)) {
-      fs37.mkdirSync(inboxDir, { recursive: true });
+    const inboxDir = path32.join(options.commsDir, "inbox");
+    if (!fs38.existsSync(inboxDir)) {
+      fs38.mkdirSync(inboxDir, { recursive: true });
     }
     try {
-      watcher = fs37.watch(inboxDir, (eventType, filename) => {
+      watcher = fs38.watch(inboxDir, (eventType, filename) => {
         if (!filename || !filename.endsWith(".md")) return;
         if (filename.includes("headless-dispatch-")) return;
         const now = Date.now();
@@ -1526,10 +1526,10 @@ function createHeadlessLoop(options) {
     return Date.now() - new Date(state.activeSession.startedAt).getTime();
   }
   function countProcessedMarkers() {
-    const markerDir = path31.join(options.stateDir, "processed");
-    if (!fs37.existsSync(markerDir)) return 0;
+    const markerDir = path32.join(options.stateDir, "processed");
+    if (!fs38.existsSync(markerDir)) return 0;
     try {
-      return fs37.readdirSync(markerDir).filter((f) => f.endsWith(".done")).length;
+      return fs38.readdirSync(markerDir).filter((f) => f.endsWith(".done")).length;
     } catch {
       return 0;
     }
@@ -1541,18 +1541,18 @@ function createHeadlessLoop(options) {
     gcProcessedMarkers();
   }
   function gcProcessedMarkers() {
-    const markerDir = path31.join(options.stateDir, "processed");
-    if (!fs37.existsSync(markerDir)) return 0;
+    const markerDir = path32.join(options.stateDir, "processed");
+    if (!fs38.existsSync(markerDir)) return 0;
     const now = Date.now();
     let removed = 0;
     try {
-      for (const file of fs37.readdirSync(markerDir)) {
+      for (const file of fs38.readdirSync(markerDir)) {
         if (!file.endsWith(".done")) continue;
-        const filePath = path31.join(markerDir, file);
+        const filePath = path32.join(markerDir, file);
         try {
-          const age = now - fs37.statSync(filePath).mtimeMs;
+          const age = now - fs38.statSync(filePath).mtimeMs;
           if (age > PROCESSED_MARKER_MAX_AGE_MS) {
-            fs37.unlinkSync(filePath);
+            fs38.unlinkSync(filePath);
             removed++;
           }
         } catch {
@@ -1602,15 +1602,15 @@ function createHeadlessLoop(options) {
         },
         updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
-      const filePath = path31.join(options.stateDir, "headless-state.json");
+      const filePath = path32.join(options.stateDir, "headless-state.json");
       const tmp = `${filePath}.tmp.${process.pid}`;
-      fs37.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
-      fs37.renameSync(tmp, filePath);
+      fs38.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf-8");
+      fs38.renameSync(tmp, filePath);
     } catch {
     }
   }
   function requestStillEligible(request) {
-    if (!fs37.existsSync(request.sourcePath)) return false;
+    if (!fs38.existsSync(request.sourcePath)) return false;
     const bypassProcessedCheck = request.isReReview && state.activeSession?.request.prNumber === request.prNumber;
     if (!bypassProcessedCheck && isAlreadyProcessed(options.stateDir, request))
       return false;
@@ -1667,15 +1667,15 @@ function createHeadlessLoop(options) {
     try {
       writeReviewReceipt(options.commsDir, request, options.agentName);
       const prompt = buildReviewPrompt(request, options.agentName, 1);
-      const inboxDir = path31.join(options.commsDir, "inbox");
-      fs37.mkdirSync(inboxDir, { recursive: true });
-      const dispatchFile = path31.join(
+      const inboxDir = path32.join(options.commsDir, "inbox");
+      fs38.mkdirSync(inboxDir, { recursive: true });
+      const dispatchFile = path32.join(
         inboxDir,
         dispatchFilename(request.prNumber)
       );
       const tmp = `${dispatchFile}.tmp.${process.pid}`;
-      fs37.writeFileSync(tmp, prompt, "utf-8");
-      fs37.renameSync(tmp, dispatchFile);
+      fs38.writeFileSync(tmp, prompt, "utf-8");
+      fs38.renameSync(tmp, dispatchFile);
       state.activeSession = {
         request,
         agentName: options.agentName,
@@ -1702,8 +1702,8 @@ function createHeadlessLoop(options) {
     const session = state.activeSession;
     const revPath = session.reviewFilePath;
     let hasNewOutput = false;
-    if (fs37.existsSync(revPath)) {
-      const stat = fs37.statSync(revPath);
+    if (fs38.existsSync(revPath)) {
+      const stat = fs38.statSync(revPath);
       const lastRound = session.rounds[session.rounds.length - 1];
       const lastCheck = lastRound?.timestamp ?? session.startedAt;
       hasNewOutput = stat.mtime.toISOString() > lastCheck;
@@ -1716,7 +1716,7 @@ function createHeadlessLoop(options) {
       log2(
         `PR #${session.request.prNumber} round ${roundNum}: ${round.findingCount} findings, ${round.suggestedDiffLines} suggested diff lines`
       );
-      const stopSignalPath = path31.join(options.stateDir, "stop-signal");
+      const stopSignalPath = path32.join(options.stateDir, "stop-signal");
       const ctx = {
         round: roundNum,
         rounds: session.rounds,
@@ -1764,15 +1764,15 @@ function createHeadlessLoop(options) {
   }
   function dispatchFollowUp(session, round) {
     const prompt = buildReviewPrompt(session.request, options.agentName, round);
-    const inboxDir = path31.join(options.commsDir, "inbox");
-    fs37.mkdirSync(inboxDir, { recursive: true });
-    const dispatchFile = path31.join(
+    const inboxDir = path32.join(options.commsDir, "inbox");
+    fs38.mkdirSync(inboxDir, { recursive: true });
+    const dispatchFile = path32.join(
       inboxDir,
       dispatchFilename(session.request.prNumber, round)
     );
     const tmp = `${dispatchFile}.tmp.${process.pid}`;
-    fs37.writeFileSync(tmp, prompt, "utf-8");
-    fs37.renameSync(tmp, dispatchFile);
+    fs38.writeFileSync(tmp, prompt, "utf-8");
+    fs38.renameSync(tmp, dispatchFile);
   }
   function completeSession(session) {
     session.terminatedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -1782,12 +1782,12 @@ function createHeadlessLoop(options) {
     } else {
       consecutiveReReviews = 0;
     }
-    const inboxDir = path31.join(options.commsDir, "inbox");
-    if (fs37.existsSync(inboxDir)) {
+    const inboxDir = path32.join(options.commsDir, "inbox");
+    if (fs38.existsSync(inboxDir)) {
       const prefix = dispatchFileMatch(session.request.prNumber);
-      const files = fs37.readdirSync(inboxDir).filter((f) => f.includes(prefix));
+      const files = fs38.readdirSync(inboxDir).filter((f) => f.includes(prefix));
       for (const f of files) {
-        fs37.unlinkSync(path31.join(inboxDir, f));
+        fs38.unlinkSync(path32.join(inboxDir, f));
       }
     }
     state.activeSession = null;
@@ -4187,14 +4187,14 @@ function getWebSocketCtor() {
   return typeof candidate === "function" ? candidate : null;
 }
 function delay(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 function isLoopbackHost(hostname2) {
   return hostname2 === "127.0.0.1" || hostname2 === "localhost";
 }
 async function allocateLoopbackPort(hostname2) {
   const bindHost = hostname2 === "localhost" ? "127.0.0.1" : hostname2;
-  return await new Promise((resolve39, reject) => {
+  return await new Promise((resolve40, reject) => {
     const server = net.createServer();
     server.unref();
     server.once("error", reject);
@@ -4212,19 +4212,19 @@ async function allocateLoopbackPort(hostname2) {
           reject(error);
           return;
         }
-        resolve39(port);
+        resolve40(port);
       });
     });
   });
 }
 async function isTcpPortAvailable(hostname2, port) {
   const bindHost = hostname2 === "localhost" ? "127.0.0.1" : hostname2;
-  return await new Promise((resolve39) => {
+  return await new Promise((resolve40) => {
     const server = net.createServer();
     server.unref();
-    server.once("error", () => resolve39(false));
+    server.once("error", () => resolve40(false));
     server.listen(port, bindHost, () => {
-      server.close((error) => resolve39(!error));
+      server.close((error) => resolve40(!error));
     });
   });
 }
@@ -5099,7 +5099,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
   if (!WebSocket2) {
     return false;
   }
-  return new Promise((resolve39) => {
+  return new Promise((resolve40) => {
     let settled = false;
     let socket = null;
     const finish = (healthy) => {
@@ -5112,7 +5112,7 @@ async function checkAppServerHealth(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_M
         socket?.close();
       } catch {
       }
-      resolve39(healthy);
+      resolve40(healthy);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
@@ -5184,21 +5184,21 @@ async function checkTcpPortListening(url, timeoutMs = APP_SERVER_HEALTH_TIMEOUT_
     return false;
   }
   if (!port || !Number.isFinite(port)) return false;
-  return new Promise((resolve39) => {
+  return new Promise((resolve40) => {
     const socket = net2.createConnection({ host: hostname2, port });
     const timer = setTimeout(() => {
       socket.destroy();
-      resolve39(false);
+      resolve40(false);
     }, timeoutMs);
     socket.once("connect", () => {
       clearTimeout(timer);
       socket.destroy();
-      resolve39(true);
+      resolve40(true);
     });
     socket.once("error", () => {
       clearTimeout(timer);
       socket.destroy();
-      resolve39(false);
+      resolve40(false);
     });
   });
 }
@@ -6348,7 +6348,7 @@ async function restartBridge(options) {
         forced = true;
         break;
       }
-      await new Promise((resolve39) => setTimeout(resolve39, 1e3));
+      await new Promise((resolve40) => setTimeout(resolve40, 1e3));
     }
   }
   if (options.headless?.enabled && options.commsDir) {
@@ -7052,7 +7052,7 @@ async function addCommand(args) {
 
 // src/commands/status.ts
 import * as childProcess from "child_process";
-import * as fs32 from "fs";
+import * as fs33 from "fs";
 init_utils();
 
 // src/commands/remote-panel.ts
@@ -7768,7 +7768,7 @@ function buildPromptBundle(agent, items, options = {}) {
   return lines.join("\n");
 }
 function sleep(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 async function runPollingReceiver(rawOptions) {
   const now = rawOptions.now ?? /* @__PURE__ */ new Date();
@@ -7857,8 +7857,8 @@ Options:
   --help, -h           Show help.
 
 Examples:
-  tap remote-panel --host 100.121.45.22 --port 8765 --agent \uC724 --read-only
-  tap remote-panel --host 100.121.45.22 --port 8765 --agent \uC724 --send-enabled --token-env TAP_REMOTE_PANEL_TOKEN
+  tap remote-panel --host 127.0.0.1 --port 8765 --agent agent-a --read-only
+  tap remote-panel --host 127.0.0.1 --port 8765 --agent agent-a --send-enabled --token-env TAP_REMOTE_PANEL_TOKEN
 `.trim();
 function createRemotePanelServer(options) {
   return http.createServer(async (req, res) => {
@@ -7972,7 +7972,7 @@ function parseSendFields(rawBody, contentType) {
   return result;
 }
 function readRequestBody(req, maxBytes = 16384) {
-  return new Promise((resolve39, reject) => {
+  return new Promise((resolve40, reject) => {
     let total = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -7984,7 +7984,7 @@ function readRequestBody(req, maxBytes = 16384) {
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve39(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => resolve40(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -8403,7 +8403,7 @@ function buildRemotePanelHtml(snapshot) {
       <p class="hint">Writes durable inbox evidence only. No live IPC, consent-drive, or turn promotion is attempted.</p>
       <form method="post" action="/api/send">
         <label>Token/PIN <input name="token" type="password" autocomplete="off" required></label>
-        <label>To <input name="to" maxlength="80" placeholder="\uC900" required></label>
+        <label>To <input name="to" maxlength="80" placeholder="agent-b" required></label>
         <label>Subject <input name="subject" maxlength="120" placeholder="remote-panel-ping" required></label>
         <label>Content <textarea name="content" maxlength="4000" rows="5" required></textarea></label>
         <button type="submit">Write inbox evidence</button>
@@ -8633,9 +8633,9 @@ async function remotePanelCommand(args) {
     };
   }
   const server = createRemotePanelServer(options);
-  return new Promise((resolve39) => {
+  return new Promise((resolve40) => {
     server.on("error", (err) => {
-      resolve39({
+      resolve40({
         ok: false,
         command: "remote-panel",
         code: err.code === "EADDRINUSE" ? "TAP_PORT_IN_USE" : "TAP_GUI_ERROR",
@@ -8662,126 +8662,320 @@ async function remotePanelCommand(args) {
 }
 
 // src/commands/status-profiles.ts
-var AGENT_PROFILES = {
-  "sumback-yoon": {
-    kind: "codex-cli",
-    id: "sumback-yoon",
-    label: "sum-back \uC724 CLI/TUI receiver",
-    agent: "\uC724",
-    runtimeSurface: "codex-cli",
-    expectedPermissionMode: "full",
-    repoRoot: "/home/devin/hua-platform",
-    commsDir: "/home/devin/hua-comms",
-    receiverSession: "tap-receiver-yoon",
-    receiverLogPath: "/home/devin/hua-platform/.tap-comms/logs/receiver-supervisor-sumback-yoon.log",
-    supervisorStateName: "m463-live-sumback-yoon-main-supervisor",
-    appServerUrl: "ws://127.0.0.1:35089",
-    headlessRunner: {
-      profile: "sumback-yoon",
-      tmuxSession: "tap-headless-sumback-yoon",
-      startCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --tmux",
-      stopCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --stop",
-      statusCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-yoon --status"
-    }
-  },
-  "sumback-sol": {
-    kind: "codex-cli",
-    id: "sumback-sol",
-    label: "sum-back \uC194 CLI/TUI receiver",
-    agent: "\uC194",
-    runtimeSurface: "codex-cli",
-    expectedPermissionMode: "full",
-    repoRoot: "/home/devin/hua-platform",
-    commsDir: "/home/devin/hua-comms",
-    receiverSession: "tap-receiver-sol",
-    receiverLogPath: "/home/devin/hua-platform/.tap-comms/logs/receiver-supervisor-sumback-sol.log",
-    supervisorStateName: "m463-sumback-sol-supervisor",
-    appServerUrl: "ws://127.0.0.1:44587",
-    headlessRunner: {
-      profile: "sumback-sol",
-      tmuxSession: "tap-headless-sumback-sol",
-      startCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-sol --tmux",
-      stopCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-sol --stop",
-      statusCommand: "bash scripts/tap-headless-runner-supervisor.sh sumback-sol --status"
-    }
-  },
-  "mac-jun-ssh-tui": {
-    kind: "codex-cli",
-    id: "mac-jun-ssh-tui",
-    label: "sum-mac \uC900 SSH TUI receiver",
-    agent: "\uC900",
-    runtimeSurface: "codex-cli",
-    expectedPermissionMode: "full",
-    repoRoot: "/Users/devin/HUA/hua-platform",
-    commsDir: "/Users/devin/HUA/hua-comms",
-    receiverSession: "tap-receiver-jun-ssh-tui",
-    receiverLogPath: "/Users/devin/HUA/hua-platform/.tap-comms/logs/receiver-supervisor-mac-jun-ssh-tui.log",
-    sshTarget: "sum-mac",
-    supervisorStateName: "m463-mac-jun-ssh-tui-supervisor",
-    appServerUrl: "ws://127.0.0.1:35089",
-    headlessRunner: {
-      profile: "mac-jun-ssh-tui",
-      tmuxSession: "tap-headless-mac-jun-ssh-tui",
-      startCommand: "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --tmux",
-      stopCommand: "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --stop",
-      statusCommand: "bash scripts/tap-headless-runner-supervisor.sh mac-jun-ssh-tui --status"
-    },
-    flowSupervisors: [
-      {
-        id: "mac-jun-projection",
-        label: "sum-back -> Mac \uC900 projection",
-        host: "sum-back",
-        tmuxSession: "tap-projection-jun",
-        statusCommand: "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --status",
-        startCommand: "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-projection --tmux"
-      },
-      {
-        id: "mac-jun-uplink",
-        label: "Mac \uC900 -> sum-back uplink",
-        host: "sum-back",
-        tmuxSession: "tap-uplink-jun",
-        statusCommand: "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --status",
-        startCommand: "cd /home/devin/hua-platform && bash scripts/tap-flow-supervisor.sh mac-jun-uplink --tmux"
-      }
-    ]
-  },
-  "remote-panel-yoon": {
-    kind: "remote-panel",
-    id: "remote-panel-yoon",
-    label: "sum-back \uC724 remote phone panel",
-    agent: "\uC724",
-    runtimeSurface: "remote-panel",
-    repoRoot: "/home/devin/hua-platform",
-    commsDir: "/home/devin/hua-comms",
-    host: "100.121.45.22",
-    port: 8765,
-    readOnly: true,
-    sendEnabled: false
+var AGENT_PROFILES = {};
+
+// src/commands/profile-pack-loader.ts
+import * as fs32 from "fs";
+import * as path29 from "path";
+var PROFILE_PACK_SCHEMA_VERSION = "tap-profile-pack.v0";
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function stringValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function booleanValue(value) {
+  return typeof value === "boolean" ? value : null;
+}
+function numberValue(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function resolveProfilePath(packPath, value) {
+  const fallback = path29.dirname(packPath);
+  if (!value) return fallback;
+  return path29.resolve(path29.dirname(packPath), value);
+}
+function profilePackError(packPath, message) {
+  return new RangeError(`Invalid profile pack ${packPath}: ${message}`);
+}
+function loadProfilePack(profilePackPath) {
+  const resolvedPath = path29.resolve(profilePackPath);
+  if (!fs32.existsSync(resolvedPath)) {
+    throw profilePackError(resolvedPath, "file does not exist");
   }
-};
+  let parsed;
+  try {
+    parsed = JSON.parse(fs32.readFileSync(resolvedPath, "utf8"));
+  } catch (error) {
+    throw profilePackError(
+      resolvedPath,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+  if (!isRecord(parsed)) {
+    throw profilePackError(resolvedPath, "root must be an object");
+  }
+  if (parsed.schemaVersion !== PROFILE_PACK_SCHEMA_VERSION) {
+    throw profilePackError(
+      resolvedPath,
+      `schemaVersion must be ${PROFILE_PACK_SCHEMA_VERSION}`
+    );
+  }
+  if (!Array.isArray(parsed.profiles)) {
+    throw profilePackError(resolvedPath, "profiles must be an array");
+  }
+  const profiles = [];
+  const ids = /* @__PURE__ */ new Set();
+  for (const [index, rawProfile] of parsed.profiles.entries()) {
+    if (!isRecord(rawProfile)) {
+      throw profilePackError(
+        resolvedPath,
+        `profiles[${index}] must be an object`
+      );
+    }
+    const id = stringValue(rawProfile.id);
+    const label = stringValue(rawProfile.label);
+    const agent = stringValue(rawProfile.agent);
+    const runtimeSurface = stringValue(rawProfile.runtimeSurface);
+    if (!id || !label || !agent || !runtimeSurface) {
+      throw profilePackError(
+        resolvedPath,
+        `profiles[${index}] requires id, label, agent, and runtimeSurface`
+      );
+    }
+    if (ids.has(id)) {
+      throw profilePackError(resolvedPath, `duplicate profile id ${id}`);
+    }
+    ids.add(id);
+    const paths = isRecord(rawProfile.paths) ? rawProfile.paths : {};
+    const capabilities = isRecord(rawProfile.capabilities) ? rawProfile.capabilities : {};
+    const status = isRecord(rawProfile.status) ? rawProfile.status : void 0;
+    const ready = isRecord(rawProfile.ready) ? rawProfile.ready : void 0;
+    const commands = normalizeCommands(rawProfile.commands, resolvedPath, id);
+    profiles.push({
+      id,
+      label,
+      agent,
+      runtimeSurface,
+      sshTarget: stringValue(rawProfile.sshTarget) ?? void 0,
+      paths: {
+        repoRoot: stringValue(paths.repoRoot) ?? void 0,
+        commsDir: stringValue(paths.commsDir) ?? void 0
+      },
+      capabilities: {
+        ready: booleanValue(capabilities.ready) ?? false,
+        status: booleanValue(capabilities.status) ?? false,
+        apply: booleanValue(capabilities.apply) ?? false
+      },
+      status,
+      ready,
+      commands
+    });
+  }
+  return {
+    path: resolvedPath,
+    profiles
+  };
+}
+function normalizeCommands(rawCommands, packPath, profileId2) {
+  if (rawCommands === void 0) return void 0;
+  if (!isRecord(rawCommands)) {
+    throw profilePackError(
+      packPath,
+      `profile ${profileId2} commands must be an object`
+    );
+  }
+  const commands = {};
+  for (const [commandId, rawCommand] of Object.entries(rawCommands)) {
+    if (!isRecord(rawCommand)) {
+      throw profilePackError(
+        packPath,
+        `profile ${profileId2} command ${commandId} must be an object`
+      );
+    }
+    const shell = stringValue(rawCommand.shell);
+    const risk = stringValue(rawCommand.risk);
+    const reviewRequired = booleanValue(rawCommand.reviewRequired);
+    const defaultEnabled = booleanValue(rawCommand.defaultEnabled);
+    if (!shell || !risk) {
+      throw profilePackError(
+        packPath,
+        `profile ${profileId2} command ${commandId} requires shell and risk`
+      );
+    }
+    if (reviewRequired !== true || defaultEnabled !== false) {
+      throw profilePackError(
+        packPath,
+        `profile ${profileId2} command ${commandId} must set reviewRequired=true and defaultEnabled=false`
+      );
+    }
+    commands[commandId] = {
+      shell,
+      risk,
+      reviewRequired,
+      defaultEnabled
+    };
+  }
+  return commands;
+}
+function profileCommand(profile, commandRef) {
+  if (!commandRef || !profile.commands) return null;
+  return profile.commands[commandRef]?.shell ?? null;
+}
+function statusProfilesFromProfilePack(profilePackPath) {
+  const pack = loadProfilePack(profilePackPath);
+  return pack.profiles.map((profile) => statusProfileFromPackProfile(pack.path, profile)).filter((profile) => Boolean(profile));
+}
+function readyProfilesFromProfilePack(profilePackPath) {
+  const pack = loadProfilePack(profilePackPath);
+  return pack.profiles.map((profile) => readyProfileFromPackProfile(pack.path, profile)).filter((profile) => Boolean(profile));
+}
+function findStatusProfileInProfilePack(profilePackPath, profileId2) {
+  if (!profilePackPath) return null;
+  return statusProfilesFromProfilePack(profilePackPath).find(
+    (profile) => profile.id === profileId2
+  ) ?? null;
+}
+function findReadyProfileInProfilePack(profilePackPath, profileId2) {
+  if (!profilePackPath) return null;
+  return readyProfilesFromProfilePack(profilePackPath).find(
+    (profile) => profile.id === profileId2
+  ) ?? null;
+}
+function statusProfileFromPackProfile(packPath, profile) {
+  if (profile.capabilities?.status !== true) return null;
+  if (profile.runtimeSurface === "codex-cli") {
+    return codexCliStatusProfile(packPath, profile);
+  }
+  if (profile.runtimeSurface === "remote-panel") {
+    return remotePanelStatusProfile(packPath, profile);
+  }
+  return null;
+}
+function codexCliStatusProfile(packPath, profile) {
+  const status = profile.status ?? {};
+  const repoRoot = resolveProfilePath(
+    packPath,
+    profile.paths?.repoRoot ?? null
+  );
+  const commsDir = resolveProfilePath(
+    packPath,
+    profile.paths?.commsDir ?? null
+  );
+  const expectedPermissionMode = stringValue(status.expectedPermissionMode) === "full" ? "full" : "safe";
+  const receiverSession = stringValue(status.receiverSession) ?? `tap-receiver-${profile.id}`;
+  const receiverLogPath = stringValue(status.receiverLogPath) ?? path29.join(repoRoot, ".tap-comms", "logs", `${receiverSession}.log`);
+  const flowSupervisors = Array.isArray(status.flowSupervisors) ? status.flowSupervisors.map((rawSupervisor) => flowSupervisor(rawSupervisor)).filter(
+    (supervisor) => Boolean(supervisor)
+  ) : void 0;
+  const headlessRunner = headlessRunnerStatus(status.headlessRunner);
+  return {
+    kind: "codex-cli",
+    id: profile.id,
+    label: profile.label,
+    agent: profile.agent,
+    runtimeSurface: "codex-cli",
+    expectedPermissionMode,
+    repoRoot,
+    commsDir,
+    receiverSession,
+    receiverLogPath,
+    supervisorStateName: stringValue(status.supervisorStateName) ?? `${profile.id}-supervisor`,
+    appServerUrl: stringValue(status.appServerUrl) ?? "ws://127.0.0.1:4501",
+    sshTarget: profile.sshTarget,
+    ...flowSupervisors?.length ? { flowSupervisors } : {},
+    ...headlessRunner ? { headlessRunner } : {}
+  };
+}
+function flowSupervisor(rawSupervisor) {
+  if (!isRecord(rawSupervisor)) return null;
+  const id = stringValue(rawSupervisor.id);
+  const label = stringValue(rawSupervisor.label);
+  const tmuxSession = stringValue(rawSupervisor.tmuxSession);
+  const startCommand = stringValue(rawSupervisor.startCommand);
+  const statusCommand2 = stringValue(rawSupervisor.statusCommand);
+  if (!id || !label || !tmuxSession || !startCommand || !statusCommand2) {
+    return null;
+  }
+  return {
+    id,
+    label,
+    host: stringValue(rawSupervisor.host) ?? "local",
+    tmuxSession,
+    startCommand,
+    statusCommand: statusCommand2
+  };
+}
+function headlessRunnerStatus(rawRunner) {
+  if (!isRecord(rawRunner)) return null;
+  const profile = stringValue(rawRunner.profile);
+  const tmuxSession = stringValue(rawRunner.tmuxSession);
+  const startCommand = stringValue(rawRunner.startCommand);
+  const stopCommand = stringValue(rawRunner.stopCommand);
+  const statusCommand2 = stringValue(rawRunner.statusCommand);
+  if (!profile || !tmuxSession || !startCommand || !stopCommand || !statusCommand2) {
+    return null;
+  }
+  return {
+    profile,
+    tmuxSession,
+    startCommand,
+    stopCommand,
+    statusCommand: statusCommand2
+  };
+}
+function remotePanelStatusProfile(packPath, profile) {
+  const status = profile.status ?? {};
+  return {
+    kind: "remote-panel",
+    id: profile.id,
+    label: profile.label,
+    agent: profile.agent,
+    runtimeSurface: "remote-panel",
+    repoRoot: resolveProfilePath(packPath, profile.paths?.repoRoot ?? null),
+    commsDir: resolveProfilePath(packPath, profile.paths?.commsDir ?? null),
+    sshTarget: profile.sshTarget,
+    host: stringValue(status.host) ?? "127.0.0.1",
+    port: numberValue(status.port) ?? 8765,
+    readOnly: booleanValue(status.readOnly) ?? true,
+    sendEnabled: booleanValue(status.sendEnabled) ?? false,
+    tokenEnv: stringValue(status.tokenEnv) ?? void 0
+  };
+}
+function readyProfileFromPackProfile(packPath, profile) {
+  if (profile.capabilities?.ready !== true) return null;
+  if (!profile.ready) return null;
+  const surface = stringValue(profile.ready.surface);
+  if (surface !== "codex-cli" && surface !== "remote-panel") return null;
+  const commandRef = stringValue(profile.ready.commandRef);
+  const command = profileCommand(profile, commandRef);
+  if (!command) return null;
+  return {
+    id: profile.id,
+    surface,
+    agent: profile.agent,
+    command,
+    appServerUrl: stringValue(profile.ready.appServerUrl) ?? void 0,
+    host: stringValue(profile.ready.host) ?? void 0,
+    port: numberValue(profile.ready.port) ?? void 0,
+    sendEnabled: booleanValue(profile.ready.sendEnabled) ?? void 0,
+    tokenEnv: stringValue(profile.ready.tokenEnv),
+    source: "profile-pack",
+    profilePackPath: packPath,
+    allowApply: false
+  };
+}
 
 // src/commands/status.ts
 var STATUS_HELP = `
 Usage:
   tap status
-  tap status --profile <sumback-yoon|sumback-sol|mac-jun-ssh-tui|remote-panel-yoon> [--json]
+  tap status --profile <profile-id> [--profile-pack <path>] [--json]
 
 Description:
   Show all installed instances, their bridge status, and configuration info.
-  With --profile, show AX-oriented readiness diagnostics for a known agent
+  With --profile, show AX-oriented readiness diagnostics for a reviewed local
   surface, including stable checks and suggested next commands.
 
 Examples:
   npx @hua-labs/tap status
-  npx @hua-labs/tap status --profile sumback-yoon --json
-  npx @hua-labs/tap status --profile sumback-sol --json
-  npx @hua-labs/tap status --profile remote-panel-yoon --json
+  npx @hua-labs/tap status --json
+  npx @hua-labs/tap status --profile local-agent-a-cli --profile-pack ./tap-profile-pack.json --json
 `.trim();
 var profileProbeRunnerForTests = null;
 var profileLocalPathExistsForTests = null;
 var flowSupervisorStatusRunnerForTests = null;
 var headlessRunnerStatusRunnerForTests = null;
-var sumBackLocalHostCheckerForTests = null;
 function resolveStatus(inst, liveDispatchAliases, stateDir, commsDir) {
   if (!inst.installed) {
     return {
@@ -8920,7 +9114,7 @@ function profilePathExistsLocally(profile) {
   if (profileLocalPathExistsForTests) {
     return profileLocalPathExistsForTests(profile);
   }
-  return fs32.existsSync(profile.repoRoot);
+  return fs33.existsSync(profile.repoRoot);
 }
 function resolveProfileHost(profile) {
   if (!profile.sshTarget) {
@@ -8949,24 +9143,18 @@ function profileSyncCommand(profile, host) {
     "git fetch origin main && git merge --ff-only origin/main && pnpm --filter @hua-labs/tap build"
   );
 }
-function isSumBackLocalHost() {
-  if (sumBackLocalHostCheckerForTests) {
-    return sumBackLocalHostCheckerForTests();
-  }
-  return fs32.existsSync("/home/devin/hua-platform");
-}
-function wrapFlowSupervisorCommand(command) {
-  return isSumBackLocalHost() ? command : `ssh sum-back ${shellQuote(command)}`;
-}
 function runFlowSupervisorStatus(supervisor) {
   if (flowSupervisorStatusRunnerForTests) {
     return flowSupervisorStatusRunnerForTests(supervisor);
   }
-  const command = supervisor.host === "sum-back" ? wrapFlowSupervisorCommand(supervisor.statusCommand) : supervisor.statusCommand;
-  const result = childProcess.spawnSync("bash", ["-lc", command], {
-    encoding: "utf8",
-    timeout: 8e3
-  });
+  const result = childProcess.spawnSync(
+    "bash",
+    ["-lc", supervisor.statusCommand],
+    {
+      encoding: "utf8",
+      timeout: 8e3
+    }
+  );
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",
@@ -8990,8 +9178,8 @@ ${result.stderr}`.trim();
     tmuxSession: supervisor.tmuxSession,
     status,
     message: status === "running" ? `${supervisor.tmuxSession} is running` : status === "stopped" ? `${supervisor.tmuxSession} is not running` : output ? `could not classify ${supervisor.tmuxSession}: ${output}` : `could not inspect ${supervisor.tmuxSession}`,
-    startCommand: supervisor.host === "sum-back" ? wrapFlowSupervisorCommand(supervisor.startCommand) : supervisor.startCommand,
-    statusCommand: supervisor.host === "sum-back" ? wrapFlowSupervisorCommand(supervisor.statusCommand) : supervisor.statusCommand
+    startCommand: supervisor.startCommand,
+    statusCommand: supervisor.statusCommand
   };
 }
 function runHeadlessRunnerStatus(runner, profile, host) {
@@ -9606,23 +9794,52 @@ async function statusCommand(args) {
       command: "status",
       code: "TAP_STATUS_PROFILE_REQUIRED",
       message: "Missing --profile value.",
-      warnings: [`Known profiles: ${Object.keys(AGENT_PROFILES).join(", ")}`],
+      warnings: ["Use a reviewed local status profile id."],
       data: {
-        knownProfiles: Object.keys(AGENT_PROFILES)
+        knownProfiles: []
       }
     };
   }
   if (typeof profileFlag === "string") {
-    const profile = AGENT_PROFILES[profileFlag];
+    const profilePackPath = typeof parsed.flags["profile-pack"] === "string" ? parsed.flags["profile-pack"].trim() : null;
+    if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+      return {
+        ok: false,
+        command: "status",
+        code: "TAP_STATUS_PROFILE_REQUIRED",
+        message: "Missing --profile-pack <path> value.",
+        warnings: ["Pass a reviewed local profile pack path."],
+        data: {
+          knownProfiles: []
+        }
+      };
+    }
+    let profile = AGENT_PROFILES[profileFlag];
+    if (!profile && profilePackPath) {
+      try {
+        profile = findStatusProfileInProfilePack(profilePackPath, profileFlag);
+      } catch (error) {
+        return {
+          ok: false,
+          command: "status",
+          code: "TAP_STATUS_UNKNOWN_PROFILE",
+          message: error instanceof Error ? error.message : String(error),
+          warnings: ["Pass a valid reviewed local profile pack path."],
+          data: {
+            knownProfiles: []
+          }
+        };
+      }
+    }
     if (!profile) {
       return {
         ok: false,
         command: "status",
         code: "TAP_STATUS_UNKNOWN_PROFILE",
         message: `Unknown status profile: ${profileFlag}`,
-        warnings: [`Known profiles: ${Object.keys(AGENT_PROFILES).join(", ")}`],
+        warnings: ["Use a reviewed local status profile id."],
         data: {
-          knownProfiles: Object.keys(AGENT_PROFILES)
+          knownProfiles: []
         }
       };
     }
@@ -9726,8 +9943,8 @@ async function statusCommand(args) {
 }
 
 // src/commands/setup.ts
-import * as fs33 from "fs";
-import * as path29 from "path";
+import * as fs34 from "fs";
+import * as path30 from "path";
 init_utils();
 var SETUP_HELP = `
 Usage:
@@ -9750,7 +9967,7 @@ Options:
   --comms-dir <path>    Override comms directory path for report resolution.
   --help, -h            Show help.
 `.trim();
-var PROFILE_PACK_SCHEMA_VERSION = "tap-profile-pack.v0";
+var PROFILE_PACK_SCHEMA_VERSION2 = "tap-profile-pack.v0";
 var PROFILE_PACK_RUNTIME_SURFACES = /* @__PURE__ */ new Set(["codex-cli", "remote-panel"]);
 var PROFILE_PACK_COMMAND_RISKS = /* @__PURE__ */ new Set([
   "read-only",
@@ -9777,13 +9994,13 @@ function parseSetupProfile(value) {
 }
 function checkWritableWithoutCreate(targetPath) {
   try {
-    if (fs33.existsSync(targetPath)) {
-      fs33.accessSync(targetPath, fs33.constants.W_OK);
+    if (fs34.existsSync(targetPath)) {
+      fs34.accessSync(targetPath, fs34.constants.W_OK);
       return true;
     }
-    const parent = path29.dirname(targetPath);
-    if (!fs33.existsSync(parent)) return void 0;
-    fs33.accessSync(parent, fs33.constants.W_OK);
+    const parent = path30.dirname(targetPath);
+    if (!fs34.existsSync(parent)) return void 0;
+    fs34.accessSync(parent, fs34.constants.W_OK);
     return true;
   } catch {
     return false;
@@ -9833,7 +10050,7 @@ function targetStatus(exists) {
 function objectValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function stringValue(value) {
+function stringValue2(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function stringArray(value) {
@@ -9844,8 +10061,8 @@ function unique3(values) {
 }
 function readJsonFile2(filePath) {
   try {
-    if (!fs33.existsSync(filePath)) return null;
-    const parsed = JSON.parse(fs33.readFileSync(filePath, "utf8"));
+    if (!fs34.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs34.readFileSync(filePath, "utf8"));
     return objectValue(parsed);
   } catch {
     return null;
@@ -9853,8 +10070,8 @@ function readJsonFile2(filePath) {
 }
 function readJsonFileResult(filePath) {
   try {
-    if (!fs33.existsSync(filePath)) return { status: "missing" };
-    const parsed = JSON.parse(fs33.readFileSync(filePath, "utf8"));
+    if (!fs34.existsSync(filePath)) return { status: "missing" };
+    const parsed = JSON.parse(fs34.readFileSync(filePath, "utf8"));
     const value = objectValue(parsed);
     if (!value) {
       return {
@@ -9958,7 +10175,7 @@ function validateProfilePackCommands(errors, profile, pathName, riskCounts) {
   return commandRefs;
 }
 function validateProfilePackFile(profilePackPath) {
-  const targetPath = path29.resolve(profilePackPath);
+  const targetPath = path30.resolve(profilePackPath);
   const readResult = readJsonFileResult(targetPath);
   const errors = [];
   const summary = {
@@ -9991,11 +10208,11 @@ function validateProfilePackFile(profilePackPath) {
     "schemaVersion"
   );
   summary.schemaVersion = schemaVersion;
-  if (schemaVersion && schemaVersion !== PROFILE_PACK_SCHEMA_VERSION) {
+  if (schemaVersion && schemaVersion !== PROFILE_PACK_SCHEMA_VERSION2) {
     addProfilePackError(
       errors,
       "schemaVersion",
-      `must be ${PROFILE_PACK_SCHEMA_VERSION} for this contract`
+      `must be ${PROFILE_PACK_SCHEMA_VERSION2} for this contract`
     );
   }
   summary.packId = validateProfilePackString(
@@ -10165,7 +10382,7 @@ function generatedMcpEntry(environment) {
     TAP_STATE_DIR: toForwardSlashPath(environment.stateDir ?? ""),
     TAP_REPO_ROOT: toForwardSlashPath(environment.repoRoot ?? ""),
     TAP_CHANNEL_LOG_PATH: toForwardSlashPath(
-      path29.join(environment.stateDir ?? "", "logs", "tap-mcp.log")
+      path30.join(environment.stateDir ?? "", "logs", "tap-mcp.log")
     )
   };
   const entry = {
@@ -10213,7 +10430,7 @@ function structurallyMatchesGeneratedMcpEntry(entry, generatedEntry) {
   return arraysEqual(entryKeys, generatedKeys) && entry.type === generatedEntry.type && entry.command === generatedEntry.command && entry.cwd === generatedEntry.cwd && entry.managedBy === generatedEntry.managedBy && entry.schemaVersion === generatedEntry.schemaVersion && arraysEqual(entry.args, generatedEntry.args) && arraysEqual(Object.keys(entryEnv).sort(), Object.keys(generatedEnv).sort());
 }
 function timestampAgeSeconds(value) {
-  const timestamp = stringValue(value);
+  const timestamp = stringValue2(value);
   if (!timestamp) return null;
   const parsed = Date.parse(timestamp);
   if (!Number.isFinite(parsed)) return null;
@@ -10222,7 +10439,7 @@ function timestampAgeSeconds(value) {
 function routeValue(record, key) {
   const address = objectValue(record?.address);
   const capabilities = objectValue(record?.capabilities);
-  return stringValue(address?.[key]) ?? stringValue(capabilities?.[key]) ?? stringValue(record?.[key]);
+  return stringValue2(address?.[key]) ?? stringValue2(capabilities?.[key]) ?? stringValue2(record?.[key]);
 }
 function classifyRuntimeHealth(value) {
   if (!value) return "warn";
@@ -10240,7 +10457,7 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 function buildConfigTarget(kind, runtime, filePath, action) {
-  const exists = fs33.existsSync(filePath);
+  const exists = fs34.existsSync(filePath);
   return {
     kind,
     runtime,
@@ -10257,13 +10474,13 @@ function buildConfigTargets(profile, repoRoot, profilePack) {
   const repoMcp = buildConfigTarget(
     "repo-mcp",
     profile,
-    path29.join(repoRoot, ".mcp.json"),
+    path30.join(repoRoot, ".mcp.json"),
     manualAction(
       "inspect-repo-mcp-config",
       "Inspect repo MCP config",
       "setup reports repo MCP config presence but does not edit it in the read-only slice",
       void 0,
-      path29.join(repoRoot, ".mcp.json")
+      path30.join(repoRoot, ".mcp.json")
     )
   );
   const profilePackTarget = profilePack ? [
@@ -10291,13 +10508,13 @@ function buildConfigTargets(profile, repoRoot, profilePack) {
       buildConfigTarget(
         "claude-settings",
         profile,
-        path29.join(repoRoot, ".claude", "settings.json"),
+        path30.join(repoRoot, ".claude", "settings.json"),
         manualAction(
           "inspect-claude-settings",
           "Inspect Claude settings",
           "Claude settings remain user-managed until a reviewed apply contract exists",
           void 0,
-          path29.join(repoRoot, ".claude", "settings.json")
+          path30.join(repoRoot, ".claude", "settings.json")
         )
       ),
       ...profilePackTarget
@@ -10464,9 +10681,9 @@ function buildCodexAppRuntimePhase(environment) {
   }
   const commsDir = environment.commsDir;
   const freshMinutes = environment.freshMinutes ?? 30;
-  const presencePath = commsDir ? path29.join(commsDir, "presence", `${agent}.json`) : null;
+  const presencePath = commsDir ? path30.join(commsDir, "presence", `${agent}.json`) : null;
   const record = presencePath ? readJsonFile2(presencePath) : null;
-  const timestamp = stringValue(record?.timestamp) ?? stringValue(record?.lastActivity);
+  const timestamp = stringValue2(record?.timestamp) ?? stringValue2(record?.lastActivity);
   const ageSeconds = timestampAgeSeconds(timestamp);
   const fresh = ageSeconds !== null && Number.isFinite(ageSeconds) && ageSeconds <= freshMinutes * 60;
   const capabilities = objectValue(record?.capabilities);
@@ -10476,9 +10693,9 @@ function buildCodexAppRuntimePhase(environment) {
   ]);
   const conversationId = routeValue(record, "conversationId");
   const ownerClientId = routeValue(record, "ownerClientId");
-  const publishedConsentDriveStatus = stringValue(record?.consentDriveStatus);
+  const publishedConsentDriveStatus = stringValue2(record?.consentDriveStatus);
   const consentDriveStatus = record && !fresh && publishedConsentDriveStatus === "ready" ? "stale" : publishedConsentDriveStatus;
-  const runtimeHealth = stringValue(objectValue(record?.health)?.status) ?? "not-observed";
+  const runtimeHealth = stringValue2(objectValue(record?.health)?.status) ?? "not-observed";
   const routeReady = Boolean(record) && fresh && consentDriveStatus === "ready" && runtimeHealth === "ready" && Boolean(conversationId) && Boolean(ownerClientId);
   const status = routeReady ? "pass" : "fail";
   const missingTupleParts = [
@@ -10606,10 +10823,10 @@ function buildClaudeChannelRuntimePhase(environment) {
   }
   const commsDir = environment.commsDir;
   const freshMinutes = environment.freshMinutes ?? 30;
-  const presencePath = commsDir ? path29.join(commsDir, "presence", `${agent}.json`) : null;
-  const inboxPath = commsDir ? path29.join(commsDir, "inbox") : null;
+  const presencePath = commsDir ? path30.join(commsDir, "presence", `${agent}.json`) : null;
+  const inboxPath = commsDir ? path30.join(commsDir, "inbox") : null;
   const record = presencePath ? readJsonFile2(presencePath) : null;
-  const timestamp = stringValue(record?.timestamp) ?? stringValue(record?.lastActivity);
+  const timestamp = stringValue2(record?.timestamp) ?? stringValue2(record?.lastActivity);
   const ageSeconds = timestampAgeSeconds(timestamp);
   const fresh = ageSeconds !== null && Number.isFinite(ageSeconds) && ageSeconds <= freshMinutes * 60;
   const capabilities = objectValue(record?.capabilities);
@@ -10618,11 +10835,11 @@ function buildClaudeChannelRuntimePhase(environment) {
     ...stringArray(capabilities?.receiveTransports)
   ]);
   const hasChannelTransport = receiveTransports.includes("mcp-channel");
-  const publishedRuntimeHealth = stringValue(
+  const publishedRuntimeHealth = stringValue2(
     objectValue(record?.health)?.status
   );
   const runtimeHealth = record && !fresh && publishedRuntimeHealth === "ready" ? "stale" : publishedRuntimeHealth ?? "not-observed";
-  const durableInboxExists = inboxPath ? fs33.existsSync(inboxPath) : false;
+  const durableInboxExists = inboxPath ? fs34.existsSync(inboxPath) : false;
   const channelReady = Boolean(record) && fresh && hasChannelTransport && runtimeHealth === "ready" && durableInboxExists;
   const status = channelReady ? "pass" : "fail";
   const checks = [
@@ -10794,10 +11011,10 @@ function buildPhases(profile, environment) {
 }
 function directoryState(targetPath) {
   try {
-    if (!fs33.existsSync(targetPath)) {
+    if (!fs34.existsSync(targetPath)) {
       return { exists: false, type: "missing" };
     }
-    const stat = fs33.statSync(targetPath);
+    const stat = fs34.statSync(targetPath);
     return {
       exists: true,
       type: stat.isDirectory() ? "directory" : "non-directory"
@@ -10813,10 +11030,10 @@ function directoryState(targetPath) {
 function stateFileState(repoRoot) {
   const statePath = getStatePath(repoRoot);
   try {
-    if (!fs33.existsSync(statePath)) {
+    if (!fs34.existsSync(statePath)) {
       return { exists: false, type: "missing" };
     }
-    const parsed = JSON.parse(fs33.readFileSync(statePath, "utf8"));
+    const parsed = JSON.parse(fs34.readFileSync(statePath, "utf8"));
     const instances = parsed.instances && typeof parsed.instances === "object" ? Object.keys(parsed.instances).length : null;
     return {
       exists: true,
@@ -10836,13 +11053,13 @@ function setupDirectoryTargets(environment) {
   const targets = [
     environment.commsDir,
     environment.stateDir,
-    environment.stateDir ? path29.join(environment.stateDir, "pids") : void 0,
-    environment.stateDir ? path29.join(environment.stateDir, "logs") : void 0
-  ].filter((item) => Boolean(item)).map((item) => path29.resolve(item));
+    environment.stateDir ? path30.join(environment.stateDir, "pids") : void 0,
+    environment.stateDir ? path30.join(environment.stateDir, "logs") : void 0
+  ].filter((item) => Boolean(item)).map((item) => path30.resolve(item));
   return unique3(targets).sort((a, b) => a.length - b.length);
 }
 function parentCanBeCreated(targetPath, targetSet) {
-  const parent = path29.dirname(targetPath);
+  const parent = path30.dirname(targetPath);
   if (parent === targetPath) {
     return {
       ok: false,
@@ -10858,15 +11075,15 @@ function parentCanBeCreated(targetPath, targetSet) {
       parentPath: parent
     };
   }
-  return targetSet.has(path29.resolve(parent)) ? { ok: true } : {
+  return targetSet.has(path30.resolve(parent)) ? { ok: true } : {
     ok: false,
     reason: "directory target parent is missing and is not part of the approved tap-owned directory set",
     parentPath: parent
   };
 }
 function directoryCreateGuard(targetPath, targetSet) {
-  const resolved = path29.resolve(targetPath);
-  const root = path29.parse(resolved).root;
+  const resolved = path30.resolve(targetPath);
+  const root = path30.parse(resolved).root;
   if (!resolved || resolved === root) {
     return {
       id: `guard-directory-${resolved || "empty"}`,
@@ -10878,7 +11095,7 @@ function directoryCreateGuard(targetPath, targetSet) {
   const before = directoryState(resolved);
   if (before.exists && before.type !== "directory") {
     return {
-      id: `guard-directory-${path29.basename(resolved)}`,
+      id: `guard-directory-${path30.basename(resolved)}`,
       status: "fail",
       message: "directory target already exists as a non-directory path",
       evidence: { targetPath: toForwardSlashPath(resolved), before }
@@ -10887,7 +11104,7 @@ function directoryCreateGuard(targetPath, targetSet) {
   const parentCheck = parentCanBeCreated(resolved, targetSet);
   if (!before.exists && !parentCheck.ok) {
     return {
-      id: `guard-directory-${path29.basename(resolved)}`,
+      id: `guard-directory-${path30.basename(resolved)}`,
       status: "fail",
       message: parentCheck.reason,
       evidence: {
@@ -10897,7 +11114,7 @@ function directoryCreateGuard(targetPath, targetSet) {
     };
   }
   return {
-    id: `guard-directory-${path29.basename(resolved) || "root"}`,
+    id: `guard-directory-${path30.basename(resolved) || "root"}`,
     status: "pass",
     message: before.exists ? "directory target already exists" : "directory target is safe to create",
     evidence: { targetPath: toForwardSlashPath(resolved), before }
@@ -10912,7 +11129,7 @@ function mcpJsonSummary(config) {
   };
 }
 function filesystemMcpBackupPath(environment) {
-  return path29.join(
+  return path30.join(
     environment.stateDir ?? "",
     "backups",
     "setup",
@@ -10920,25 +11137,25 @@ function filesystemMcpBackupPath(environment) {
   );
 }
 function pathIsWithin(childPath, parentPath) {
-  const relative9 = path29.relative(
-    path29.resolve(parentPath),
-    path29.resolve(childPath)
+  const relative9 = path30.relative(
+    path30.resolve(parentPath),
+    path30.resolve(childPath)
   );
-  return Boolean(relative9) && !relative9.startsWith("..") && !path29.isAbsolute(relative9);
+  return Boolean(relative9) && !relative9.startsWith("..") && !path30.isAbsolute(relative9);
 }
 function nearestExistingPath(targetPath) {
-  let candidate = path29.resolve(targetPath);
-  while (!fs33.existsSync(candidate)) {
-    const parent = path29.dirname(candidate);
+  let candidate = path30.resolve(targetPath);
+  while (!fs34.existsSync(candidate)) {
+    const parent = path30.dirname(candidate);
     if (parent === candidate) break;
     candidate = parent;
   }
   return { path: candidate, state: directoryState(candidate) };
 }
 function mcpBackupGuard(environment, backupPath) {
-  const stateDir = environment.stateDir ? path29.resolve(environment.stateDir) : null;
-  const resolvedBackupPath = path29.resolve(backupPath);
-  const backupParent = path29.dirname(resolvedBackupPath);
+  const stateDir = environment.stateDir ? path30.resolve(environment.stateDir) : null;
+  const resolvedBackupPath = path30.resolve(backupPath);
+  const backupParent = path30.dirname(resolvedBackupPath);
   if (!stateDir || !pathIsWithin(resolvedBackupPath, stateDir)) {
     return {
       id: "guard-mcp-json-backup-path",
@@ -10976,13 +11193,13 @@ function mcpBackupGuard(environment, backupPath) {
 }
 function writeJsonFile(filePath, value) {
   const temporaryPath = `${filePath}.tmp-${process.pid}`;
-  fs33.writeFileSync(
+  fs34.writeFileSync(
     temporaryPath,
     `${JSON.stringify(value, null, 2)}
 `,
     "utf8"
   );
-  fs33.renameSync(temporaryPath, filePath);
+  fs34.renameSync(temporaryPath, filePath);
 }
 function nextMcpConfig(config, generatedEntry) {
   const current = config ? { ...config } : {};
@@ -11004,7 +11221,7 @@ function buildMcpJsonPreviewPlan(environment, options = {}) {
   const evidence = [];
   const rollback = [];
   const residual = [];
-  const targetPath = environment.repoRoot ? path29.join(environment.repoRoot, ".mcp.json") : null;
+  const targetPath = environment.repoRoot ? path30.join(environment.repoRoot, ".mcp.json") : null;
   if (!targetPath) {
     guards.push({
       id: "guard-mcp-json-target",
@@ -11232,8 +11449,8 @@ function buildMcpJsonPreviewPlan(environment, options = {}) {
       rollbackMessage = "no rollback needed because setup did not edit .mcp.json";
     } else {
       try {
-        fs33.mkdirSync(path29.dirname(backupPath), { recursive: true });
-        fs33.copyFileSync(mcpJsonPath, backupPath);
+        fs34.mkdirSync(path30.dirname(backupPath), { recursive: true });
+        fs34.copyFileSync(mcpJsonPath, backupPath);
         writeJsonFile(mcpJsonPath, nextConfig);
         status = "applied";
         evidenceStatus = "written";
@@ -11244,8 +11461,8 @@ function buildMcpJsonPreviewPlan(environment, options = {}) {
         status = "failed";
         evidenceStatus = "failed";
         evidenceMessage = error instanceof Error ? error.message : "repo .mcp.json edit failed";
-        rollbackStatus = fs33.existsSync(backupPath) ? "available" : "manual-only";
-        rollbackMessage = fs33.existsSync(backupPath) ? "restore the backup if the failed edit left .mcp.json in an unexpected state" : "inspect .mcp.json manually; setup could not create a verified backup";
+        rollbackStatus = fs34.existsSync(backupPath) ? "available" : "manual-only";
+        rollbackMessage = fs34.existsSync(backupPath) ? "restore the backup if the failed edit left .mcp.json in an unexpected state" : "inspect .mcp.json manually; setup could not create a verified backup";
         residual.push({
           id: "setup-mcp-json-edit-failed",
           severity: "blocker",
@@ -11411,10 +11628,10 @@ function buildSetupApplyPlan(profile, environment, apply, executeApply) {
     ...mcpJsonPreviewPlan.residual
   ];
   for (const targetPath of targets) {
-    const mutationId = `create-${path29.basename(targetPath) || "root"}-directory`;
+    const mutationId = `create-${path30.basename(targetPath) || "root"}-directory`;
     const before = directoryState(targetPath);
     const guard = guards.find(
-      (item) => path29.resolve(String(item.evidence?.targetPath ?? "")) === path29.resolve(targetPath)
+      (item) => path30.resolve(String(item.evidence?.targetPath ?? "")) === path30.resolve(targetPath)
     );
     const blocked2 = guardFailed || guard?.status === "fail";
     let status2 = apply ? "skipped" : "planned";
@@ -11429,7 +11646,7 @@ function buildSetupApplyPlan(profile, environment, apply, executeApply) {
         status2 = "skipped";
       } else {
         try {
-          fs33.mkdirSync(targetPath, { recursive: true });
+          fs34.mkdirSync(targetPath, { recursive: true });
           status2 = "applied";
           written = true;
         } catch (error) {
@@ -11472,8 +11689,8 @@ function buildSetupApplyPlan(profile, environment, apply, executeApply) {
   const directoryApplyFailed = mutations.some(
     (mutation) => mutation.kind === "directory-create" && mutation.status === "failed"
   );
-  const statePath = getStatePath(path29.resolve(environment.repoRoot ?? "."));
-  const beforeState = stateFileState(path29.resolve(environment.repoRoot ?? "."));
+  const statePath = getStatePath(path30.resolve(environment.repoRoot ?? "."));
+  const beforeState = stateFileState(path30.resolve(environment.repoRoot ?? "."));
   const stateBlocked = guardFailed || directoryApplyFailed || beforeState.exists === true && beforeState.type === "invalid-json";
   let stateStatus = apply ? "skipped" : "planned";
   let stateWritten = false;
@@ -11490,10 +11707,10 @@ function buildSetupApplyPlan(profile, environment, apply, executeApply) {
     } else {
       try {
         saveState(
-          path29.resolve(environment.repoRoot ?? "."),
+          path30.resolve(environment.repoRoot ?? "."),
           createInitialState(
-            path29.resolve(environment.commsDir ?? ""),
-            path29.resolve(environment.repoRoot ?? "."),
+            path30.resolve(environment.commsDir ?? ""),
+            path30.resolve(environment.repoRoot ?? "."),
             version
           )
         );
@@ -11504,7 +11721,7 @@ function buildSetupApplyPlan(profile, environment, apply, executeApply) {
         stateReason = error instanceof Error ? error.message : `failed to create ${statePath}`;
       }
     }
-    afterState = stateFileState(path29.resolve(environment.repoRoot ?? "."));
+    afterState = stateFileState(path30.resolve(environment.repoRoot ?? "."));
   }
   mutations.push({
     id: "create-initial-state-file",
@@ -11818,7 +12035,7 @@ async function setupCommand(args) {
 init_utils();
 
 // src/engine/rollback.ts
-import * as fs34 from "fs";
+import * as fs35 from "fs";
 async function rollbackRuntime(_instanceId, runtimeState) {
   const errors = [];
   const restoredFiles = [];
@@ -11847,7 +12064,7 @@ async function rollbackRuntime(_instanceId, runtimeState) {
   };
 }
 function rollbackArtifact(artifact) {
-  if (!fs34.existsSync(artifact.path)) {
+  if (!fs35.existsSync(artifact.path)) {
     return { restored: false, error: `File not found: ${artifact.path}` };
   }
   switch (artifact.kind) {
@@ -11865,7 +12082,7 @@ function rollbackArtifact(artifact) {
   }
 }
 function rollbackJsonPath(artifact) {
-  const raw = fs34.readFileSync(artifact.path, "utf-8");
+  const raw = fs35.readFileSync(artifact.path, "utf-8");
   let config;
   try {
     config = JSON.parse(raw);
@@ -11891,18 +12108,18 @@ function rollbackJsonPath(artifact) {
     cleanEmptyParents(config, artifact.selector);
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs34.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  fs34.renameSync(tmp, artifact.path);
+  fs35.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs35.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackTomlTable(artifact) {
-  const content = fs34.readFileSync(artifact.path, "utf-8");
+  const content = fs35.readFileSync(artifact.path, "utf-8");
   const backup = artifact.backupPath ? readArtifactBackup(artifact.backupPath) : null;
   if (backup?.kind === "toml-table" && backup.selector === artifact.selector) {
     const nextContent = backup.existed ? replaceTomlTable(content, artifact.selector, backup.content ?? "") : removeTomlTable(content, artifact.selector);
     const tmp2 = `${artifact.path}.tmp.${process.pid}`;
-    fs34.writeFileSync(tmp2, nextContent, "utf-8");
-    fs34.renameSync(tmp2, artifact.path);
+    fs35.writeFileSync(tmp2, nextContent, "utf-8");
+    fs35.renameSync(tmp2, artifact.path);
     return { restored: true };
   }
   if (!extractTomlTable(content, artifact.selector)) {
@@ -11912,13 +12129,13 @@ function rollbackTomlTable(artifact) {
     };
   }
   const tmp = `${artifact.path}.tmp.${process.pid}`;
-  fs34.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
-  fs34.renameSync(tmp, artifact.path);
+  fs35.writeFileSync(tmp, removeTomlTable(content, artifact.selector), "utf-8");
+  fs35.renameSync(tmp, artifact.path);
   return { restored: true };
 }
 function rollbackFile(artifact) {
-  if (fs34.existsSync(artifact.path)) {
-    fs34.unlinkSync(artifact.path);
+  if (fs35.existsSync(artifact.path)) {
+    fs35.unlinkSync(artifact.path);
     return { restored: true };
   }
   return { restored: false, error: `File not found: ${artifact.path}` };
@@ -11975,11 +12192,11 @@ Description:
   Remove a registered instance, stop its bridge, and rollback config changes.
 
 Arguments:
-  <instance>    Instance ID or runtime name (e.g. claude, codex-reviewer)
+  <instance>    Instance ID or runtime name (e.g. claude, codex-agent-a)
 
 Examples:
   npx @hua-labs/tap remove claude
-  npx @hua-labs/tap remove codex-reviewer
+  npx @hua-labs/tap remove codex-agent-a
 `.trim();
 async function removeCommand(args) {
   if (args.includes("--help") || args.includes("-h")) {
@@ -12093,31 +12310,31 @@ async function removeCommand(args) {
 init_utils();
 
 // src/commands/bridge-start.ts
-import * as path36 from "path";
+import * as path37 from "path";
 import { randomBytes as randomBytes3 } from "crypto";
 
 // src/bridges/codex-bridge-runner.ts
-import * as fs38 from "fs";
-import * as path32 from "path";
+import * as fs39 from "fs";
+import * as path33 from "path";
 import { spawn as spawn2 } from "child_process";
 import { fileURLToPath as fileURLToPath4, pathToFileURL } from "url";
-function resolveRepoRootHintFromRunner(runnerUrl = import.meta.url, env = process.env, fileExists = fs38.existsSync) {
+function resolveRepoRootHintFromRunner(runnerUrl = import.meta.url, env = process.env, fileExists = fs39.existsSync) {
   const envRepoRoot = env.TAP_REPO_ROOT?.trim();
   if (envRepoRoot) {
-    return path32.resolve(envRepoRoot);
+    return path33.resolve(envRepoRoot);
   }
-  let dir = path32.resolve(path32.dirname(fileURLToPath4(runnerUrl)));
+  let dir = path33.resolve(path33.dirname(fileURLToPath4(runnerUrl)));
   while (true) {
-    if (fileExists(path32.join(dir, SHARED_CONFIG_FILE))) return dir;
-    if (fileExists(path32.join(dir, LOCAL_CONFIG_FILE))) return dir;
+    if (fileExists(path33.join(dir, SHARED_CONFIG_FILE))) return dir;
+    if (fileExists(path33.join(dir, LOCAL_CONFIG_FILE))) return dir;
     if (fileExists(
-      path32.join(dir, "scripts", "codex", "codex-app-server-bridge.ts")
+      path33.join(dir, "scripts", "codex", "codex-app-server-bridge.ts")
     )) {
       return dir;
     }
-    if (fileExists(path32.join(dir, "scripts", "codex-app-server-bridge.ts")))
+    if (fileExists(path33.join(dir, "scripts", "codex-app-server-bridge.ts")))
       return dir;
-    const parent = path32.dirname(dir);
+    const parent = path33.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
@@ -12128,7 +12345,7 @@ function maybeStartHeadlessLoop(repoRoot, commsDir, stateDir) {
     const agentName = process.env.TAP_AGENT_NAME ?? process.env.CODEX_TAP_AGENT_NAME ?? "reviewer";
     const agentId = process.env.TAP_AGENT_ID ?? process.env.TAP_BRIDGE_INSTANCE_ID ?? agentName;
     const generation = resolveHeadlessReviewGeneration(repoRoot, commsDir);
-    const resolvedStateDir = stateDir ?? path32.join(repoRoot, ".tap-comms");
+    const resolvedStateDir = stateDir ?? path33.join(repoRoot, ".tap-comms");
     const loop = createHeadlessLoop2({
       commsDir,
       stateDir: resolvedStateDir,
@@ -12152,7 +12369,7 @@ function resolveHeadlessReviewGeneration(repoRoot, commsDir, env = process.env) 
   const envGeneration = normalizeGenerationValue(env.TAP_GENERATION);
   if (envGeneration) return envGeneration;
   try {
-    const reviewsDir = path32.join(repoRoot, "reviews");
+    const reviewsDir = path33.join(repoRoot, "reviews");
     const generations = readGenerationNumbers(reviewsDir);
     if (generations.length > 0) {
       return `gen${generations[0]}`;
@@ -12162,8 +12379,8 @@ function resolveHeadlessReviewGeneration(repoRoot, commsDir, env = process.env) 
   const resolvedCommsDir = commsDir?.trim() || env.TAP_COMMS_DIR?.trim() || null;
   if (resolvedCommsDir) {
     const commsGenerations = [
-      ...readGenerationNumbers(path32.join(resolvedCommsDir, "retros")),
-      ...readGenerationNumbers(path32.join(resolvedCommsDir, "letters"))
+      ...readGenerationNumbers(path33.join(resolvedCommsDir, "retros")),
+      ...readGenerationNumbers(path33.join(resolvedCommsDir, "letters"))
     ].sort((a, b) => b - a);
     if (commsGenerations.length > 0) {
       return `gen${commsGenerations[0]}`;
@@ -12180,20 +12397,20 @@ function normalizeGenerationValue(value) {
 }
 function readGenerationNumbers(dir) {
   try {
-    return fs38.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => normalizeGenerationValue(entry.name)).filter((value) => Boolean(value)).map((value) => Number.parseInt(value.slice(3), 10)).filter(Number.isFinite).sort((a, b) => b - a);
+    return fs39.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => normalizeGenerationValue(entry.name)).filter((value) => Boolean(value)).map((value) => Number.parseInt(value.slice(3), 10)).filter(Number.isFinite).sort((a, b) => b - a);
   } catch {
     return [];
   }
 }
-function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileExists = fs38.existsSync) {
-  const moduleDir = path32.dirname(fileURLToPath4(runnerUrl));
+function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileExists = fs39.existsSync) {
+  const moduleDir = path33.dirname(fileURLToPath4(runnerUrl));
   const candidates = [
     // 1. Bundled standalone/npm install
-    path32.join(moduleDir, "codex-app-server-bridge.mjs"),
+    path33.join(moduleDir, "codex-app-server-bridge.mjs"),
     // 2. Source run from monorepo package
-    path32.join(moduleDir, "codex-app-server-bridge.ts"),
+    path33.join(moduleDir, "codex-app-server-bridge.ts"),
     // 3. Built monorepo package dist
-    path32.join(
+    path33.join(
       repoRoot,
       "packages",
       "tap-comms",
@@ -12202,7 +12419,7 @@ function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileEx
       "codex-app-server-bridge.mjs"
     ),
     // 4. Monorepo source wrapper
-    path32.join(
+    path33.join(
       repoRoot,
       "packages",
       "tap-comms",
@@ -12211,9 +12428,9 @@ function resolveBridgeDaemonScript(repoRoot, runnerUrl = import.meta.url, fileEx
       "codex-app-server-bridge.ts"
     ),
     // 5. Monorepo scripts/codex/ subfolder
-    path32.join(repoRoot, "scripts", "codex", "codex-app-server-bridge.ts"),
+    path33.join(repoRoot, "scripts", "codex", "codex-app-server-bridge.ts"),
     // 6. Legacy monorepo root script (pre-cleanup)
-    path32.join(repoRoot, "scripts", "codex-app-server-bridge.ts")
+    path33.join(repoRoot, "scripts", "codex-app-server-bridge.ts")
   ];
   for (const candidate of candidates) {
     if (fileExists(candidate)) {
@@ -12273,7 +12490,7 @@ function resolveBridgeRoutingSlot(repoRoot, env = process.env) {
       normalizedInstance.replace(/^(?:claude|codex)-/, "")
     );
   }
-  return normalizeRoutingSlot(path32.basename(repoRoot));
+  return normalizeRoutingSlot(path33.basename(repoRoot));
 }
 async function main() {
   const repoRootHint = resolveRepoRootHintFromRunner() ?? void 0;
@@ -12294,10 +12511,10 @@ async function main() {
   if (envStateDir) {
     stateDir = envStateDir;
   } else if (instanceId) {
-    const resolved2 = path32.resolve(
-      path32.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
+    const resolved2 = path33.resolve(
+      path33.join(repoRoot, ".tmp", `codex-app-server-bridge-${instanceId}`)
     );
-    const expectedBase = path32.resolve(repoRoot, ".tmp") + path32.sep;
+    const expectedBase = path33.resolve(repoRoot, ".tmp") + path33.sep;
     if (!resolved2.startsWith(expectedBase)) {
       throw new Error(
         `Path traversal blocked: runtime state dir escapes .tmp/ directory`
@@ -12376,8 +12593,8 @@ Expected a packaged dist/bridges/codex-app-server-bridge.mjs or monorepo bridge 
 function isDirectExecution() {
   const entry = process.argv[1];
   if (!entry) return false;
-  if (!path32.basename(entry).startsWith("codex-bridge-runner")) return false;
-  return import.meta.url === pathToFileURL(path32.resolve(entry)).href;
+  if (!path33.basename(entry).startsWith("codex-bridge-runner")) return false;
+  return import.meta.url === pathToFileURL(path33.resolve(entry)).href;
 }
 if (isDirectExecution()) {
   main().catch((error) => {
@@ -12391,23 +12608,23 @@ init_instance_config();
 init_utils();
 
 // src/config/comms-path-drift.ts
-import * as fs39 from "fs";
-import * as path33 from "path";
+import * as fs40 from "fs";
+import * as path34 from "path";
 function normalize2(p) {
-  return path33.resolve(p).replace(/\\/g, "/");
+  return path34.resolve(p).replace(/\\/g, "/");
 }
 function tryJsonRead(filePath) {
-  if (!fs39.existsSync(filePath)) return null;
+  if (!fs40.existsSync(filePath)) return null;
   try {
-    return JSON.parse(fs39.readFileSync(filePath, "utf-8"));
+    return JSON.parse(fs40.readFileSync(filePath, "utf-8"));
   } catch {
     return null;
   }
 }
 function tryTomlMcpTapEnvValue(filePath, envKey) {
-  if (!fs39.existsSync(filePath)) return null;
+  if (!fs40.existsSync(filePath)) return null;
   try {
-    const raw = fs39.readFileSync(filePath, "utf-8");
+    const raw = fs40.readFileSync(filePath, "utf-8");
     const table = extractTomlTable(raw, "mcp_servers.tap.env");
     if (!table) return null;
     const assigns = parseTomlAssignments(table);
@@ -12418,16 +12635,16 @@ function tryTomlMcpTapEnvValue(filePath, envKey) {
   }
 }
 function readMcpJson(repoRoot) {
-  const filePath = path33.join(repoRoot, ".mcp.json");
+  const filePath = path34.join(repoRoot, ".mcp.json");
   const json = tryJsonRead(filePath);
   const raw = json?.mcpServers?.tap?.env?.TAP_COMMS_DIR ?? null;
   return {
     name: "mcp.json",
     filePath,
     key: "mcpServers.tap.env.TAP_COMMS_DIR",
-    present: fs39.existsSync(filePath),
+    present: fs40.existsSync(filePath),
     raw,
-    resolved: raw ? normalize2(path33.resolve(repoRoot, raw)) : null
+    resolved: raw ? normalize2(path34.resolve(repoRoot, raw)) : null
   };
 }
 function readCodexConfigToml(repoRoot) {
@@ -12437,38 +12654,38 @@ function readCodexConfigToml(repoRoot) {
     name: "codex-config.toml",
     filePath,
     key: "[mcp_servers.tap.env] TAP_COMMS_DIR",
-    present: fs39.existsSync(filePath),
+    present: fs40.existsSync(filePath),
     raw,
-    resolved: raw ? normalize2(path33.resolve(repoRoot, raw)) : null
+    resolved: raw ? normalize2(path34.resolve(repoRoot, raw)) : null
   };
 }
 function readTapConfigJson(repoRoot) {
-  const filePath = path33.join(repoRoot, "tap-config.json");
+  const filePath = path34.join(repoRoot, "tap-config.json");
   const json = tryJsonRead(filePath);
   const raw = json?.commsDir ?? null;
   return {
     name: "tap-config.json",
     filePath,
     key: "commsDir",
-    present: fs39.existsSync(filePath),
+    present: fs40.existsSync(filePath),
     raw,
-    resolved: raw ? normalize2(path33.resolve(repoRoot, raw)) : null
+    resolved: raw ? normalize2(path34.resolve(repoRoot, raw)) : null
   };
 }
 function readStateJson(repoRoot, stateDir) {
-  const filePath = path33.join(stateDir, "state.json");
+  const filePath = path34.join(stateDir, "state.json");
   const json = tryJsonRead(filePath);
   const raw = json?.commsDir ?? null;
   return {
     name: "state.json",
     filePath,
     key: "commsDir",
-    present: fs39.existsSync(filePath),
+    present: fs40.existsSync(filePath),
     raw,
-    resolved: raw ? normalize2(path33.resolve(repoRoot, raw)) : null
+    resolved: raw ? normalize2(path34.resolve(repoRoot, raw)) : null
   };
 }
-function detectCommsPathDrift(repoRoot, stateDir = path33.join(repoRoot, ".tap-comms")) {
+function detectCommsPathDrift(repoRoot, stateDir = path34.join(repoRoot, ".tap-comms")) {
   const sources = [
     readMcpJson(repoRoot),
     readCodexConfigToml(repoRoot),
@@ -12539,7 +12756,7 @@ function formatCommsPathDriftSummary(result) {
 }
 
 // src/commands/bridge-helpers.ts
-import * as path34 from "path";
+import * as path35 from "path";
 function formatAge(seconds) {
   if (seconds < 60) return `${seconds}s ago`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
@@ -12601,7 +12818,7 @@ function formatThreadSummary(threadId, cwd) {
   return cwd ? `${threadId} (${cwd})` : threadId;
 }
 function normalizeComparablePath3(value) {
-  return path34.resolve(value).replace(/\\/g, "/").toLowerCase();
+  return path35.resolve(value).replace(/\\/g, "/").toLowerCase();
 }
 function sameOptionalPath(left, right) {
   if (!left || !right) {
@@ -12675,16 +12892,16 @@ function transferManagedAppServerOwnership(state, stateDir, recipientId, appServ
 
 // src/commands/bridge-heartbeat.ts
 import {
-  existsSync as existsSync37,
-  readFileSync as readFileSync29,
+  existsSync as existsSync38,
+  readFileSync as readFileSync30,
   renameSync as renameSync16,
   statSync as statSync10,
   unlinkSync as unlinkSync10,
   writeFileSync as writeFileSync19
 } from "fs";
-import * as path35 from "path";
+import * as path36 from "path";
 function acquireHeartbeatLock(commsDir, retries = 3, delayMs = 100) {
-  const lockPath = path35.join(commsDir, ".heartbeats.lock");
+  const lockPath = path36.join(commsDir, ".heartbeats.lock");
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       writeFileSync19(lockPath, String(process.pid), { flag: "wx" });
@@ -12707,7 +12924,7 @@ function acquireHeartbeatLock(commsDir, retries = 3, delayMs = 100) {
 }
 function releaseHeartbeatLock(commsDir) {
   try {
-    unlinkSync10(path35.join(commsDir, ".heartbeats.lock"));
+    unlinkSync10(path36.join(commsDir, ".heartbeats.lock"));
   } catch {
   }
 }
@@ -12737,7 +12954,7 @@ function resilientRename(tmpPath, targetPath) {
 function resilientReadJson(filePath, fallback) {
   for (let attempt = 0; attempt < EBUSY_MAX_RETRIES; attempt++) {
     try {
-      return JSON.parse(readFileSync29(filePath, "utf-8"));
+      return JSON.parse(readFileSync30(filePath, "utf-8"));
     } catch (error) {
       if (!isEbusyError(error) || attempt === EBUSY_MAX_RETRIES - 1) {
         return fallback;
@@ -12751,8 +12968,8 @@ var BRIDGE_UP_ACTIVE_HEARTBEAT_WINDOW_MS = 10 * 60 * 1e3;
 var BRIDGE_UP_ORPHAN_HEARTBEAT_WINDOW_MS = 24 * 60 * 60 * 1e3;
 var BRIDGE_UP_SIGNING_OFF_HEARTBEAT_WINDOW_MS = 5 * 60 * 1e3;
 function loadBridgeHeartbeatStore(commsDir) {
-  const heartbeatsPath = path35.join(commsDir, "heartbeats.json");
-  if (!existsSync37(heartbeatsPath)) return {};
+  const heartbeatsPath = path36.join(commsDir, "heartbeats.json");
+  if (!existsSync38(heartbeatsPath)) return {};
   const result = resilientReadJson(
     heartbeatsPath,
     null
@@ -12760,7 +12977,7 @@ function loadBridgeHeartbeatStore(commsDir) {
   return result;
 }
 function saveBridgeHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = path35.join(commsDir, "heartbeats.json");
+  const heartbeatsPath = path36.join(commsDir, "heartbeats.json");
   const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
   writeFileSync19(tmp, JSON.stringify(store, null, 2), "utf-8");
   resilientRename(tmp, heartbeatsPath);
@@ -12811,8 +13028,8 @@ function pruneStaleHeartbeatsForBridgeUp(state, stateDir, commsDir) {
         delete store[heartbeatId];
         try {
           const sanitizedId = heartbeatId.replace(/[/\\:]/g, "_");
-          const presencePath = path35.join(commsDir, "presence", `${sanitizedId}.json`);
-          if (existsSync37(presencePath)) unlinkSync10(presencePath);
+          const presencePath = path36.join(commsDir, "presence", `${sanitizedId}.json`);
+          if (existsSync38(presencePath)) unlinkSync10(presencePath);
         } catch {
         }
         removed += 1;
@@ -13329,7 +13546,7 @@ async function bridgeStartAll(flags = {}) {
       warnings2.push(msg);
       continue;
     }
-    const stateDir = path36.join(repoRoot, ".tap-comms");
+    const stateDir = path37.join(repoRoot, ".tap-comms");
     const currentBridgeState = loadBridgeState(stateDir, instanceId);
     const { manageAppServer, noAuth, appServerUnsandboxed } = inferRestartMode(
       currentBridgeState,
@@ -14814,8 +15031,8 @@ async function bridgeCommand(args) {
 }
 
 // src/engine/dashboard.ts
-import * as fs40 from "fs";
-import * as path37 from "path";
+import * as fs41 from "fs";
+import * as path38 from "path";
 import { execSync as execSync4 } from "child_process";
 function formatAgentLabel(agentIdOrName, displayName) {
   const normalizedId = agentIdOrName.trim();
@@ -14879,10 +15096,10 @@ function resolveHeartbeatInstanceId(heartbeatId, displayName, state) {
   return matches.length === 1 ? matches[0].instanceId : null;
 }
 function collectAgents(commsDir, state, bridges) {
-  const heartbeatsPath = path37.join(commsDir, "heartbeats.json");
-  if (!fs40.existsSync(heartbeatsPath)) return [];
+  const heartbeatsPath = path38.join(commsDir, "heartbeats.json");
+  if (!fs41.existsSync(heartbeatsPath)) return [];
   try {
-    const raw = fs40.readFileSync(heartbeatsPath, "utf-8");
+    const raw = fs41.readFileSync(heartbeatsPath, "utf-8");
     const data = JSON.parse(raw);
     return Object.entries(data).map(([agentId, info]) => {
       const instanceId = resolveHeartbeatInstanceId(
@@ -14961,22 +15178,22 @@ function collectBridges(repoRoot) {
       });
     }
   }
-  const tmpDir = path37.join(repoRoot, ".tmp");
-  if (fs40.existsSync(tmpDir)) {
+  const tmpDir = path38.join(repoRoot, ".tmp");
+  if (fs41.existsSync(tmpDir)) {
     try {
-      const dirs = fs40.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
+      const dirs = fs41.readdirSync(tmpDir).filter((d) => d.startsWith("codex-app-server-bridge"));
       for (const dir of dirs) {
-        const daemonPath = path37.join(tmpDir, dir, "bridge-daemon.json");
-        if (!fs40.existsSync(daemonPath)) continue;
+        const daemonPath = path38.join(tmpDir, dir, "bridge-daemon.json");
+        if (!fs41.existsSync(daemonPath)) continue;
         try {
-          const raw = fs40.readFileSync(daemonPath, "utf-8");
+          const raw = fs41.readFileSync(daemonPath, "utf-8");
           const daemon = JSON.parse(raw);
           const alreadyCovered = bridges.some(
             (b) => b.pid === daemon.pid && b.pid !== null
           );
           if (alreadyCovered) continue;
-          const agentFile = path37.join(tmpDir, dir, "agent-name.txt");
-          const agentName = fs40.existsSync(agentFile) ? fs40.readFileSync(agentFile, "utf-8").trim() : dir;
+          const agentFile = path38.join(tmpDir, dir, "agent-name.txt");
+          const agentName = fs41.existsSync(agentFile) ? fs41.readFileSync(agentFile, "utf-8").trim() : dir;
           const running = daemon.pid ? isProcessAlive(daemon.pid) : false;
           const portMatch = daemon.appServerUrl?.match(/:(\d+)/);
           const port = portMatch ? parseInt(portMatch[1], 10) : null;
@@ -15211,7 +15428,7 @@ async function downCommand(args) {
 }
 
 // src/commands/serve.ts
-import * as path38 from "path";
+import * as path39 from "path";
 import { spawn as spawn3 } from "child_process";
 init_utils();
 var SERVE_HELP = `
@@ -15246,10 +15463,10 @@ async function serveCommand(args) {
   let commsDir;
   const commsDirIdx = args.indexOf("--comms-dir");
   if (commsDirIdx !== -1 && args[commsDirIdx + 1]) {
-    commsDir = path38.resolve(normalizeTapPath(args[commsDirIdx + 1]));
+    commsDir = path39.resolve(normalizeTapPath(args[commsDirIdx + 1]));
   }
   if (!commsDir && process.env.TAP_COMMS_DIR) {
-    commsDir = path38.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
+    commsDir = path39.resolve(normalizeTapPath(process.env.TAP_COMMS_DIR));
   }
   if (!commsDir) {
     const state = loadState(repoRoot);
@@ -15292,9 +15509,9 @@ async function serveCommand(args) {
       TAP_COMMS_DIR: commsDir
     }
   });
-  return new Promise((resolve39) => {
+  return new Promise((resolve40) => {
     child.on("error", (err) => {
-      resolve39({
+      resolve40({
         ok: false,
         command: "serve",
         code: "TAP_INTERNAL_ERROR",
@@ -15304,7 +15521,7 @@ async function serveCommand(args) {
       });
     });
     child.on("exit", (code) => {
-      resolve39({
+      resolve40({
         ok: code === 0,
         command: "serve",
         code: code === 0 ? "TAP_SERVE_OK" : "TAP_INTERNAL_ERROR",
@@ -15317,8 +15534,8 @@ async function serveCommand(args) {
 }
 
 // src/commands/init-worktree.ts
-import * as fs41 from "fs";
-import * as path39 from "path";
+import * as fs42 from "fs";
+import * as path40 from "path";
 import { execSync as execSync5 } from "child_process";
 init_utils();
 var INIT_WORKTREE_HELP = `
@@ -15356,7 +15573,7 @@ function run(cmd, opts) {
   }
 }
 function toAbsolute(p) {
-  const resolved = path39.resolve(p);
+  const resolved = path40.resolve(p);
   return resolved.replace(/\\/g, "/");
 }
 function probeBun(candidate) {
@@ -15387,18 +15604,18 @@ function findBun() {
     }
   }
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const bunHome = path39.join(
+  const bunHome = path40.join(
     home,
     ".bun",
     "bin",
     process.platform === "win32" ? "bun.exe" : "bun"
   );
-  if (fs41.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
+  if (fs42.existsSync(bunHome) && probeBun(bunHome)) return bunHome;
   return null;
 }
 function step1CreateWorktree(opts) {
   log("Step 1/10: Creating worktree...");
-  if (fs41.existsSync(opts.worktreePath)) {
+  if (fs42.existsSync(opts.worktreePath)) {
     logWarn(`Directory already exists: ${opts.worktreePath}`);
     try {
       run("git rev-parse --git-dir", { cwd: opts.worktreePath });
@@ -15460,8 +15677,8 @@ function step2MergeMain(opts, warnings2) {
 }
 function step3VerifyClaudeSettings(opts, warnings2) {
   log("Step 3/10: Verifying tracked Claude settings...");
-  const settingsPath = path39.join(opts.worktreePath, ".claude", "settings.json");
-  if (!fs41.existsSync(settingsPath)) {
+  const settingsPath = path40.join(opts.worktreePath, ".claude", "settings.json");
+  if (!fs42.existsSync(settingsPath)) {
     warn(
       warnings2,
       "No .claude/settings.json found in worktree after merge. Check branch drift or sync main."
@@ -15507,7 +15724,7 @@ function step4GenerateMcpJson(opts, warnings2) {
   const wtAbs = toAbsolute(opts.worktreePath);
   const bunAbs = toAbsolute(bunPath);
   const commsAbs = toAbsolute(opts.commsDir);
-  const channelEntry = path39.join(
+  const channelEntry = path40.join(
     wtAbs,
     "packages/tap-plugin/channels/tap-comms.ts"
   );
@@ -15524,8 +15741,8 @@ function step4GenerateMcpJson(opts, warnings2) {
       }
     }
   };
-  const mcpPath = path39.join(opts.worktreePath, ".mcp.json");
-  fs41.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
+  const mcpPath = path40.join(opts.worktreePath, ".mcp.json");
+  fs42.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + "\n", "utf-8");
   logSuccess(`.mcp.json generated (absolute paths + cwd)`);
   log(`  bun: ${bunAbs}`);
   log(`  comms: ${commsAbs}`);
@@ -15563,16 +15780,16 @@ function step6BuildEslintPlugin(opts, warnings2) {
 }
 function step7VerifyComms(opts, warnings2) {
   log("Step 8/10: Verifying comms directory...");
-  if (!fs41.existsSync(opts.commsDir)) {
+  if (!fs42.existsSync(opts.commsDir)) {
     warn(warnings2, `Comms directory not found: ${opts.commsDir}`);
     warn(warnings2, "Create it or run: npx @hua-labs/tap init");
     return;
   }
   const requiredDirs = ["inbox", "findings", "reviews", "letters"];
   for (const dir of requiredDirs) {
-    const dirPath = path39.join(opts.commsDir, dir);
-    if (!fs41.existsSync(dirPath)) {
-      fs41.mkdirSync(dirPath, { recursive: true });
+    const dirPath = path40.join(opts.commsDir, dir);
+    if (!fs42.existsSync(dirPath)) {
+      fs42.mkdirSync(dirPath, { recursive: true });
       logSuccess(`Created ${dir}/`);
     }
   }
@@ -15631,18 +15848,18 @@ async function initWorktreeCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path39.basename(path39.resolve(worktreePath));
+  const branch = typeof flags["branch"] === "string" ? flags["branch"] : path40.basename(path40.resolve(worktreePath));
   const base = typeof flags["base"] === "string" ? flags["base"] : "origin/main";
   const mission = typeof flags["mission"] === "string" ? flags["mission"] : void 0;
   const commsDir = typeof flags["comms-dir"] === "string" ? flags["comms-dir"] : config.commsDir;
   const skipInstall = flags["skip-install"] === true;
   const opts = {
-    worktreePath: path39.resolve(worktreePath),
+    worktreePath: path40.resolve(worktreePath),
     branch,
     base,
     mission,
-    commsDir: path39.resolve(commsDir),
-    stateDir: path39.resolve(config.stateDir),
+    commsDir: path40.resolve(commsDir),
+    stateDir: path40.resolve(config.stateDir),
     skipInstall,
     repoRoot
   };
@@ -15868,17 +16085,17 @@ async function dashboardCommand(args) {
 
 // src/commands/doctor.ts
 import {
-  existsSync as existsSync40,
+  existsSync as existsSync41,
   mkdirSync as mkdirSync19,
   readdirSync as readdirSync15,
-  readFileSync as readFileSync31,
+  readFileSync as readFileSync32,
   renameSync as renameSync17,
   statSync as statSync11,
   unlinkSync as unlinkSync11,
   writeFileSync as writeFileSync21
 } from "fs";
 import { spawnSync as spawnSync8 } from "child_process";
-import { dirname as dirname19, join as join35, resolve as resolve19 } from "path";
+import { dirname as dirname20, join as join36, resolve as resolve20 } from "path";
 init_drift_detector();
 init_utils();
 var PASS = "pass";
@@ -15895,7 +16112,7 @@ var CODEX_ENV_DRIFT_KEYS = [
 var CODEX_SESSION_NEUTRAL_NAME = "<set-per-session>";
 var CODEX_CONFIG_CHECK_NAME = "MCP config (Codex config.toml)";
 function normalizeComparablePath4(value) {
-  return resolve19(value).replace(/\\/g, "/").toLowerCase();
+  return resolve20(value).replace(/\\/g, "/").toLowerCase();
 }
 function samePath(left, right) {
   return normalizeComparablePath4(left) === normalizeComparablePath4(right);
@@ -15948,7 +16165,7 @@ function findCodexConfigPath3() {
   return getCodexConfigPath();
 }
 function canonicalizeTrustPath2(targetPath) {
-  let resolved = resolve19(targetPath).replace(/\//g, "\\");
+  let resolved = resolve20(targetPath).replace(/\//g, "\\");
   const driveRoot = /^[A-Za-z]:\\$/;
   if (!driveRoot.test(resolved)) {
     resolved = resolved.replace(/\\+$/g, "");
@@ -15959,7 +16176,7 @@ function trustSelector2(targetPath) {
   return `projects.'${canonicalizeTrustPath2(targetPath)}'`;
 }
 function writeTomlAtomically(filePath, content) {
-  const dir = dirname19(filePath);
+  const dir = dirname20(filePath);
   mkdirSync19(dir, { recursive: true });
   const tmp = `${filePath}.tmp.${process.pid}`;
   writeFileSync21(tmp, content, "utf-8");
@@ -15971,7 +16188,7 @@ function hasInstalledCodexInstance(state) {
   ) : false;
 }
 function getCodexTrustTargets(repoRoot) {
-  return [...new Set([repoRoot, process.cwd()].map((value) => resolve19(value)))];
+  return [...new Set([repoRoot, process.cwd()].map((value) => resolve20(value)))];
 }
 function buildSessionNeutralCodexEnv(env) {
   const neutralEnv = {
@@ -16015,7 +16232,7 @@ function repairCodexConfig(repoRoot, commsDir) {
       spec.managed.issues[0] ?? "Unable to resolve the managed tap MCP server for Codex."
     );
   }
-  const existingContent = existsSync40(spec.configPath) ? readFileSync31(spec.configPath, "utf-8") : "";
+  const existingContent = existsSync41(spec.configPath) ? readFileSync32(spec.configPath, "utf-8") : "";
   const existingTapEnvTable = extractTomlTable(
     existingContent,
     "mcp_servers.tap.env"
@@ -16082,7 +16299,7 @@ function repairCodexConfig(repoRoot, commsDir) {
   return `Repaired Codex config at ${spec.configPath}. Restart Codex to reload MCP settings.`;
 }
 function countFiles(dir, ext = ".md") {
-  if (!existsSync40(dir)) return 0;
+  if (!existsSync41(dir)) return 0;
   try {
     return readdirSync15(dir).filter((f) => f.endsWith(ext)).length;
   } catch {
@@ -16090,14 +16307,14 @@ function countFiles(dir, ext = ".md") {
   }
 }
 function recentFileCount(dir, withinMs) {
-  if (!existsSync40(dir)) return 0;
+  if (!existsSync41(dir)) return 0;
   const cutoff = Date.now() - withinMs;
   let count = 0;
   try {
     for (const f of readdirSync15(dir)) {
       if (!f.endsWith(".md")) continue;
       try {
-        if (statSync11(join35(dir, f)).mtimeMs > cutoff) count++;
+        if (statSync11(join36(dir, f)).mtimeMs > cutoff) count++;
       } catch {
       }
     }
@@ -16106,16 +16323,16 @@ function recentFileCount(dir, withinMs) {
   return count;
 }
 function loadDoctorHeartbeatStore(commsDir) {
-  const heartbeatsPath = join35(commsDir, "heartbeats.json");
-  if (!existsSync40(heartbeatsPath)) return null;
+  const heartbeatsPath = join36(commsDir, "heartbeats.json");
+  if (!existsSync41(heartbeatsPath)) return null;
   try {
-    return JSON.parse(readFileSync31(heartbeatsPath, "utf-8"));
+    return JSON.parse(readFileSync32(heartbeatsPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function saveDoctorHeartbeatStore(commsDir, store) {
-  const heartbeatsPath = join35(commsDir, "heartbeats.json");
+  const heartbeatsPath = join36(commsDir, "heartbeats.json");
   const tmp = `${heartbeatsPath}.tmp.${process.pid}`;
   writeFileSync21(tmp, JSON.stringify(store, null, 2), "utf-8");
   renameSync17(tmp, heartbeatsPath);
@@ -16181,9 +16398,9 @@ function checkComms(commsDir) {
   const checks = [];
   checks.push({
     name: "comms directory",
-    status: existsSync40(commsDir) ? PASS : FAIL,
-    message: existsSync40(commsDir) ? commsDir : `Not found: ${commsDir}`,
-    fix: existsSync40(commsDir) ? void 0 : () => {
+    status: existsSync41(commsDir) ? PASS : FAIL,
+    message: existsSync41(commsDir) ? commsDir : `Not found: ${commsDir}`,
+    fix: existsSync41(commsDir) ? void 0 : () => {
       mkdirSync19(commsDir, { recursive: true });
       return `Created ${commsDir}`;
     }
@@ -16193,8 +16410,8 @@ function checkComms(commsDir) {
     ["reviews", false],
     ["findings", false]
   ]) {
-    const dir = join35(commsDir, subdir);
-    const exists = existsSync40(dir);
+    const dir = join36(commsDir, subdir);
+    const exists = existsSync41(dir);
     checks.push({
       name: `${subdir} directory`,
       status: exists ? PASS : required ? FAIL : WARN,
@@ -16205,10 +16422,10 @@ function checkComms(commsDir) {
       }
     });
   }
-  const heartbeats = join35(commsDir, "heartbeats.json");
-  if (existsSync40(heartbeats)) {
+  const heartbeats = join36(commsDir, "heartbeats.json");
+  if (existsSync41(heartbeats)) {
     try {
-      const store = JSON.parse(readFileSync31(heartbeats, "utf-8"));
+      const store = JSON.parse(readFileSync32(heartbeats, "utf-8"));
       const agents = Object.keys(store);
       const now = Date.now();
       const active = agents.filter((a) => {
@@ -16372,7 +16589,7 @@ function checkInstances(repoRoot, stateDir, commsDir) {
               }
             }
           }
-          const pidPath = join35(stateDir, "pids", `bridge-${id}.json`);
+          const pidPath = join36(stateDir, "pids", `bridge-${id}.json`);
           try {
             unlinkSync11(pidPath);
           } catch {
@@ -16486,8 +16703,8 @@ function checkBridgeCodeStaleness(repoRoot, stateDir, instanceId) {
 }
 function checkMessageLifecycle(commsDir) {
   const checks = [];
-  const inbox = join35(commsDir, "inbox");
-  if (!existsSync40(inbox)) {
+  const inbox = join36(commsDir, "inbox");
+  if (!existsSync41(inbox)) {
     checks.push({
       name: "message flow",
       status: FAIL,
@@ -16504,10 +16721,10 @@ function checkMessageLifecycle(commsDir) {
     status: recent10m > 0 ? PASS : WARN,
     message: total === 0 ? `${messageSummary} (expected before first exchange)` : messageSummary
   });
-  const receiptsPath = join35(commsDir, "receipts", "receipts.json");
-  if (existsSync40(receiptsPath)) {
+  const receiptsPath = join36(commsDir, "receipts", "receipts.json");
+  if (existsSync41(receiptsPath)) {
     try {
-      const receipts = JSON.parse(readFileSync31(receiptsPath, "utf-8"));
+      const receipts = JSON.parse(readFileSync32(receiptsPath, "utf-8"));
       const receiptCount = Object.keys(receipts).length;
       checks.push({
         name: "read receipts",
@@ -16526,8 +16743,8 @@ function checkMessageLifecycle(commsDir) {
 }
 function checkMcpServer(repoRoot) {
   const checks = [];
-  const mcpJson = join35(repoRoot, ".mcp.json");
-  if (!existsSync40(mcpJson)) {
+  const mcpJson = join36(repoRoot, ".mcp.json");
+  if (!existsSync41(mcpJson)) {
     checks.push({
       name: "MCP config (.mcp.json)",
       status: WARN,
@@ -16537,7 +16754,7 @@ function checkMcpServer(repoRoot) {
   }
   let config;
   try {
-    config = JSON.parse(readFileSync31(mcpJson, "utf-8"));
+    config = JSON.parse(readFileSync32(mcpJson, "utf-8"));
   } catch {
     checks.push({
       name: "MCP config (.mcp.json)",
@@ -16580,7 +16797,7 @@ function checkMcpServer(repoRoot) {
   });
   if (hasTapComms.command) {
     const cmd = hasTapComms.command;
-    let cmdAvailable = existsSync40(cmd);
+    let cmdAvailable = existsSync41(cmd);
     if (!cmdAvailable) {
       cmdAvailable = probeCommand([cmd]).command !== null;
     }
@@ -16601,8 +16818,8 @@ function checkMcpServer(repoRoot) {
     const mcpScript = hasTapComms.args[0];
     checks.push({
       name: "MCP server script",
-      status: existsSync40(mcpScript) ? PASS : FAIL,
-      message: existsSync40(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
+      status: existsSync41(mcpScript) ? PASS : FAIL,
+      message: existsSync41(mcpScript) ? mcpScript : `Not found: ${mcpScript}`
     });
     if (mcpScript.endsWith(".mjs") && hasTapComms.command && !hasTapComms.command.includes("bun")) {
       checks.push({
@@ -16635,8 +16852,8 @@ function checkMcpServer(repoRoot) {
   } else {
     checks.push({
       name: "MCP TAP_COMMS_DIR",
-      status: existsSync40(envCommsDir) ? PASS : FAIL,
-      message: existsSync40(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
+      status: existsSync41(envCommsDir) ? PASS : FAIL,
+      message: existsSync41(envCommsDir) ? envCommsDir : `Directory not found: ${envCommsDir}`
     });
   }
   checks.push({
@@ -16653,7 +16870,7 @@ function checkCodexConfig(repoRoot, commsDir) {
   }
   const checks = [];
   const fixHint = 'Run "tap doctor --fix" or "tap add codex --force".';
-  if (!existsSync40(spec.configPath)) {
+  if (!existsSync41(spec.configPath)) {
     checks.push({
       name: CODEX_CONFIG_CHECK_NAME,
       status: WARN,
@@ -16662,7 +16879,7 @@ function checkCodexConfig(repoRoot, commsDir) {
     });
     return checks;
   }
-  const content = readFileSync31(spec.configPath, "utf-8");
+  const content = readFileSync32(spec.configPath, "utf-8");
   const tapTable = extractTomlTable(content, "mcp_servers.tap");
   const tapEnvTable = extractTomlTable(content, "mcp_servers.tap.env");
   const legacyTable = extractTomlTable(content, "mcp_servers.tap-comms");
@@ -16746,8 +16963,8 @@ function checkCodexConfig(repoRoot, commsDir) {
 }
 function checkBridgeTurnHealth(repoRoot) {
   const checks = [];
-  const tmpDir = join35(repoRoot, ".tmp");
-  if (!existsSync40(tmpDir)) return checks;
+  const tmpDir = join36(repoRoot, ".tmp");
+  if (!existsSync41(tmpDir)) return checks;
   const state = loadState(repoRoot);
   const activeMatchers = /* @__PURE__ */ new Set();
   if (state) {
@@ -16773,11 +16990,11 @@ function checkBridgeTurnHealth(repoRoot) {
     return checks;
   }
   for (const dir of dirs) {
-    const heartbeatPath = join35(tmpDir, dir, "heartbeat.json");
-    if (!existsSync40(heartbeatPath)) continue;
+    const heartbeatPath = join36(tmpDir, dir, "heartbeat.json");
+    if (!existsSync41(heartbeatPath)) continue;
     let heartbeat;
     try {
-      heartbeat = JSON.parse(readFileSync31(heartbeatPath, "utf-8"));
+      heartbeat = JSON.parse(readFileSync32(heartbeatPath, "utf-8"));
     } catch {
       checks.push({
         name: `turn: ${dir}`,
@@ -17086,7 +17303,7 @@ async function doctorCommand(args) {
               result.instanceId
             );
             saveState(repoRoot, state);
-            if (inst.configPath && existsSync40(inst.configPath)) {
+            if (inst.configPath && existsSync41(inst.configPath)) {
               const currentHash = hashFile(inst.configPath);
               if (instConfig.runtimeConfigHash !== currentHash) {
                 instConfig.runtimeConfigHash = currentHash;
@@ -17106,23 +17323,23 @@ async function doctorCommand(args) {
     const checks = [];
     const state2 = loadState(repoRoot);
     if (!state2) return checks;
-    const heartbeatsPath = join35(commsDir, "heartbeats.json");
+    const heartbeatsPath = join36(commsDir, "heartbeats.json");
     let heartbeatStore = {};
     try {
-      if (existsSync40(heartbeatsPath)) {
-        heartbeatStore = JSON.parse(readFileSync31(heartbeatsPath, "utf-8"));
+      if (existsSync41(heartbeatsPath)) {
+        heartbeatStore = JSON.parse(readFileSync32(heartbeatsPath, "utf-8"));
       }
     } catch {
     }
-    const claimsDir = join35(commsDir, ".claims");
+    const claimsDir = join36(commsDir, ".claims");
     const claimNames = /* @__PURE__ */ new Map();
     try {
-      if (existsSync40(claimsDir)) {
+      if (existsSync41(claimsDir)) {
         for (const file of readdirSync15(claimsDir)) {
           if (!file.endsWith(".json") || file.endsWith(".lock")) continue;
           try {
             const raw = JSON.parse(
-              readFileSync31(join35(claimsDir, file), "utf-8")
+              readFileSync32(join36(claimsDir, file), "utf-8")
             );
             if (raw.name && raw.claimedBy?.instanceId) {
               claimNames.set(raw.name, raw.claimedBy.instanceId);
@@ -17133,7 +17350,7 @@ async function doctorCommand(args) {
       }
     } catch {
     }
-    const tmpDir = join35(repoRoot, ".tmp");
+    const tmpDir = join36(repoRoot, ".tmp");
     for (const [instanceId, inst] of Object.entries(state2.instances)) {
       if (!inst.installed) continue;
       const sources = {};
@@ -17151,13 +17368,13 @@ async function doctorCommand(args) {
       sources["claims"] = claimName;
       let runtimeName = null;
       try {
-        const runtimeDir = join35(
+        const runtimeDir = join36(
           tmpDir,
           `codex-app-server-bridge-${instanceId}`
         );
-        const agentNamePath = join35(runtimeDir, "agent-name.txt");
-        if (existsSync40(agentNamePath)) {
-          runtimeName = readFileSync31(agentNamePath, "utf-8").trim() || null;
+        const agentNamePath = join36(runtimeDir, "agent-name.txt");
+        if (existsSync41(agentNamePath)) {
+          runtimeName = readFileSync32(agentNamePath, "utf-8").trim() || null;
         }
       } catch {
       }
@@ -17185,9 +17402,9 @@ async function doctorCommand(args) {
         });
       }
     }
-    const instancesDir2 = join35(config.stateDir, "instances");
+    const instancesDir2 = join36(config.stateDir, "instances");
     try {
-      if (existsSync40(instancesDir2)) {
+      if (existsSync41(instancesDir2)) {
         const files = readdirSync15(instancesDir2).filter(
           (f) => f.endsWith(".json")
         );
@@ -17313,8 +17530,8 @@ async function doctorCommand(args) {
 // src/commands/comms.ts
 init_utils();
 import { execSync as execSync6, spawnSync as spawnSync9 } from "child_process";
-import * as fs42 from "fs";
-import * as path40 from "path";
+import * as fs43 from "fs";
+import * as path41 from "path";
 var COMMS_HELP = `
 Usage:
   tap comms <subcommand>
@@ -17328,7 +17545,7 @@ Examples:
   npx @hua-labs/tap comms push
 `.trim();
 function isGitRepo(dir) {
-  return fs42.existsSync(path40.join(dir, ".git"));
+  return fs43.existsSync(path41.join(dir, ".git"));
 }
 function commsPull(commsDir) {
   logHeader("tap comms pull");
@@ -17476,18 +17693,18 @@ async function commsCommand(args) {
 }
 
 // src/commands/ready.ts
-import * as fs48 from "fs";
-import * as path45 from "path";
+import * as fs49 from "fs";
+import * as path46 from "path";
 import { spawnSync as spawnSync10 } from "child_process";
 init_utils();
 
 // src/presence-lookup.ts
-import * as fs43 from "fs";
-import * as path41 from "path";
+import * as fs44 from "fs";
+import * as path42 from "path";
 function objectValue2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
-function stringValue2(value) {
+function stringValue3(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function stringArray2(value) {
@@ -17503,8 +17720,8 @@ function sameAddress(left, right) {
 }
 function readJson(filePath) {
   try {
-    if (!fs43.existsSync(filePath)) return null;
-    const parsed = JSON.parse(fs43.readFileSync(filePath, "utf8"));
+    if (!fs44.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs44.readFileSync(filePath, "utf8"));
     return objectValue2(parsed);
   } catch {
     return null;
@@ -17514,33 +17731,33 @@ function presenceNames(record) {
   const address = objectValue2(record.address);
   const capabilities = objectValue2(record.capabilities);
   return [
-    stringValue2(record.agent),
-    stringValue2(record.agentId),
-    stringValue2(record.id),
-    stringValue2(record.name),
-    stringValue2(record.routingAddress),
-    stringValue2(address?.routingAddress),
-    stringValue2(address?.clientId),
+    stringValue3(record.agent),
+    stringValue3(record.agentId),
+    stringValue3(record.id),
+    stringValue3(record.name),
+    stringValue3(record.routingAddress),
+    stringValue3(address?.routingAddress),
+    stringValue3(address?.clientId),
     ...stringArray2(address?.aliases),
-    stringValue2(capabilities?.routingAddress),
+    stringValue3(capabilities?.routingAddress),
     ...stringArray2(capabilities?.aliases)
   ].filter((item) => Boolean(item));
 }
 function classifyRecordMatch(agent, record) {
   const address = objectValue2(record.address);
   const directNames = [
-    stringValue2(record.agent),
-    stringValue2(record.agentId),
-    stringValue2(record.id),
-    stringValue2(record.name)
+    stringValue3(record.agent),
+    stringValue3(record.agentId),
+    stringValue3(record.id),
+    stringValue3(record.name)
   ].filter((item) => Boolean(item));
   if (directNames.some((name) => sameAddress(name, agent))) {
     return "record-agent";
   }
   const addressNames = [
-    stringValue2(record.routingAddress),
-    stringValue2(address?.routingAddress),
-    stringValue2(address?.clientId)
+    stringValue3(record.routingAddress),
+    stringValue3(address?.routingAddress),
+    stringValue3(address?.clientId)
   ].filter((item) => Boolean(item));
   if (addressNames.some((name) => sameAddress(name, agent))) {
     return "record-address";
@@ -17548,8 +17765,8 @@ function classifyRecordMatch(agent, record) {
   return presenceNames(record).some((name) => sameAddress(name, agent)) ? "record-alias" : null;
 }
 function resolvePresenceRecord(commsDir, agent) {
-  const presenceDir = path41.join(commsDir, "presence");
-  const requestedPath = path41.join(presenceDir, `${agent}.json`);
+  const presenceDir = path42.join(commsDir, "presence");
+  const requestedPath = path42.join(presenceDir, `${agent}.json`);
   const direct = readJson(requestedPath);
   if (direct) {
     return {
@@ -17559,7 +17776,7 @@ function resolvePresenceRecord(commsDir, agent) {
       matchedBy: "direct-file"
     };
   }
-  const normalizedPath = path41.join(
+  const normalizedPath = path42.join(
     presenceDir,
     `${agent.replace(/-/g, "_")}.json`
   );
@@ -17575,9 +17792,9 @@ function resolvePresenceRecord(commsDir, agent) {
     }
   }
   try {
-    const files = fs43.existsSync(presenceDir) ? fs43.readdirSync(presenceDir).filter((file) => file.endsWith(".json")) : [];
+    const files = fs44.existsSync(presenceDir) ? fs44.readdirSync(presenceDir).filter((file) => file.endsWith(".json")) : [];
     for (const file of files.sort()) {
-      const filePath = path41.join(presenceDir, file);
+      const filePath = path42.join(presenceDir, file);
       const record = readJson(filePath);
       if (!record) continue;
       const recordMatch = classifyRecordMatch(agent, record);
@@ -17601,7 +17818,7 @@ function resolvePresenceRecord(commsDir, agent) {
 }
 
 // src/receiver/thread-cwd-match.ts
-import * as fs44 from "fs";
+import * as fs45 from "fs";
 function normalizeSeparators(value) {
   return value.replace(/^\\\\\?\\/, "").replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "");
 }
@@ -17613,7 +17830,7 @@ function normalizeCaseInsensitivePath(value) {
 }
 function realpathOrNull(value) {
   try {
-    return fs44.realpathSync.native(value);
+    return fs45.realpathSync.native(value);
   } catch {
     return null;
   }
@@ -18169,7 +18386,7 @@ var ExperimentalCodexIpcObserveTransport = class {
     this.socket = null;
   }
   async waitForConnect(socket) {
-    await new Promise((resolve39, reject) => {
+    await new Promise((resolve40, reject) => {
       const cleanup = () => {
         clearTimeout(timeout);
         socket.removeListener("connect", onConnect);
@@ -18177,7 +18394,7 @@ var ExperimentalCodexIpcObserveTransport = class {
       };
       const onConnect = () => {
         cleanup();
-        resolve39();
+        resolve40();
       };
       const onError = (...args) => {
         const [error] = args;
@@ -18254,7 +18471,7 @@ var ExperimentalCodexIpcObserveTransport = class {
       conversationId: extractConversationId(params ?? null),
       paramKeys: listRecordKeys(params ?? null)
     });
-    const promise = new Promise((resolve39, reject) => {
+    const promise = new Promise((resolve40, reject) => {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         reject(
@@ -18263,7 +18480,7 @@ var ExperimentalCodexIpcObserveTransport = class {
           )
         );
       }, this.requestTimeoutMs);
-      this.pendingRequests.set(requestId, { resolve: resolve39, reject, timeout });
+      this.pendingRequests.set(requestId, { resolve: resolve40, reject, timeout });
     });
     this.socket.write(encodeCodexIpcFrame(message));
     return promise;
@@ -18542,7 +18759,7 @@ function classifyRouteHealth(options) {
 async function collectSnapshot(options) {
   const connectedSnapshot = await options.transport.connect();
   if (options.timeoutMs <= 0) return connectedSnapshot;
-  await new Promise((resolve39) => setTimeout(resolve39, options.timeoutMs));
+  await new Promise((resolve40) => setTimeout(resolve40, options.timeoutMs));
   return options.transport.getSnapshot();
 }
 async function probeWindowsAppRouteHealth(options) {
@@ -18623,8 +18840,8 @@ async function probeWindowsAppRouteHealth(options) {
 }
 
 // src/commands/ready-windows-route.ts
-import * as fs47 from "fs";
-import * as path44 from "path";
+import * as fs48 from "fs";
+import * as path45 from "path";
 import { randomUUID as randomUUID6 } from "crypto";
 
 // src/transport/experimental/codex-ipc-control.ts
@@ -18633,9 +18850,9 @@ import { randomUUID as randomUUID5 } from "crypto";
 // src/transport/consent.ts
 import { createHash as createHash6, randomBytes as randomBytes4, randomUUID as randomUUID3 } from "crypto";
 import { execFileSync } from "child_process";
-import * as fs45 from "fs";
+import * as fs46 from "fs";
 import * as os3 from "os";
-import * as path42 from "path";
+import * as path43 from "path";
 var CONSENT_RECEIPTS_DIRNAME = "tap-codex-a2a-consent";
 var CONSENT_SECRETS_DIRNAME = "tap-codex-a2a-consent-secrets";
 var DEFAULT_CONSENT_TTL_SECONDS = 10 * 60;
@@ -18684,15 +18901,15 @@ function normalizeMethods(values) {
   return [...methods].sort();
 }
 function normalizePathForComparison(value) {
-  return path42.resolve(value).replace(/\\/g, "/").toLowerCase();
+  return path43.resolve(value).replace(/\\/g, "/").toLowerCase();
 }
 function resolveReceiptsDir(explicitDir) {
   const configuredDir = explicitDir?.trim() || process.env.TAP_CONSENT_RECEIPTS_DIR?.trim();
-  return configuredDir ? path42.resolve(configuredDir) : path42.join(os3.tmpdir(), CONSENT_RECEIPTS_DIRNAME);
+  return configuredDir ? path43.resolve(configuredDir) : path43.join(os3.tmpdir(), CONSENT_RECEIPTS_DIRNAME);
 }
 function resolveSecretsDir(explicitDir) {
   const configuredDir = explicitDir?.trim() || process.env.TAP_CONSENT_SECRETS_DIR?.trim();
-  return configuredDir ? path42.resolve(configuredDir) : path42.join(os3.tmpdir(), CONSENT_SECRETS_DIRNAME);
+  return configuredDir ? path43.resolve(configuredDir) : path43.join(os3.tmpdir(), CONSENT_SECRETS_DIRNAME);
 }
 function resolveConsentDirs(options) {
   const receiptsDir = resolveReceiptsDir(options.receiptsDir);
@@ -18717,10 +18934,10 @@ function hashPairTokenBinding(options) {
   ).digest("hex");
 }
 function readUtf8PreservingTimes(filePath) {
-  const originalStats = fs45.statSync(filePath);
-  const contents = fs45.readFileSync(filePath, "utf-8");
+  const originalStats = fs46.statSync(filePath);
+  const contents = fs46.readFileSync(filePath, "utf-8");
   try {
-    fs45.utimesSync(filePath, originalStats.atime, originalStats.mtime);
+    fs46.utimesSync(filePath, originalStats.atime, originalStats.mtime);
   } catch {
   }
   return contents;
@@ -18771,13 +18988,13 @@ function isExpired(receipt, now) {
   return Number.isNaN(expiresAtMs) || expiresAtMs <= now.getTime();
 }
 function resolveSecretPath(secretsDir, receiptId) {
-  return path42.join(secretsDir, `${receiptId}.token`);
+  return path43.join(secretsDir, `${receiptId}.token`);
 }
 function resolveReservedReceiptPath(receiptsDir, receiptId) {
-  return path42.join(receiptsDir, `${receiptId}.reserved.json`);
+  return path43.join(receiptsDir, `${receiptId}.reserved.json`);
 }
 function extractReceiptIdFromPath(filePath) {
-  return path42.basename(filePath).replace(/(?:\.reserved)?\.json$/i, "");
+  return path43.basename(filePath).replace(/(?:\.reserved)?\.json$/i, "");
 }
 function isReceiptPath(fileName) {
   return /\.json$/i.test(fileName);
@@ -18799,7 +19016,7 @@ function applyWindowsPrivateAcl(targetPath) {
   if (principals.length === 0) {
     throw new ConsentReceiptError(
       "invalid",
-      `Unable to resolve a Windows principal for "${path42.basename(targetPath)}".`
+      `Unable to resolve a Windows principal for "${path43.basename(targetPath)}".`
     );
   }
   let lastError = null;
@@ -18820,12 +19037,12 @@ function applyWindowsPrivateAcl(targetPath) {
   }
   throw new ConsentReceiptError(
     "invalid",
-    `Failed to apply Windows ACL hardening to "${path42.basename(targetPath)}": ${lastError instanceof Error ? lastError.message : String(lastError)}`
+    `Failed to apply Windows ACL hardening to "${path43.basename(targetPath)}": ${lastError instanceof Error ? lastError.message : String(lastError)}`
   );
 }
 function hardenSecretStorePath(targetPath, mode) {
   try {
-    fs45.chmodSync(targetPath, mode);
+    fs46.chmodSync(targetPath, mode);
   } catch {
   }
   applyWindowsPrivateAcl(targetPath);
@@ -18837,10 +19054,10 @@ function hasTimestampDrift(stats, mintedAtMs) {
   return Math.abs(stats.mtimeMs - mintedAtMs) > CONSENT_METADATA_DRIFT_TOLERANCE_MS || Math.abs(stats.atimeMs - mintedAtMs) > CONSENT_METADATA_DRIFT_TOLERANCE_MS;
 }
 function stampMintedAt(targetPath, mintedAt) {
-  fs45.utimesSync(targetPath, mintedAt, mintedAt);
+  fs46.utimesSync(targetPath, mintedAt, mintedAt);
 }
 function stampReservationAt(targetPath, reservedAt) {
-  fs45.utimesSync(targetPath, reservedAt, reservedAt);
+  fs46.utimesSync(targetPath, reservedAt, reservedAt);
 }
 function resolveReceiptCreatedAtMs(receipt) {
   const createdAtMs = new Date(receipt.createdAt).getTime();
@@ -18869,22 +19086,22 @@ function assertUntamperedConsentPath(stats, receipt, label) {
 }
 function removeSecretPath(secretPath) {
   try {
-    fs45.rmSync(secretPath, { force: true });
+    fs46.rmSync(secretPath, { force: true });
   } catch {
   }
 }
 function removeReceiptPath(receiptPath) {
   try {
-    fs45.rmSync(receiptPath, { force: true });
+    fs46.rmSync(receiptPath, { force: true });
   } catch {
   }
 }
 function writeActiveReceiptFile(filePath, receipt) {
-  fs45.writeFileSync(filePath, JSON.stringify(receipt, null, 2), "utf-8");
+  fs46.writeFileSync(filePath, JSON.stringify(receipt, null, 2), "utf-8");
   stampMintedAt(filePath, resolveReceiptCreatedAt(receipt));
 }
 function writeReservedReceiptFile(filePath, receipt, reservationOwnerId, reservedAt) {
-  fs45.writeFileSync(
+  fs46.writeFileSync(
     filePath,
     JSON.stringify(
       {
@@ -18899,10 +19116,10 @@ function writeReservedReceiptFile(filePath, receipt, reservationOwnerId, reserve
   stampReservationAt(filePath, reservedAt);
 }
 function cleanupExpiredReceipts(receiptsDir, secretsDir, now) {
-  if (!fs45.existsSync(receiptsDir)) return;
-  for (const entry of fs45.readdirSync(receiptsDir, { withFileTypes: true })) {
+  if (!fs46.existsSync(receiptsDir)) return;
+  for (const entry of fs46.readdirSync(receiptsDir, { withFileTypes: true })) {
     if (!entry.isFile() || !isReceiptPath(entry.name)) continue;
-    const filePath = path42.join(receiptsDir, entry.name);
+    const filePath = path43.join(receiptsDir, entry.name);
     const receipt = loadConsentReceipt(filePath);
     const receiptId = receipt?.id ?? extractReceiptIdFromPath(filePath);
     if (!receipt || isExpired(receipt, now)) {
@@ -18912,10 +19129,10 @@ function cleanupExpiredReceipts(receiptsDir, secretsDir, now) {
   }
 }
 function listReceiptPaths(receiptsDir) {
-  if (!fs45.existsSync(receiptsDir)) return [];
-  return fs45.readdirSync(receiptsDir, { withFileTypes: true }).filter(
+  if (!fs46.existsSync(receiptsDir)) return [];
+  return fs46.readdirSync(receiptsDir, { withFileTypes: true }).filter(
     (entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.endsWith(".reserved.json")
-  ).map((entry) => path42.join(receiptsDir, entry.name)).sort();
+  ).map((entry) => path43.join(receiptsDir, entry.name)).sort();
 }
 function scopeSatisfies(actual, required) {
   return SCOPE_PRIORITY[actual] >= SCOPE_PRIORITY[required];
@@ -18923,15 +19140,15 @@ function scopeSatisfies(actual, required) {
 function resolveReceiptPath(receiptsDir, consentRef) {
   const normalizedConsentRef = normalizeString2(consentRef);
   if (!normalizedConsentRef) return null;
-  return path42.join(receiptsDir, `${normalizedConsentRef}.json`);
+  return path43.join(receiptsDir, `${normalizedConsentRef}.json`);
 }
 function reserveReceiptPath(filePath, receipt, reservationOwnerId, now) {
   const reservedPath = resolveReservedReceiptPath(
-    path42.dirname(filePath),
+    path43.dirname(filePath),
     receipt.id
   );
   try {
-    fs45.renameSync(filePath, reservedPath);
+    fs46.renameSync(filePath, reservedPath);
   } catch (error) {
     if (error.code === "ENOENT") {
       throw new ConsentReceiptError(
@@ -18948,7 +19165,7 @@ function mintPairToken() {
   return randomBytes4(32).toString("base64url");
 }
 function writeSecretFile(secretPath, pairToken, mintedAt) {
-  fs45.writeFileSync(secretPath, pairToken, {
+  fs46.writeFileSync(secretPath, pairToken, {
     encoding: "utf-8",
     mode: 384
   });
@@ -18976,8 +19193,8 @@ function createConsentReceipt(options) {
       "Consent receipt requires a non-empty conversationId."
     );
   }
-  fs45.mkdirSync(receiptsDir, { recursive: true });
-  fs45.mkdirSync(secretsDir, { recursive: true, mode: 448 });
+  fs46.mkdirSync(receiptsDir, { recursive: true });
+  fs46.mkdirSync(secretsDir, { recursive: true, mode: 448 });
   hardenSecretStorePath(secretsDir, 448);
   cleanupExpiredReceipts(receiptsDir, secretsDir, now);
   const ttlSeconds = Math.max(
@@ -19005,12 +19222,12 @@ function createConsentReceipt(options) {
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + ttlSeconds * 1e3).toISOString()
   };
-  const filePath = path42.join(receiptsDir, `${receipt.id}.json`);
+  const filePath = path43.join(receiptsDir, `${receipt.id}.json`);
   const secretPath = resolveSecretPath(secretsDir, receipt.id);
   const createdAt = new Date(receipt.createdAt);
   try {
     writeSecretFile(secretPath, pairToken, createdAt);
-    fs45.writeFileSync(filePath, JSON.stringify(receipt, null, 2), "utf-8");
+    fs46.writeFileSync(filePath, JSON.stringify(receipt, null, 2), "utf-8");
     stampMintedAt(filePath, createdAt);
   } catch (error) {
     removeSecretPath(secretPath);
@@ -19040,7 +19257,7 @@ function prepareConsentReceipt(options) {
   const explicitPath = resolveReceiptPath(receiptsDir, explicitConsentRef);
   const explicitReservedPath = explicitConsentRef ? resolveReservedReceiptPath(receiptsDir, explicitConsentRef) : null;
   const reservedConsentRef = explicitConsentRef;
-  if (reservedConsentRef && explicitPath && explicitReservedPath && !fs45.existsSync(explicitPath) && fs45.existsSync(explicitReservedPath)) {
+  if (reservedConsentRef && explicitPath && explicitReservedPath && !fs46.existsSync(explicitPath) && fs46.existsSync(explicitReservedPath)) {
     assertPendingReservationAvailable(reservedConsentRef);
     const reservedRecord = loadReservedReceiptRecord(explicitReservedPath);
     const reservedReceipt = reservedRecord.receipt;
@@ -19048,8 +19265,8 @@ function prepareConsentReceipt(options) {
     if (!reservedReceipt || isExpired(reservedReceipt, now)) {
       removeReceiptPath(explicitReservedPath);
       removeSecretPath(resolveSecretPath(secretsDir, reservedReceiptId));
-    } else if (reservationOwnerId && reservedRecord.reservationOwnerId === reservationOwnerId && isReservationExpired(fs45.statSync(explicitReservedPath), now)) {
-      fs45.renameSync(explicitReservedPath, explicitPath);
+    } else if (reservationOwnerId && reservedRecord.reservationOwnerId === reservationOwnerId && isReservationExpired(fs46.statSync(explicitReservedPath), now)) {
+      fs46.renameSync(explicitReservedPath, explicitPath);
       writeActiveReceiptFile(explicitPath, reservedReceipt);
     } else {
       throw new ConsentReceiptError(
@@ -19061,8 +19278,8 @@ function prepareConsentReceipt(options) {
   const candidatePaths = explicitPath ? [explicitPath] : listReceiptPaths(receiptsDir);
   let deferredError = null;
   for (const filePath of candidatePaths) {
-    if (!fs45.existsSync(filePath)) {
-      if (explicitPath && explicitReservedPath && fs45.existsSync(explicitReservedPath)) {
+    if (!fs46.existsSync(filePath)) {
+      if (explicitPath && explicitReservedPath && fs46.existsSync(explicitReservedPath)) {
         throw new ConsentReceiptError(
           "missing",
           `Consent receipt "${explicitConsentRef}" is already reserved or consumed.`
@@ -19070,7 +19287,7 @@ function prepareConsentReceipt(options) {
       }
       continue;
     }
-    const receiptStats = fs45.statSync(filePath);
+    const receiptStats = fs46.statSync(filePath);
     const receipt = loadConsentReceipt(filePath);
     if (!receipt) {
       removeReceiptPath(filePath);
@@ -19091,7 +19308,7 @@ function prepareConsentReceipt(options) {
       continue;
     }
     const secretPath = resolveSecretPath(secretsDir, receipt.id);
-    if (!fs45.existsSync(secretPath)) {
+    if (!fs46.existsSync(secretPath)) {
       if (explicitPath) {
         throw new ConsentReceiptError(
           "missing",
@@ -19104,7 +19321,7 @@ function prepareConsentReceipt(options) {
     let cleanupSecretOnFailure = true;
     try {
       assertUntamperedConsentPath(receiptStats, receipt, "receipt");
-      const secretStats = fs45.statSync(secretPath);
+      const secretStats = fs46.statSync(secretPath);
       assertUntamperedConsentPath(secretStats, receipt, "secret");
       const pairToken = readUtf8PreservingTimes(secretPath).trim();
       if (!pairToken) {
@@ -19167,7 +19384,7 @@ function prepareConsentReceipt(options) {
           }
           receiptPrepared = false;
           try {
-            fs45.rmSync(reservedReceiptPath, { force: false });
+            fs46.rmSync(reservedReceiptPath, { force: false });
           } finally {
             clearPendingReservation(receipt.id);
             removeSecretPath(secretPath);
@@ -19179,7 +19396,7 @@ function prepareConsentReceipt(options) {
           }
           receiptPrepared = false;
           try {
-            fs45.renameSync(reservedReceiptPath, filePath);
+            fs46.renameSync(reservedReceiptPath, filePath);
             writeActiveReceiptFile(filePath, receipt);
           } finally {
             clearPendingReservation(receipt.id);
@@ -19203,8 +19420,8 @@ function prepareConsentReceipt(options) {
 
 // src/transport/consent-ledger.ts
 import { randomUUID as randomUUID4 } from "crypto";
-import * as fs46 from "fs";
-import * as path43 from "path";
+import * as fs47 from "fs";
+import * as path44 from "path";
 function normalizeString3(value) {
   const normalized = value?.trim();
   return normalized ? normalized : null;
@@ -19233,8 +19450,8 @@ function resolveConsentLedgerDir(commsDir) {
   if (!resolvedCommsDir) {
     return null;
   }
-  return path43.join(
-    path43.resolve(resolvedCommsDir),
+  return path44.join(
+    path44.resolve(resolvedCommsDir),
     "receipts",
     "consent-ledger"
   );
@@ -19265,11 +19482,11 @@ function buildLedgerFilePath(ledgerDir, record) {
   const timestamp = formatLedgerTimestamp(record.recordedAt);
   const shortGrantId = record.grantId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "unknown";
   const baseName = `${timestamp}-${record.event}-${shortGrantId}`;
-  const preferredPath = path43.join(ledgerDir, `${baseName}.md`);
-  if (!fs46.existsSync(preferredPath)) {
+  const preferredPath = path44.join(ledgerDir, `${baseName}.md`);
+  if (!fs47.existsSync(preferredPath)) {
     return preferredPath;
   }
-  return path43.join(
+  return path44.join(
     ledgerDir,
     `${baseName}-${randomUUID4().replace(/-/g, "").slice(0, 6)}.md`
   );
@@ -19357,9 +19574,9 @@ function writeConsentLedgerEvent(options) {
     issuedByClientId: normalizeString3(options.issuedByClientId)
   };
   try {
-    fs46.mkdirSync(ledgerDir, { recursive: true });
+    fs47.mkdirSync(ledgerDir, { recursive: true });
     const filePath = buildLedgerFilePath(ledgerDir, record);
-    fs46.writeFileSync(
+    fs47.writeFileSync(
       filePath,
       buildFrontmatter(record) + buildBody(record),
       "utf-8"
@@ -19592,11 +19809,11 @@ var ExperimentalCodexIpcControlTransport = class extends ExperimentalCodexIpcObs
   async waitForConversationSnapshot(conversationId) {
     const existing = this.getConversationSnapshot(conversationId);
     if (existing) return existing;
-    return await new Promise((resolve39) => {
+    return await new Promise((resolve40) => {
       let unsubscribe = null;
       const timeout = setTimeout(() => {
         unsubscribe?.();
-        resolve39(this.getConversationSnapshot(conversationId));
+        resolve40(this.getConversationSnapshot(conversationId));
       }, this.RECIPIENT_STATE_WAIT_MS);
       if (typeof timeout.unref === "function") {
         timeout.unref();
@@ -19607,7 +19824,7 @@ var ExperimentalCodexIpcControlTransport = class extends ExperimentalCodexIpcObs
         }
         clearTimeout(timeout);
         unsubscribe?.();
-        resolve39(
+        resolve40(
           event.snapshot.conversations.find(
             (conversation) => conversation.id === conversationId
           ) ?? this.getConversationSnapshot(conversationId)
@@ -19914,14 +20131,14 @@ function uniqueNonEmpty(values) {
   ];
 }
 function writeJsonAtomic(filePath, value) {
-  fs47.mkdirSync(path44.dirname(filePath), { recursive: true });
+  fs48.mkdirSync(path45.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   try {
-    fs47.writeFileSync(tmpPath, JSON.stringify(value, null, 2), "utf8");
-    fs47.renameSync(tmpPath, filePath);
+    fs48.writeFileSync(tmpPath, JSON.stringify(value, null, 2), "utf8");
+    fs48.renameSync(tmpPath, filePath);
   } catch (error) {
     try {
-      fs47.rmSync(tmpPath, { force: true });
+      fs48.rmSync(tmpPath, { force: true });
     } catch {
     }
     throw error;
@@ -19992,8 +20209,8 @@ function writeWindowsRouteSmokeInboxEvidence(options) {
     0,
     8
   )}.md`;
-  const inboxDir = path44.join(options.commsDir, "inbox");
-  const filePath = path44.join(inboxDir, filename);
+  const inboxDir = path45.join(options.commsDir, "inbox");
+  const filePath = path45.join(inboxDir, filename);
   const frontmatter = [
     "---",
     "type: inbox",
@@ -20023,8 +20240,8 @@ function writeWindowsRouteSmokeInboxEvidence(options) {
     "---",
     ""
   ].join("\n");
-  fs47.mkdirSync(inboxDir, { recursive: true });
-  fs47.writeFileSync(filePath, `${frontmatter}${options.content.trim()}
+  fs48.mkdirSync(inboxDir, { recursive: true });
+  fs48.writeFileSync(filePath, `${frontmatter}${options.content.trim()}
 `, {
     encoding: "utf8",
     flag: "wx"
@@ -20163,184 +20380,16 @@ function applyWindowsRoutePresenceRefresh(options) {
 }
 
 // src/commands/ready-profiles.ts
-function shellQuote2(value) {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-function buildSumbackYoonAppServerCommand() {
-  const startCommand = "cd /home/devin/hua-platform && exec bash -lc 'exec codex app-server --listen ws://127.0.0.1:35089 2>&1 | tee -a /tmp/tap-appserver-yoon.log'";
-  return [
-    "set -euo pipefail",
-    "session=tap-appserver-yoon",
-    "port=35089",
-    "log=/tmp/tap-appserver-yoon.log",
-    'if tmux has-session -t "$session" 2>/dev/null \\',
-    "  && curl -fsS -o /dev/null http://127.0.0.1:${port}/readyz \\",
-    "  && curl -fsS -o /dev/null http://127.0.0.1:${port}/healthz; then",
-    "printf 'already running: tap-appserver-yoon\\n'",
-    "exit 0",
-    "fi",
-    'if tmux has-session -t "$session" 2>/dev/null; then',
-    'tmux kill-session -t "$session"',
-    "fi",
-    "listener_lines=$(ss -ltnp 2>/dev/null | awk '$4 ~ /:35089$/ {print}' || true)",
-    `listener_count=$(printf '%s\\n' "$listener_lines" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]')`,
-    'if [ "$listener_count" -gt 1 ]; then',
-    `printf 'blocked: port 35089 has ambiguous listener count=%s\\n' "$listener_count" >&2`,
-    "exit 2",
-    "fi",
-    'if [ "$listener_count" -eq 1 ]; then',
-    `listener_line=$(printf '%s\\n' "$listener_lines")`,
-    `listener_pid=$(printf '%s\\n' "$listener_line" | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p')`,
-    'if [ -z "$listener_pid" ]; then',
-    "printf 'blocked: port 35089 occupied but listener PID is unavailable\\n' >&2",
-    "exit 2",
-    "fi",
-    'listener_comm=$(ps -p "$listener_pid" -o comm= 2>/dev/null | tr -d "[:space:]")',
-    'if [ "$listener_comm" != "codex" ]; then',
-    `printf 'blocked: port 35089 occupied by non-codex process comm=%s pid=%s\\n' "$listener_comm" "$listener_pid" >&2`,
-    "exit 2",
-    "fi",
-    'kill "$listener_pid"',
-    "sleep 1",
-    `printf 'replaced stale listener: codex pid %s\\n' "$listener_pid"`,
-    "fi",
-    'rm -f "$log"',
-    `tmux new-session -d -s "$session" ${shellQuote2(startCommand)}`,
-    "sleep 2",
-    'tmux has-session -t "$session" >/dev/null',
-    "ss -ltnp 2>/dev/null | awk '$4 ~ /:35089$/ {found=1} END {exit found?0:1}'",
-    "curl -fsS -o /dev/null http://127.0.0.1:${port}/readyz",
-    "curl -fsS -o /dev/null http://127.0.0.1:${port}/healthz",
-    "printf 'started: tap-appserver-yoon\\n'"
-  ].join("\n");
-}
-function buildSumbackYoonBridgeCommand() {
-  return [
-    "set -euo pipefail",
-    "repo=/home/devin/hua-platform",
-    "service=tap-bridge-sumback",
-    'script_src="$repo/scripts/tap-bridge-recover.sh"',
-    'service_src="$repo/scripts/tap-bridge-sumback.service"',
-    'script_dst="$HOME/bin/tap-bridge-recover.sh"',
-    'service_dst="$HOME/.config/systemd/user/tap-bridge-sumback.service"',
-    'heartbeat="$repo/.tmp/codex-app-server-bridge-codex/heartbeat.json"',
-    'test -f "$script_src"',
-    'test -f "$service_src"',
-    'mkdir -p "$HOME/bin" "$HOME/.config/systemd/user"',
-    'if [ ! -f "$script_dst" ] || ! cmp -s "$script_src" "$script_dst"; then',
-    'install -m 755 "$script_src" "$script_dst"',
-    "printf 'synced: tap-bridge-recover.sh\\n'",
-    "fi",
-    'if [ ! -f "$service_dst" ] || ! cmp -s "$service_src" "$service_dst"; then',
-    'install -m 644 "$service_src" "$service_dst"',
-    "printf 'synced: tap-bridge-sumback.service\\n'",
-    "fi",
-    "systemctl --user daemon-reload",
-    'systemctl --user restart "$service"',
-    "sleep 8",
-    'systemctl --user is-active --quiet "$service"',
-    'pid=$(systemctl --user show -p MainPID --value "$service")',
-    'if ! printf "%s" "$pid" | grep -Eq "^[0-9]+$" || [ "$pid" -le 1 ]; then',
-    'printf "blocked: %s has no usable MainPID\\n" "$service" >&2',
-    "exit 2",
-    "fi",
-    'comm=$(ps -p "$pid" -o comm= 2>/dev/null | tr -d "[:space:]")',
-    'if [ "$comm" != "node" ]; then',
-    'printf "blocked: %s MainPID is not node comm=%s pid=%s\\n" "$service" "$comm" "$pid" >&2',
-    "exit 2",
-    "fi",
-    'test -f "$heartbeat"',
-    `node - "$heartbeat" <<'NODE'`,
-    "const fs = require('fs');",
-    "const heartbeatPath = process.argv[2];",
-    "const heartbeat = JSON.parse(fs.readFileSync(heartbeatPath, 'utf8'));",
-    "const ageMs = Date.now() - Date.parse(heartbeat.updatedAt || '');",
-    "if (!(ageMs >= 0 && ageMs <= 30000 && heartbeat.connected === true && heartbeat.initialized === true)) {",
-    "  console.error(`blocked: bridge heartbeat not ready ageMs=${ageMs} connected=${heartbeat.connected} initialized=${heartbeat.initialized}`);",
-    "  process.exit(2);",
-    "}",
-    "NODE",
-    'printf "started: tap-bridge-sumback pid %s\\n" "$pid"'
-  ].join("\n");
-}
-var READY_PROFILES = {
-  "sumback-yoon": {
-    id: "sumback-yoon",
-    surface: "codex-cli",
-    agent: "\uC724",
-    command: "bash scripts/tap-receiver-supervisor.sh sumback-yoon --tmux",
-    appServerUrl: "ws://127.0.0.1:35089"
-  },
-  "sumback-sol": {
-    id: "sumback-sol",
-    surface: "codex-cli",
-    agent: "\uC194",
-    command: "bash scripts/tap-receiver-supervisor.sh sumback-sol --tmux",
-    appServerUrl: "ws://127.0.0.1:44587"
-  },
-  "mac-jun-ssh-tui": {
-    id: "mac-jun-ssh-tui",
-    surface: "codex-cli",
-    agent: "\uC900",
-    command: [
-      "bash scripts/tap-flow-supervisor.sh mac-jun-projection --tmux",
-      "bash scripts/tap-flow-supervisor.sh mac-jun-uplink --tmux",
-      "bash scripts/tap-receiver-supervisor.sh mac-jun-ssh-tui --tmux"
-    ].join(" && "),
-    appServerUrl: "ws://127.0.0.1:35089"
-  },
-  "mac-aux-ssh-headless": {
-    id: "mac-aux-ssh-headless",
-    surface: "codex-cli",
-    agent: "",
-    agentEnv: "TAP_MAC_AUX_AGENT",
-    command: [
-      "bash scripts/tap-flow-supervisor.sh mac-aux-projection --tmux",
-      "bash scripts/tap-flow-supervisor.sh mac-aux-uplink --tmux"
-    ].join(" && ")
-  },
-  "remote-panel-yoon": {
-    id: "remote-panel-yoon",
-    surface: "remote-panel",
-    agent: "\uC724",
-    host: "100.121.45.22",
-    port: 8765,
-    sendEnabled: false,
-    tokenEnv: null,
-    command: [
-      "mkdir -p /home/devin/hua-platform/.tap-comms/logs",
-      "&& {",
-      "tmux has-session -t tap-remote-panel-yoon 2>/dev/null",
-      "&& printf 'already running: tap-remote-panel-yoon\\n'",
-      "|| tmux new-session -d -s tap-remote-panel-yoon",
-      shellQuote2(
-        "cd /home/devin/hua-platform && node packages/tap-comms/dist/cli.mjs remote-panel --agent \uC724 --comms-dir /home/devin/hua-comms --host 100.121.45.22 --port 8765 --read-only >> /home/devin/hua-platform/.tap-comms/logs/remote-panel-yoon.log 2>&1"
-      ),
-      "; }"
-    ].join(" ")
-  },
-  "sumback-yoon-appserver": {
-    id: "sumback-yoon-appserver",
-    surface: "codex-cli",
-    agent: "\uC724",
-    command: buildSumbackYoonAppServerCommand()
-  },
-  "sumback-yoon-bridge": {
-    id: "sumback-yoon-bridge",
-    surface: "codex-cli",
-    agent: "\uC724",
-    command: buildSumbackYoonBridgeCommand()
-  }
-};
+var READY_PROFILES = {};
 function parseReadyProfile(value) {
   if (typeof value !== "string") return null;
   return READY_PROFILES[value] ?? null;
 }
 function supportsHeadlessRunnerProfile(profileId2) {
-  return profileId2 === "sumback-yoon" || profileId2 === "sumback-sol" || profileId2 === "mac-jun-ssh-tui" || profileId2 === "mac-aux-ssh-headless";
+  return READY_PROFILES[profileId2]?.supportsHeadlessRunner === true;
 }
 function supportsLoadedThreadProfile(profileId2) {
-  return profileId2 === "sumback-yoon" || profileId2 === "sumback-sol" || profileId2 === "mac-jun-ssh-tui";
+  return READY_PROFILES[profileId2]?.supportsLoadedThread === true;
 }
 function buildHeadlessRunnerStartCommand(profileId2) {
   return `bash scripts/tap-headless-runner-supervisor.sh ${profileId2} --tmux`;
@@ -20349,17 +20398,17 @@ function buildHeadlessRunnerStopCommand(profileId2) {
   return `bash scripts/tap-headless-runner-supervisor.sh ${profileId2} --stop`;
 }
 function buildLoadedThreadAttachSessionName(profileId2) {
-  if (profileId2 === "mac-jun-ssh-tui") return "tap-codex-jun-tui";
-  if (profileId2 === "mac-aux-ssh-headless") return "tap-codex-mac-aux-tui";
-  if (profileId2 === "sumback-sol") return "tap-codex-sol-tui";
-  return "tap-codex-yoon-tui";
+  const configured = READY_PROFILES[profileId2]?.loadedThreadAttachSessionName;
+  if (configured) return configured;
+  const safeId = profileId2.replace(/[^A-Za-z0-9_-]+/g, "-");
+  return `tap-codex-${safeId}-tui`;
 }
 
 // src/commands/ready.ts
 var READY_HELP = `
 Usage:
   tap ready --surface <codex-cli|codex-app|windows-app|claude|remote-panel> --agent <name> [options]
-  tap ready --profile <sumback-yoon|sumback-sol|mac-jun-ssh-tui|mac-aux-ssh-headless|remote-panel-yoon|sumback-yoon-appserver|sumback-yoon-bridge> [--apply] [--dry-run]
+  tap ready --profile <profile-id> [--apply] [--dry-run]
 
 Description:
   Report post-tap_set_name readiness for a runtime surface. This command does
@@ -20369,7 +20418,8 @@ Description:
 Options:
   --surface <name>            Runtime surface to prepare/diagnose.
   --agent <name>              Active agent display/routing name.
-  --profile <name>            Known ready profile: sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless, remote-panel-yoon, sumback-yoon-appserver, sumback-yoon-bridge.
+  --profile <name>            Reviewed local ready profile id.
+  --profile-pack <path>       Load reviewed local ready profile data from a profile pack.
   --conversation-id <id>      Codex App conversation/thread id for owner discovery.
   --apply                     Apply safe local setup steps for this surface.
   --dry-run                   With --apply, report setup steps without writing.
@@ -20403,11 +20453,16 @@ Contract:
   does not mint consent receipts, does not sync mutable heartbeats/claims, and
   does not make CLI polling look like realtime push. Windows App route refresh
   is opt-in and writes only guarded per-agent presence evidence.
+
+  Local operator profiles are compatibility surfaces, not public package
+  defaults. Public first-run flows should prefer --surface with a concrete
+  neutral --agent such as agent-a unless a reviewed local profile pack/runbook
+  says otherwise.
 `.trim();
 var readyProfileCommandRunnerForTests = null;
 var loadedThreadReadinessProbeForTests = null;
 var windowsAppRouteHealthProbeForTests = null;
-function shellQuote3(value) {
+function shellQuote2(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 function parseSurface(value) {
@@ -20487,7 +20542,7 @@ function resolveReadyProfileAgent(profile, explicitAgent) {
 }
 function resolveReadyProfileCommand(profile, agent, command = profile.command) {
   if (!profile.agentEnv) return command;
-  return `${profile.agentEnv}=${shellQuote3(agent)}; export ${profile.agentEnv}; ${command}`;
+  return `${profile.agentEnv}=${shellQuote2(agent)}; export ${profile.agentEnv}; ${command}`;
 }
 function summarizeReadyProfileOutput(result) {
   const output = result.ok ? `${result.stdout}
@@ -20510,12 +20565,12 @@ ${result.stdout}`;
   return fallback.length > 240 ? `${fallback.slice(0, 237)}...` : fallback;
 }
 function findReadyProfileCommandCwd(startDir = process.cwd()) {
-  let dir = path45.resolve(startDir);
+  let dir = path46.resolve(startDir);
   while (true) {
-    if (fs48.existsSync(path45.join(dir, "scripts", "tap-receiver-supervisor.sh"))) {
+    if (fs49.existsSync(path46.join(dir, "scripts", "tap-receiver-supervisor.sh"))) {
       return dir;
     }
-    const parent = path45.dirname(dir);
+    const parent = path46.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
@@ -20525,7 +20580,7 @@ function addCheck(checks, status, name, message) {
   checks.push({ name, status, message });
 }
 function ensureDirectoryForReady(dirPath, name, enabled, dryRun, actions) {
-  if (fs48.existsSync(dirPath)) {
+  if (fs49.existsSync(dirPath)) {
     actions.push({
       name,
       status: "skipped",
@@ -20543,7 +20598,7 @@ function ensureDirectoryForReady(dirPath, name, enabled, dryRun, actions) {
     });
     return;
   }
-  fs48.mkdirSync(dirPath, { recursive: true });
+  fs49.mkdirSync(dirPath, { recursive: true });
   actions.push({
     name,
     status: "applied",
@@ -20604,17 +20659,17 @@ function buildCodexAppObserveCommand(surface, agent, conversationId) {
 function buildHeadlessDryRunCommand(options) {
   return [
     "cd",
-    shellQuote3(options.repoRoot),
+    shellQuote2(options.repoRoot),
     "&&",
     "node packages/tap-comms/dist/cli.mjs headless dry-run",
     "--agent",
-    shellQuote3(options.agent),
+    shellQuote2(options.agent),
     "--comms-dir",
-    shellQuote3(options.commsDir),
+    shellQuote2(options.commsDir),
     "--state-dir",
-    shellQuote3(options.stateDir),
+    shellQuote2(options.stateDir),
     "--state-name",
-    shellQuote3(options.stateName),
+    shellQuote2(options.stateName),
     "--since-minutes 60"
   ].join(" ");
 }
@@ -20623,9 +20678,9 @@ function buildLoadedThreadAttachCommand(options) {
     "codex resume --last",
     "--enable tui_app_server",
     "--remote",
-    shellQuote3(options.appServerUrl),
+    shellQuote2(options.appServerUrl),
     "-C",
-    shellQuote3(options.repoRoot),
+    shellQuote2(options.repoRoot),
     "-s danger-full-access",
     "-a never",
     "--no-alt-screen"
@@ -20639,19 +20694,19 @@ function buildLoadedThreadAttachApplyCommand(options) {
   });
   const tmuxCommand = [
     "cd",
-    shellQuote3(options.repoRoot),
+    shellQuote2(options.repoRoot),
     "&& exec",
     attachCommand
   ].join(" ");
   return [
     "set -euo pipefail",
-    `session=${shellQuote3(sessionName)}`,
+    `session=${shellQuote2(sessionName)}`,
     'if tmux has-session -t "$session" 2>/dev/null; then',
     '  printf "already running: %s\\n" "$session"',
     "  exit 0",
     "fi",
     'tmux new-session -d -s "$session"',
-    shellQuote3(tmuxCommand),
+    shellQuote2(tmuxCommand),
     "sleep 1",
     'if tmux has-session -t "$session" 2>/dev/null; then',
     '  printf "started: %s\\n" "$session"',
@@ -20686,13 +20741,41 @@ async function readyCommand(args) {
     };
   }
   const { flags } = parseArgs(args);
-  const readyProfile = parseReadyProfile(flags.profile);
+  const profilePackPath = typeof flags["profile-pack"] === "string" ? flags["profile-pack"].trim() : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return {
+      ok: false,
+      command: "ready",
+      code: "TAP_INVALID_ARGUMENT",
+      message: "Missing --profile-pack <path> value.",
+      warnings: [],
+      data: {}
+    };
+  }
+  let readyProfile = parseReadyProfile(flags.profile);
+  if (!readyProfile && typeof flags.profile === "string" && profilePackPath) {
+    try {
+      readyProfile = findReadyProfileInProfilePack(
+        profilePackPath,
+        flags.profile
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        command: "ready",
+        code: "TAP_INVALID_ARGUMENT",
+        message: error instanceof Error ? error.message : String(error),
+        warnings: [],
+        data: {}
+      };
+    }
+  }
   if (flags.profile !== void 0 && !readyProfile) {
     return {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
-      message: "Invalid --profile. Use sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless, remote-panel-yoon, sumback-yoon-appserver, or sumback-yoon-bridge.",
+      message: "Invalid --profile. Use a reviewed local ready profile id or run without --profile and pass --surface/--agent.",
       warnings: [],
       data: {}
     };
@@ -20741,16 +20824,6 @@ async function readyCommand(args) {
       data: {}
     };
   }
-  if (readyProfile?.agentEnv && agent === "\uC900") {
-    return {
-      ok: false,
-      command: "ready",
-      code: "TAP_INVALID_ARGUMENT",
-      message: `Profile ${readyProfile.id} must not reuse \uC900; choose a separate one-character agent name.`,
-      warnings: [],
-      data: {}
-    };
-  }
   if (isPlaceholder(agent)) {
     return {
       ok: false,
@@ -20764,7 +20837,7 @@ async function readyCommand(args) {
   const repoRoot = readyProfile ? findReadyProfileCommandCwd() : findRepoRoot();
   const commsDir = resolveCommsDir(args, repoRoot);
   const { config } = resolveConfig({}, repoRoot);
-  const stateDir = path45.resolve(config.stateDir);
+  const stateDir = path46.resolve(config.stateDir);
   const freshMinutes = parsePositiveInteger2(
     flags["fresh-minutes"],
     30,
@@ -20867,12 +20940,12 @@ async function readyCommand(args) {
   const applyEnabled = flags.apply === true;
   const dryRun = flags["dry-run"] === true;
   const repairPermissions = flags["repair-permissions"] === true;
-  if (repairPermissions && (!readyProfile || surface !== "codex-cli")) {
+  if (repairPermissions && (!readyProfile || surface !== "codex-cli" || readyProfile.source === "profile-pack")) {
     return {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
-      message: "--repair-permissions is only available for known Codex CLI ready profiles.",
+      message: "--repair-permissions is only available for built-in Codex CLI ready profiles.",
       warnings: [],
       data: {}
     };
@@ -20902,7 +20975,7 @@ async function readyCommand(args) {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
-      message: "--apply-headless-runner is only available for supported Codex CLI worker profiles: sumback-yoon, sumback-sol, mac-jun-ssh-tui, mac-aux-ssh-headless.",
+      message: "--apply-headless-runner is only available for reviewed Codex CLI worker profiles.",
       warnings: [],
       data: {}
     };
@@ -20912,7 +20985,7 @@ async function readyCommand(args) {
       ok: false,
       command: "ready",
       code: "TAP_INVALID_ARGUMENT",
-      message: "--check-loaded-thread is only available for known Codex CLI/TUI profiles: sumback-yoon, sumback-sol, mac-jun-ssh-tui.",
+      message: "--check-loaded-thread is only available for reviewed Codex CLI/TUI profiles.",
       warnings: [],
       data: {}
     };
@@ -21066,7 +21139,7 @@ async function readyCommand(args) {
     dryRun,
     appliedActions
   );
-  const inboxDir = path45.join(commsDir, "inbox");
+  const inboxDir = path46.join(commsDir, "inbox");
   ensureDirectoryForReady(
     inboxDir,
     "inbox",
@@ -21076,7 +21149,7 @@ async function readyCommand(args) {
   );
   if (surface === "codex-cli" || surface === "claude") {
     ensureDirectoryForReady(
-      path45.join(stateDir, "receiver"),
+      path46.join(stateDir, "receiver"),
       "receiver-state",
       applyEnabled,
       dryRun,
@@ -21084,7 +21157,7 @@ async function readyCommand(args) {
     );
   } else if (surface === "remote-panel") {
     ensureDirectoryForReady(
-      path45.join(stateDir, "remote-panel"),
+      path46.join(stateDir, "remote-panel"),
       "remote-panel-state",
       applyEnabled,
       dryRun,
@@ -21171,6 +21244,20 @@ async function readyCommand(args) {
           command: effectiveReadyProfile.command,
           message: `skipped ready profile ${effectiveReadyProfile.id}: ${codexPermissionProfile?.message ?? "Codex permission profile is not ready"}`
         });
+      } else if (effectiveReadyProfile.source === "profile-pack" && !effectiveReadyProfile.allowApply) {
+        appliedActions.push({
+          name: "ready-profile",
+          status: "skipped",
+          command: effectiveReadyProfile.command,
+          message: "profile-pack commands are loaded as data-only guidance; reviewed command execution is not enabled in this package slice"
+        });
+        readyProfileApplyFailed = true;
+        addCheck(
+          checks,
+          "block",
+          "profile-pack-command-guard",
+          "profile-pack command execution is blocked; run the reviewed local command manually or wait for a dedicated loader/apply contract"
+        );
       } else if (dryRun) {
         appliedActions.push({
           name: "ready-profile",
@@ -21204,17 +21291,17 @@ async function readyCommand(args) {
   }
   addCheck(
     checks,
-    fs48.existsSync(commsDir) ? "pass" : "fail",
+    fs49.existsSync(commsDir) ? "pass" : "fail",
     "comms-dir",
-    fs48.existsSync(commsDir) ? `comms dir exists: ${commsDir}` : `comms dir is missing: ${commsDir}`
+    fs49.existsSync(commsDir) ? `comms dir exists: ${commsDir}` : `comms dir is missing: ${commsDir}`
   );
   addCheck(
     checks,
-    fs48.existsSync(inboxDir) ? "pass" : "warn",
+    fs49.existsSync(inboxDir) ? "pass" : "warn",
     "inbox",
-    fs48.existsSync(inboxDir) ? `local inbox exists: ${inboxDir}` : `local inbox is missing: ${inboxDir}`
+    fs49.existsSync(inboxDir) ? `local inbox exists: ${inboxDir}` : `local inbox is missing: ${inboxDir}`
   );
-  if (!fs48.existsSync(inboxDir)) {
+  if (!fs49.existsSync(inboxDir)) {
     if (localApplySurface) {
       next.push(`create local inbox directory: ${inboxDir}`);
       actions.push({
@@ -21401,8 +21488,8 @@ async function readyCommand(args) {
         stateDir,
         stateName
       });
-      const installed = fs48.existsSync(
-        path45.join(repoRoot, "packages", "tap-comms", "dist", "cli.mjs")
+      const installed = fs49.existsSync(
+        path46.join(repoRoot, "packages", "tap-comms", "dist", "cli.mjs")
       );
       const headlessRunnerSupported = supportsHeadlessRunnerProfile(
         readyProfile.id
@@ -21910,7 +21997,7 @@ async function readyCommand(args) {
   if (next.length > 0) {
     log(`next=${next.join(" | ")}`);
   }
-  const commandFailed = windowsRouteRefreshApplyFailed || windowsRouteSmokeApplyFailed;
+  const commandFailed = windowsRouteRefreshApplyFailed || windowsRouteSmokeApplyFailed || readyProfileApplyFailed;
   return {
     ok: !commandFailed,
     command: "ready",
@@ -21925,10 +22012,10 @@ async function readyCommand(args) {
 
 // src/commands/receiver.ts
 init_utils();
-import * as path46 from "path";
+import * as path47 from "path";
 
 // src/receiver/codex-cli-app-server-promotion.ts
-import { resolve as resolve23 } from "path";
+import { resolve as resolve24 } from "path";
 
 // src/routing/codex-endpoint-profiles.ts
 var LOOPBACK_HOSTS = /* @__PURE__ */ new Set(["127.0.0.1", "localhost", "::1"]);
@@ -22453,7 +22540,7 @@ async function runCodexCliAppServerPromotion(options) {
   });
   const appServerUrl = endpointProfile.resolvedUrl;
   const item = scan.items[0] ?? null;
-  const cwd = resolve23(options.cwd ?? process.cwd());
+  const cwd = resolve24(options.cwd ?? process.cwd());
   const baseResult = {
     mode: "promote",
     agent: scan.agent,
@@ -22565,7 +22652,7 @@ async function runCodexCliAppServerPromotion(options) {
 // src/receiver/supervised-receiver-promotion.ts
 var DEFAULT_INTERVAL_MS2 = 2e3;
 function sleep2(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 function summarizeStatus2(attempts) {
   const last = attempts.at(-1);
@@ -22774,7 +22861,7 @@ async function receiverCommand(args) {
   const repoRoot = findRepoRoot();
   const commsDir = resolveCommsDir(args, repoRoot);
   const { config } = resolveConfig({}, repoRoot);
-  const stateDir = path46.resolve(config.stateDir);
+  const stateDir = path47.resolve(config.stateDir);
   const aliases = uniqueList([
     ...collectRepeatedListFlag2(args.slice(1), "alias"),
     ...collectRepeatedListFlag2(args.slice(1), "aliases"),
@@ -22977,12 +23064,12 @@ async function receiverCommand(args) {
 
 // src/commands/headless.ts
 init_utils();
-import * as path48 from "path";
+import * as path49 from "path";
 
 // src/receiver/headless-response-loop.ts
 import { spawn as spawn4 } from "child_process";
-import * as fs49 from "fs";
-import * as path47 from "path";
+import * as fs50 from "fs";
+import * as path48 from "path";
 var DEFAULT_HEADLESS_TIMEOUT_MS = 12e4;
 var NO_REPLY_MARKER = "TAP_HEADLESS_NO_REPLY";
 var HEADLESS_REPLY_RECEIPT_ENV = "TAP_HEADLESS_REPLY_RECEIPT_DIR";
@@ -23048,11 +23135,11 @@ function expectedReplySenders(agent, aliases) {
   return expected;
 }
 function snapshotDir(dir, predicate) {
-  if (!fs49.existsSync(dir)) return /* @__PURE__ */ new Map();
+  if (!fs50.existsSync(dir)) return /* @__PURE__ */ new Map();
   const snapshot = /* @__PURE__ */ new Map();
-  for (const filename of fs49.readdirSync(dir).filter(predicate)) {
+  for (const filename of fs50.readdirSync(dir).filter(predicate)) {
     try {
-      const stat = fs49.statSync(path47.join(dir, filename));
+      const stat = fs50.statSync(path48.join(dir, filename));
       if (stat.isFile()) snapshot.set(filename, stat.mtimeMs);
     } catch {
     }
@@ -23061,7 +23148,7 @@ function snapshotDir(dir, predicate) {
 }
 function snapshotInbox(commsDir) {
   return snapshotDir(
-    path47.join(commsDir, "inbox"),
+    path48.join(commsDir, "inbox"),
     (filename) => filename.endsWith(".md")
   );
 }
@@ -23127,21 +23214,21 @@ function findRejectedReplyEvidence(options) {
   }).rejected;
 }
 function findReplyEvidenceCandidate(options) {
-  const inboxDir = path47.join(options.commsDir, "inbox");
-  if (!fs49.existsSync(inboxDir)) {
+  const inboxDir = path48.join(options.commsDir, "inbox");
+  if (!fs50.existsSync(inboxDir)) {
     return { accepted: null, rejected: null };
   }
   const target = options.replyTarget.trim().toLowerCase();
   const expectedSenders = expectedReplySenders(options.agent, options.aliases);
   const senders = new Set(expectedSenders.map((value) => value.toLowerCase()));
-  const candidates = fs49.readdirSync(inboxDir).filter((filename) => filename.endsWith(".md")).sort();
+  const candidates = fs50.readdirSync(inboxDir).filter((filename) => filename.endsWith(".md")).sort();
   let accepted = null;
   for (const filename of candidates) {
-    const fullPath = path47.join(inboxDir, filename);
+    const fullPath = path48.join(inboxDir, filename);
     let stat;
     let content;
     try {
-      stat = fs49.statSync(fullPath);
+      stat = fs50.statSync(fullPath);
       if (!stat.isFile() || stat.mtimeMs + FRESH_EVIDENCE_MTIME_TOLERANCE_MS < options.startedAtMs) {
         continue;
       }
@@ -23149,7 +23236,7 @@ function findReplyEvidenceCandidate(options) {
       if (previousMtimeMs !== void 0 && stat.mtimeMs <= previousMtimeMs + 1) {
         continue;
       }
-      content = fs49.readFileSync(fullPath, "utf8");
+      content = fs50.readFileSync(fullPath, "utf8");
     } catch {
       continue;
     }
@@ -23192,31 +23279,31 @@ function sanitizeReceiptPathSegment(value) {
 }
 function resolveReplyReceiptDir(options) {
   if (options.replyReceiptDir?.trim()) {
-    return path47.resolve(options.replyReceiptDir.trim());
+    return path48.resolve(options.replyReceiptDir.trim());
   }
   const profile = sanitizeReceiptPathSegment(
     options.stateName ?? `codex-cli-${options.agent}`
   );
-  return path47.join(options.stateDir, "headless-reply-receipts", profile);
+  return path48.join(options.stateDir, "headless-reply-receipts", profile);
 }
 function findReplyReceiptEvidence(options) {
   return findReplyReceiptEvidenceCandidate(options).accepted;
 }
 function findReplyReceiptEvidenceCandidate(options) {
-  if (!fs49.existsSync(options.replyReceiptDir)) {
+  if (!fs50.existsSync(options.replyReceiptDir)) {
     return { accepted: null, rejected: null };
   }
   const target = options.replyTarget.trim().toLowerCase();
   const expectedSenders = expectedReplySenders(options.agent, options.aliases);
   const senders = new Set(expectedSenders.map((value) => value.toLowerCase()));
-  const candidates = fs49.readdirSync(options.replyReceiptDir).filter((filename) => filename.endsWith(".json")).sort();
+  const candidates = fs50.readdirSync(options.replyReceiptDir).filter((filename) => filename.endsWith(".json")).sort();
   let accepted = null;
   for (const filename of candidates) {
-    const fullPath = path47.join(options.replyReceiptDir, filename);
+    const fullPath = path48.join(options.replyReceiptDir, filename);
     let stat;
     let receipt;
     try {
-      stat = fs49.statSync(fullPath);
+      stat = fs50.statSync(fullPath);
       if (!stat.isFile() || stat.mtimeMs + FRESH_EVIDENCE_MTIME_TOLERANCE_MS < options.startedAtMs) {
         continue;
       }
@@ -23224,7 +23311,7 @@ function findReplyReceiptEvidenceCandidate(options) {
       if (previousMtimeMs !== void 0 && stat.mtimeMs <= previousMtimeMs + 1) {
         continue;
       }
-      receipt = JSON.parse(fs49.readFileSync(fullPath, "utf8"));
+      receipt = JSON.parse(fs50.readFileSync(fullPath, "utf8"));
     } catch {
       continue;
     }
@@ -23268,7 +23355,7 @@ var ShellHeadlessRunner = class {
   }
   command;
   run(request) {
-    return new Promise((resolve39) => {
+    return new Promise((resolve40) => {
       const child = spawn4(this.command, {
         cwd: request.cwd,
         shell: true,
@@ -23299,7 +23386,7 @@ var ShellHeadlessRunner = class {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve39({
+        resolve40({
           exitCode: code,
           timedOut,
           stdout: Buffer.concat(stdout).toString("utf8"),
@@ -23310,7 +23397,7 @@ var ShellHeadlessRunner = class {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve39({
+        resolve40({
           exitCode: null,
           timedOut,
           stdout: Buffer.concat(stdout).toString("utf8"),
@@ -23348,7 +23435,7 @@ function blockedResult(options, scan, item, fields) {
   };
 }
 async function runHeadlessResponseLoop(options) {
-  const cwd = path47.resolve(options.cwd ?? process.cwd());
+  const cwd = path48.resolve(options.cwd ?? process.cwd());
   const replyReceiptDir = resolveReplyReceiptDir(options);
   const timeoutMs = Math.max(
     100,
@@ -23435,7 +23522,7 @@ async function runHeadlessResponseLoop(options) {
     });
   }
   const before = snapshotInbox(scan.commsDir);
-  fs49.mkdirSync(replyReceiptDir, { recursive: true });
+  fs50.mkdirSync(replyReceiptDir, { recursive: true });
   const beforeReplyReceipts = snapshotReplyReceipts(replyReceiptDir);
   const startedAtMs = Date.now();
   const runnerResult = await runner.run({
@@ -23670,7 +23757,7 @@ async function headlessCommand(args) {
     },
     repoRoot
   );
-  const stateDir = path48.resolve(config.stateDir);
+  const stateDir = path49.resolve(config.stateDir);
   const aliases = uniqueList2([
     ...collectRepeatedListFlag3(args.slice(1), "alias"),
     ...collectRepeatedListFlag3(args.slice(1), "aliases"),
@@ -23746,13 +23833,13 @@ async function headlessCommand(args) {
 
 // src/commands/projection.ts
 init_utils();
-import * as path51 from "path";
-import * as fs52 from "fs";
+import * as path52 from "path";
+import * as fs53 from "fs";
 import * as os5 from "os";
 
 // src/projection/local-receiver-projection.ts
-import * as fs50 from "fs";
-import * as path49 from "path";
+import * as fs51 from "fs";
+import * as path50 from "path";
 var APPEND_ONLY_DIRS = [
   "inbox",
   "reviews",
@@ -23864,16 +23951,16 @@ function isOwnMessage2(from, aliases) {
   );
 }
 function resolveLocalProjectionStatePath(options) {
-  const projectionDir = path49.join(options.stateDir, "projection");
+  const projectionDir = path50.join(options.stateDir, "projection");
   const rawName = options.stateName?.trim() || `local-projection-${options.agent}`;
   const name = safeStateName2(rawName) || "local-projection";
-  return path49.join(projectionDir, `${name}.json`);
+  return path50.join(projectionDir, `${name}.json`);
 }
 function loadState3(statePath, options) {
-  if (!options.resetCursor && fs50.existsSync(statePath)) {
+  if (!options.resetCursor && fs51.existsSync(statePath)) {
     try {
       const parsed = JSON.parse(
-        fs50.readFileSync(statePath, "utf8")
+        fs51.readFileSync(statePath, "utf8")
       );
       if (parsed.schemaVersion === 1 && parsed.joinedAt && parsed.projected) {
         return {
@@ -23902,8 +23989,8 @@ function loadState3(statePath, options) {
   };
 }
 function saveState3(statePath, state) {
-  fs50.mkdirSync(path49.dirname(statePath), { recursive: true });
-  fs50.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}
+  fs51.mkdirSync(path50.dirname(statePath), { recursive: true });
+  fs51.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}
 `, "utf8");
 }
 function parseSinceMs2(options, state) {
@@ -23921,16 +24008,16 @@ function parseSinceMs2(options, state) {
   return Date.parse(state.joinedAt) || Date.now() - DEFAULT_LOOKBACK_MINUTES2 * 6e4;
 }
 function resolveTargetPath(targetCommsDir, dir, filename) {
-  return path49.join(targetCommsDir, dir, filename);
+  return path50.join(targetCommsDir, dir, filename);
 }
 function listCandidateFiles(sourceCommsDir, dirs) {
   const result = [];
   for (const dir of dirs) {
-    const sourceDir = path49.join(sourceCommsDir, dir);
-    if (!fs50.existsSync(sourceDir)) continue;
-    for (const filename of fs50.readdirSync(sourceDir).sort()) {
+    const sourceDir = path50.join(sourceCommsDir, dir);
+    if (!fs51.existsSync(sourceDir)) continue;
+    for (const filename of fs51.readdirSync(sourceDir).sort()) {
       if (!filename.endsWith(".md") && !filename.endsWith(".json")) continue;
-      const fullPath = path49.join(sourceDir, filename);
+      const fullPath = path50.join(sourceDir, filename);
       result.push({ dir, filename, fullPath });
     }
   }
@@ -23961,7 +24048,7 @@ function scanProjection(options, state, aliases, dirs, sinceMs) {
   for (const candidate of listCandidateFiles(options.sourceCommsDir, dirs)) {
     let stat;
     try {
-      stat = fs50.statSync(candidate.fullPath);
+      stat = fs51.statSync(candidate.fullPath);
     } catch {
       continue;
     }
@@ -23973,7 +24060,7 @@ function scanProjection(options, state, aliases, dirs, sinceMs) {
     }
     let content = "";
     try {
-      content = fs50.readFileSync(candidate.fullPath, "utf8").replace(/^\uFEFF/, "");
+      content = fs51.readFileSync(candidate.fullPath, "utf8").replace(/^\uFEFF/, "");
     } catch {
       continue;
     }
@@ -23997,7 +24084,7 @@ function scanProjection(options, state, aliases, dirs, sinceMs) {
       candidate.dir,
       candidate.filename
     );
-    const targetExists = fs50.existsSync(targetPath);
+    const targetExists = fs51.existsSync(targetPath);
     const item = {
       dir: candidate.dir,
       filename: candidate.filename,
@@ -24026,24 +24113,24 @@ function scanProjection(options, state, aliases, dirs, sinceMs) {
 function applyProjection(items) {
   for (const item of items) {
     if (item.skipReason === "target-exists") continue;
-    fs50.mkdirSync(path49.dirname(item.targetPath), { recursive: true });
-    fs50.copyFileSync(item.sourcePath, item.targetPath);
-    const sourceStat = fs50.statSync(item.sourcePath);
-    fs50.utimesSync(item.targetPath, sourceStat.atime, sourceStat.mtime);
+    fs51.mkdirSync(path50.dirname(item.targetPath), { recursive: true });
+    fs51.copyFileSync(item.sourcePath, item.targetPath);
+    const sourceStat = fs51.statSync(item.sourcePath);
+    fs51.utimesSync(item.targetPath, sourceStat.atime, sourceStat.mtime);
     item.projected = true;
     item.skipReason = null;
   }
 }
 function sleep3(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 async function runLocalProjection(rawOptions) {
   const now = rawOptions.now ?? /* @__PURE__ */ new Date();
   const options = {
     ...rawOptions,
     now,
-    sourceCommsDir: path49.resolve(rawOptions.sourceCommsDir),
-    targetCommsDir: path49.resolve(rawOptions.targetCommsDir)
+    sourceCommsDir: path50.resolve(rawOptions.sourceCommsDir),
+    targetCommsDir: path50.resolve(rawOptions.targetCommsDir)
   };
   const aliases = unique4([
     options.agent,
@@ -24124,9 +24211,9 @@ async function runLocalProjection(rawOptions) {
 
 // src/projection/remote-projection-target.ts
 import { spawnSync as spawnSync11 } from "child_process";
-import * as fs51 from "fs";
+import * as fs52 from "fs";
 import * as os4 from "os";
-import * as path50 from "path";
+import * as path51 from "path";
 function defaultRunner(command, args) {
   const result = spawnSync11(command, args, {
     encoding: "utf8",
@@ -24184,8 +24271,8 @@ function mirrorRemoteProjectionTarget(options) {
   const records = [];
   for (const dir of options.dirs) {
     assertSafeDir(dir);
-    const targetDir = path50.join(options.localMirrorDir, dir);
-    fs51.mkdirSync(targetDir, { recursive: true });
+    const targetDir = path51.join(options.localMirrorDir, dir);
+    fs52.mkdirSync(targetDir, { recursive: true });
     const source = remoteRsyncSource(
       options.sshTarget,
       options.remoteCommsDir,
@@ -24236,22 +24323,22 @@ function pushRemoteProjectionTarget(options) {
     filesByDir.set(file.dir, files);
   }
   const dirs = options.files ? [...filesByDir.keys()] : options.dirs;
-  const stagingRoot = options.files ? fs51.mkdtempSync(path50.join(os4.tmpdir(), "tap-projection-push-")) : null;
+  const stagingRoot = options.files ? fs52.mkdtempSync(path51.join(os4.tmpdir(), "tap-projection-push-")) : null;
   try {
     for (const dir of dirs) {
       assertSafeDir(dir);
-      const sourceDir = path50.join(options.localMirrorDir, dir);
-      fs51.mkdirSync(sourceDir, { recursive: true });
+      const sourceDir = path51.join(options.localMirrorDir, dir);
+      fs52.mkdirSync(sourceDir, { recursive: true });
       let rsyncSourceDir = sourceDir;
       if (stagingRoot) {
-        const stagedDir = path50.join(stagingRoot, dir);
-        fs51.mkdirSync(stagedDir, { recursive: true });
+        const stagedDir = path51.join(stagingRoot, dir);
+        fs52.mkdirSync(stagedDir, { recursive: true });
         for (const filename of filesByDir.get(dir) ?? []) {
-          const sourceFile = path50.join(sourceDir, filename);
-          const stagedFile = path50.join(stagedDir, filename);
-          fs51.copyFileSync(sourceFile, stagedFile);
-          const stat = fs51.statSync(sourceFile);
-          fs51.utimesSync(stagedFile, stat.atime, stat.mtime);
+          const sourceFile = path51.join(sourceDir, filename);
+          const stagedFile = path51.join(stagedDir, filename);
+          fs52.copyFileSync(sourceFile, stagedFile);
+          const stat = fs52.statSync(sourceFile);
+          fs52.utimesSync(stagedFile, stat.atime, stat.mtime);
         }
         rsyncSourceDir = stagedDir;
       }
@@ -24289,7 +24376,7 @@ function pushRemoteProjectionTarget(options) {
     }
   } finally {
     if (stagingRoot) {
-      fs51.rmSync(stagingRoot, { recursive: true, force: true });
+      fs52.rmSync(stagingRoot, { recursive: true, force: true });
     }
   }
   return records;
@@ -24306,8 +24393,8 @@ Modes:
   watch   Poll central source until eligible records appear or --max-iterations is reached.
 
 Options:
-  --source-comms-dir <path>   Canonical/central comms dir, e.g. /home/devin/hua-comms.
-  --target-comms-dir <path>   Device-local comms dir, e.g. /Users/devin/HUA/hua-comms.
+  --source-comms-dir <path>   Canonical/central comms dir, e.g. /path/to/central-comms.
+  --target-comms-dir <path>   Device-local comms dir, e.g. ./tap-comms.
   --target-ssh <host>         Treat --target-comms-dir as a remote path on this SSH host.
   --agent <name>              Local agent display/routing name, e.g. agent-a.
   --alias <name[,name...]>    Additional routing aliases. Repeatable/comma-separated.
@@ -24430,7 +24517,7 @@ async function projectionCommand(args) {
       data: {}
     };
   }
-  const sourceCommsDir = typeof flags["source-comms-dir"] === "string" ? path51.resolve(flags["source-comms-dir"]) : "";
+  const sourceCommsDir = typeof flags["source-comms-dir"] === "string" ? path52.resolve(flags["source-comms-dir"]) : "";
   const targetCommsDir = typeof flags["target-comms-dir"] === "string" ? flags["target-comms-dir"] : "";
   const targetSsh = typeof flags["target-ssh"] === "string" ? flags["target-ssh"].trim() : "";
   if (!sourceCommsDir || !targetCommsDir) {
@@ -24445,7 +24532,7 @@ async function projectionCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const stateDir = path51.resolve(config.stateDir);
+  const stateDir = path52.resolve(config.stateDir);
   const aliases = [
     ...collectRepeatedListFlag4(args.slice(1), "alias"),
     ...collectRepeatedListFlag4(args.slice(1), "aliases"),
@@ -24458,7 +24545,7 @@ async function projectionCommand(args) {
     ...parseListFlag4(flags.dir),
     ...parseListFlag4(flags.dirs)
   ]);
-  const mirrorDir = typeof flags["mirror-dir"] === "string" ? path51.resolve(flags["mirror-dir"]) : targetSsh ? fs52.mkdtempSync(path51.join(os5.tmpdir(), "tap-projection-target-")) : null;
+  const mirrorDir = typeof flags["mirror-dir"] === "string" ? path52.resolve(flags["mirror-dir"]) : targetSsh ? fs53.mkdtempSync(path52.join(os5.tmpdir(), "tap-projection-target-")) : null;
   const remoteMirrorRecords = [];
   const remotePushRecords = [];
   const remoteDirs = mirrorDirsForRequest(dirs);
@@ -24499,7 +24586,7 @@ async function projectionCommand(args) {
     result = await runLocalProjection({
       mode,
       sourceCommsDir,
-      targetCommsDir: mirrorDir ?? path51.resolve(targetCommsDir),
+      targetCommsDir: mirrorDir ?? path52.resolve(targetCommsDir),
       targetCommsDirLabel: targetSsh ? `${targetSsh}:${targetCommsDir}` : void 0,
       stateDir,
       agent,
@@ -24535,7 +24622,7 @@ async function projectionCommand(args) {
     });
   } finally {
     if (targetSsh && mirrorDir && flags["keep-mirror"] !== true) {
-      fs52.rmSync(mirrorDir, { recursive: true, force: true });
+      fs53.rmSync(mirrorDir, { recursive: true, force: true });
     }
   }
   logHeader("tap projection");
@@ -24580,13 +24667,13 @@ async function projectionCommand(args) {
 
 // src/commands/uplink.ts
 init_utils();
-import * as path54 from "path";
-import * as fs55 from "fs";
+import * as path55 from "path";
+import * as fs56 from "fs";
 import * as os6 from "os";
 
 // src/uplink/local-append-only-uplink.ts
-import * as fs53 from "fs";
-import * as path52 from "path";
+import * as fs54 from "fs";
+import * as path53 from "path";
 var APPEND_ONLY_DIRS3 = [
   "inbox",
   "reviews",
@@ -24745,16 +24832,16 @@ function requiresOwnSource(dir) {
   return dir === "inbox" || dir === "reviews";
 }
 function resolveLocalUplinkStatePath(options) {
-  const uplinkDir = path52.join(options.stateDir, "uplink");
+  const uplinkDir = path53.join(options.stateDir, "uplink");
   const rawName = options.stateName?.trim() || `local-uplink-${options.agent}`;
   const name = safeStateName3(rawName) || "local-uplink";
-  return path52.join(uplinkDir, `${name}.json`);
+  return path53.join(uplinkDir, `${name}.json`);
 }
 function loadState4(statePath, options) {
-  if (!options.resetCursor && fs53.existsSync(statePath)) {
+  if (!options.resetCursor && fs54.existsSync(statePath)) {
     try {
       const parsed = JSON.parse(
-        fs53.readFileSync(statePath, "utf8")
+        fs54.readFileSync(statePath, "utf8")
       );
       if (parsed.schemaVersion === 1 && parsed.joinedAt && parsed.uploaded) {
         return {
@@ -24783,8 +24870,8 @@ function loadState4(statePath, options) {
   };
 }
 function saveState4(statePath, state) {
-  fs53.mkdirSync(path52.dirname(statePath), { recursive: true });
-  fs53.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}
+  fs54.mkdirSync(path53.dirname(statePath), { recursive: true });
+  fs54.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}
 `, "utf8");
 }
 function parseSinceMs3(options, state) {
@@ -24804,11 +24891,11 @@ function parseSinceMs3(options, state) {
 function listCandidateFiles2(sourceCommsDir, dirs) {
   const result = [];
   for (const dir of dirs) {
-    const sourceDir = path52.join(sourceCommsDir, dir);
-    if (!fs53.existsSync(sourceDir)) continue;
-    for (const filename of fs53.readdirSync(sourceDir).sort()) {
+    const sourceDir = path53.join(sourceCommsDir, dir);
+    if (!fs54.existsSync(sourceDir)) continue;
+    for (const filename of fs54.readdirSync(sourceDir).sort()) {
       if (!filename.endsWith(".md") && !filename.endsWith(".json")) continue;
-      const fullPath = path52.join(sourceDir, filename);
+      const fullPath = path53.join(sourceDir, filename);
       result.push({ dir, filename, fullPath });
     }
   }
@@ -24827,7 +24914,7 @@ function markUploaded(state, items, uploadedAt) {
 }
 function sameFileContent(leftPath, rightPath) {
   try {
-    return fs53.readFileSync(leftPath).equals(fs53.readFileSync(rightPath));
+    return fs54.readFileSync(leftPath).equals(fs54.readFileSync(rightPath));
   } catch {
     return false;
   }
@@ -24845,7 +24932,7 @@ function scanUplink(options, state, aliases, dirs, sinceMs) {
   for (const candidate of listCandidateFiles2(options.sourceCommsDir, dirs)) {
     let stat;
     try {
-      stat = fs53.statSync(candidate.fullPath);
+      stat = fs54.statSync(candidate.fullPath);
     } catch {
       continue;
     }
@@ -24857,7 +24944,7 @@ function scanUplink(options, state, aliases, dirs, sinceMs) {
     }
     let content = "";
     try {
-      content = fs53.readFileSync(candidate.fullPath, "utf8").replace(/^\uFEFF/, "");
+      content = fs54.readFileSync(candidate.fullPath, "utf8").replace(/^\uFEFF/, "");
     } catch {
       continue;
     }
@@ -24872,12 +24959,12 @@ function scanUplink(options, state, aliases, dirs, sinceMs) {
       skipped.duplicate += 1;
       continue;
     }
-    const targetPath = path52.join(
+    const targetPath = path53.join(
       options.targetCommsDir,
       candidate.dir,
       candidate.filename
     );
-    const targetExists = fs53.existsSync(targetPath);
+    const targetExists = fs54.existsSync(targetPath);
     const skipReason = targetExists ? sameFileContent(candidate.fullPath, targetPath) ? "target-exists" : "collision" : "dry-run";
     items.push({
       dir: candidate.dir,
@@ -24909,24 +24996,24 @@ function applyUplink(items) {
     if (item.skipReason === "target-exists" || item.skipReason === "collision") {
       continue;
     }
-    fs53.mkdirSync(path52.dirname(item.targetPath), { recursive: true });
-    fs53.copyFileSync(item.sourcePath, item.targetPath);
-    const sourceStat = fs53.statSync(item.sourcePath);
-    fs53.utimesSync(item.targetPath, sourceStat.atime, sourceStat.mtime);
+    fs54.mkdirSync(path53.dirname(item.targetPath), { recursive: true });
+    fs54.copyFileSync(item.sourcePath, item.targetPath);
+    const sourceStat = fs54.statSync(item.sourcePath);
+    fs54.utimesSync(item.targetPath, sourceStat.atime, sourceStat.mtime);
     item.uploaded = true;
     item.skipReason = null;
   }
 }
 function sleep4(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 async function runLocalUplink(rawOptions) {
   const now = rawOptions.now ?? /* @__PURE__ */ new Date();
   const options = {
     ...rawOptions,
     now,
-    sourceCommsDir: path52.resolve(rawOptions.sourceCommsDir),
-    targetCommsDir: path52.resolve(rawOptions.targetCommsDir)
+    sourceCommsDir: path53.resolve(rawOptions.sourceCommsDir),
+    targetCommsDir: path53.resolve(rawOptions.targetCommsDir)
   };
   const sourceCommsDirLabel = rawOptions.sourceCommsDirLabel ?? options.sourceCommsDir;
   const aliases = unique5([
@@ -25011,8 +25098,8 @@ async function runLocalUplink(rawOptions) {
 
 // src/uplink/remote-uplink-source.ts
 import { spawnSync as spawnSync12 } from "child_process";
-import * as fs54 from "fs";
-import * as path53 from "path";
+import * as fs55 from "fs";
+import * as path54 from "path";
 function defaultRunner2(command, args) {
   const result = spawnSync12(command, args, {
     encoding: "utf8",
@@ -25062,8 +25149,8 @@ function mirrorRemoteUplinkSource(options) {
     if (!/^[A-Za-z0-9._-]+$/.test(dir)) {
       throw new RangeError(`Unsafe uplink dir: ${dir}`);
     }
-    const targetDir = path53.join(options.localMirrorDir, dir);
-    fs54.mkdirSync(targetDir, { recursive: true });
+    const targetDir = path54.join(options.localMirrorDir, dir);
+    fs55.mkdirSync(targetDir, { recursive: true });
     const source = remoteRsyncSource2(
       options.sshTarget,
       options.remoteCommsDir,
@@ -25111,9 +25198,9 @@ Modes:
   watch   Poll local source until eligible records appear or --max-iterations is reached.
 
 Options:
-  --source-comms-dir <path>   Device-local comms dir, e.g. /Users/devin/HUA/hua-comms.
+  --source-comms-dir <path>   Device-local comms dir, e.g. ./tap-comms.
   --source-ssh <host>         Treat --source-comms-dir as a remote path on this SSH host.
-  --target-comms-dir <path>   Canonical/central comms dir, e.g. /home/devin/hua-comms.
+  --target-comms-dir <path>   Canonical/central comms dir, e.g. /path/to/central-comms.
   --agent <name>              Local sender display/routing name, e.g. agent-a.
   --alias <name[,name...]>    Additional local sender aliases. Repeatable/comma-separated.
   --dir <name[,name...]>      Append-only dirs to uplink. Default: inbox.
@@ -25133,7 +25220,7 @@ Options:
 
 Contract:
   Uplink is append-only and polling/file-backed. It copies eligible device-local
-  records to the canonical sum-back comms bus. It never syncs heartbeats,
+  records to the canonical central comms bus. It never syncs heartbeats,
   presence, owner tuples, locks, claims, or live IPC state.
 
   With --source-ssh, uplink first mirrors allowed append-only source dirs with
@@ -25234,7 +25321,7 @@ async function uplinkCommand(args) {
   }
   const sourceCommsDir = typeof flags["source-comms-dir"] === "string" ? flags["source-comms-dir"] : "";
   const sourceSsh = typeof flags["source-ssh"] === "string" ? flags["source-ssh"].trim() : "";
-  const targetCommsDir = typeof flags["target-comms-dir"] === "string" ? path54.resolve(flags["target-comms-dir"]) : "";
+  const targetCommsDir = typeof flags["target-comms-dir"] === "string" ? path55.resolve(flags["target-comms-dir"]) : "";
   if (!sourceCommsDir || !targetCommsDir) {
     return {
       ok: false,
@@ -25247,7 +25334,7 @@ async function uplinkCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
-  const stateDir = path54.resolve(config.stateDir);
+  const stateDir = path55.resolve(config.stateDir);
   const aliases = [
     ...collectRepeatedListFlag5(args.slice(1), "alias"),
     ...collectRepeatedListFlag5(args.slice(1), "aliases"),
@@ -25260,7 +25347,7 @@ async function uplinkCommand(args) {
     ...parseListFlag5(flags.dir),
     ...parseListFlag5(flags.dirs)
   ]);
-  const mirrorDir = typeof flags["mirror-dir"] === "string" ? path54.resolve(flags["mirror-dir"]) : sourceSsh ? fs55.mkdtempSync(path54.join(os6.tmpdir(), "tap-uplink-source-")) : null;
+  const mirrorDir = typeof flags["mirror-dir"] === "string" ? path55.resolve(flags["mirror-dir"]) : sourceSsh ? fs56.mkdtempSync(path55.join(os6.tmpdir(), "tap-uplink-source-")) : null;
   const remoteMirrorRecords = [];
   const mirrorRemote = sourceSsh ? () => {
     if (!mirrorDir) {
@@ -25281,7 +25368,7 @@ async function uplinkCommand(args) {
   try {
     result = await runLocalUplink({
       mode,
-      sourceCommsDir: mirrorDir ?? path54.resolve(sourceCommsDir),
+      sourceCommsDir: mirrorDir ?? path55.resolve(sourceCommsDir),
       sourceCommsDirLabel: sourceSsh ? `${sourceSsh}:${sourceCommsDir}` : void 0,
       targetCommsDir,
       stateDir,
@@ -25316,7 +25403,7 @@ async function uplinkCommand(args) {
     });
   } finally {
     if (sourceSsh && mirrorDir && flags["keep-mirror"] !== true) {
-      fs55.rmSync(mirrorDir, { recursive: true, force: true });
+      fs56.rmSync(mirrorDir, { recursive: true, force: true });
     }
   }
   logHeader("tap uplink");
@@ -25381,7 +25468,7 @@ Examples:
   npx @hua-labs/tap watch --stuck-threshold 120    # 2 min threshold
 `.trim();
 function delay2(ms) {
-  return new Promise((resolve39) => setTimeout(resolve39, ms));
+  return new Promise((resolve40) => setTimeout(resolve40, ms));
 }
 async function watchCommand(args) {
   const { flags } = parseArgs(args);
@@ -25470,8 +25557,8 @@ async function watchCommand(args) {
 import * as http2 from "http";
 
 // src/engine/missions.ts
-import * as fs56 from "fs";
-import * as path55 from "path";
+import * as fs57 from "fs";
+import * as path56 from "path";
 function parseStatus(raw) {
   const trimmed = raw.trim();
   if (trimmed.includes("active")) return "active";
@@ -25497,10 +25584,10 @@ function parseRow(line) {
   return { id: id.toUpperCase(), title, branch, status, owner };
 }
 function parseMissionsFile(repoRoot) {
-  const missionsPath = path55.join(repoRoot, "docs", "missions", "MISSIONS.md");
+  const missionsPath = path56.join(repoRoot, "docs", "missions", "MISSIONS.md");
   let content;
   try {
-    content = fs56.readFileSync(missionsPath, "utf-8");
+    content = fs57.readFileSync(missionsPath, "utf-8");
   } catch {
     return [];
   }
@@ -25891,10 +25978,10 @@ async function guiCommand(args) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(buildHtml(snapshot, turnData));
   });
-  return new Promise((resolve39) => {
+  return new Promise((resolve40) => {
     server.on("error", (err) => {
       if (err.code === "EADDRINUSE") {
-        resolve39({
+        resolve40({
           ok: false,
           command: "gui",
           code: "TAP_PORT_IN_USE",
@@ -25903,7 +25990,7 @@ async function guiCommand(args) {
           data: {}
         });
       } else {
-        resolve39({
+        resolve40({
           ok: false,
           command: "gui",
           code: "TAP_GUI_ERROR",
@@ -25923,12 +26010,12 @@ async function guiCommand(args) {
 }
 
 // src/commands/permissions.ts
-import * as fs57 from "fs";
-import * as path56 from "path";
+import * as fs58 from "fs";
+import * as path57 from "path";
 init_utils();
 var PERMISSIONS_HELP = `
 Usage:
-  tap permissions restore --backup <path> [--profile <id>] [--reload-profile <id>] [--apply]
+  tap permissions restore --backup <path> [--profile <id>] [--profile-pack <path>] [--reload-profile <id>] [--apply]
 
 Description:
   Restore a Codex permission config from a tap-managed backup.
@@ -25936,6 +26023,7 @@ Description:
 Options:
   --backup <path>          Required backup file under .tap-comms/backups/codex/
   --profile <id>           Optional known ready profile for reload/readiness guidance
+  --profile-pack <path>    Reviewed local profile pack for profile guidance
   --reload-profile <id>    Optional reviewed reload profile to apply after restore
   --apply                  Write the restore. Without --apply this is a dry-run.
   --help, -h               Show help
@@ -25943,7 +26031,7 @@ Options:
 Examples:
   tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak
   tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply
-  tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply --reload-profile sumback-yoon-appserver
+  tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply --reload-profile <profile-id>
 `.trim();
 var reloadProfileApplierForTests = null;
 function invalidArgument2(message) {
@@ -25961,53 +26049,60 @@ function resolveRequiredPathFlag(flags, name) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 function isSubpath(candidate, parent) {
-  const relative9 = path56.relative(parent, candidate);
-  return relative9 === "" || !!relative9 && !relative9.startsWith("..") && !path56.isAbsolute(relative9);
+  const relative9 = path57.relative(parent, candidate);
+  return relative9 === "" || !!relative9 && !relative9.startsWith("..") && !path57.isAbsolute(relative9);
 }
 function resolveBackupPath(repoRoot, backupInput) {
-  return path56.resolve(repoRoot, backupInput);
+  return path57.resolve(repoRoot, backupInput);
 }
 function parseRestoreProfile(flags) {
   const value = flags.profile;
   if (value === void 0) return null;
-  if (value === "sumback-yoon" || value === "mac-jun-ssh-tui") return value;
+  if (typeof value === "string" && value.trim()) return value.trim();
   return "invalid";
 }
 function parseReloadProfile(flags) {
   const value = flags["reload-profile"];
   if (value === void 0) return null;
-  if (value === "sumback-yoon-appserver") return value;
+  if (typeof value === "string" && value.trim()) return value.trim();
   return "invalid";
 }
-function buildReloadNextActions(profile) {
+function buildReloadNextActions(profile, profilePackPath) {
   if (!profile) return [];
+  const profilePackArg = profilePackPath ? ` --profile-pack ${shellQuote3(profilePackPath)}` : "";
   return [
     {
       label: "Verify Codex profile readiness",
-      command: `tap ready --profile ${profile} --json`
+      command: `tap ready --profile ${profile}${profilePackArg} --json`
     },
     {
       label: "Apply reviewed ready profile after restore",
-      command: `tap ready --profile ${profile} --apply --json`
+      command: `tap ready --profile ${profile}${profilePackArg} --apply --json`
     }
   ];
 }
-function buildReloadProfileCommand(profile) {
-  return `tap ready --profile ${profile} --apply --json`;
+function buildReloadProfileCommand(profile, profilePackPath) {
+  const profilePackArg = profilePackPath ? ` --profile-pack ${shellQuote3(profilePackPath)}` : "";
+  return `tap ready --profile ${profile}${profilePackArg} --apply --json`;
 }
-function buildWouldApplyReloadProfileAction(profile) {
+function buildWouldApplyReloadProfileAction(profile, profilePackPath) {
   return {
     profile,
     status: "would-apply",
-    command: buildReloadProfileCommand(profile),
+    command: buildReloadProfileCommand(profile, profilePackPath),
     message: `would apply reload profile ${profile} after restore`
   };
 }
-async function applyReloadProfile(profile) {
+async function applyReloadProfile(profile, profilePackPath) {
   if (reloadProfileApplierForTests) {
-    return reloadProfileApplierForTests(profile);
+    return reloadProfileApplierForTests(profile, profilePackPath);
   }
-  return readyCommand(["--profile", profile, "--apply"]);
+  return readyCommand([
+    "--profile",
+    profile,
+    ...profilePackPath ? ["--profile-pack", profilePackPath] : [],
+    "--apply"
+  ]);
 }
 function getCommandDataStatus(result) {
   return result.data && "status" in result.data ? result.data.status : void 0;
@@ -26015,26 +26110,29 @@ function getCommandDataStatus(result) {
 function isReloadProfileReady(result) {
   return result.ok && getCommandDataStatus(result) === "ready";
 }
-function summarizeReloadProfileAction(profile, result) {
+function summarizeReloadProfileAction(profile, profilePackPath, result) {
   const ready = isReloadProfileReady(result);
   return {
     profile,
     status: ready ? "applied" : "failed",
-    command: buildReloadProfileCommand(profile),
+    command: buildReloadProfileCommand(profile, profilePackPath),
     message: ready ? `applied reload profile ${profile}: ${result.message}` : `failed to apply reload profile ${profile}: ${result.message}`,
     resultCode: result.code,
     resultStatus: getCommandDataStatus(result)
   };
 }
+function shellQuote3(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 function assertTapManagedCodexBackup(repoRoot, backupPath) {
-  const resolvedBackupPath = path56.resolve(backupPath);
-  if (!fs57.existsSync(resolvedBackupPath) || !fs57.statSync(resolvedBackupPath).isFile()) {
+  const resolvedBackupPath = path57.resolve(backupPath);
+  if (!fs58.existsSync(resolvedBackupPath) || !fs58.statSync(resolvedBackupPath).isFile()) {
     return `Invalid --backup: file does not exist at ${resolvedBackupPath}.`;
   }
-  const backupDir = fs57.realpathSync(
-    path56.resolve(ensureBackupDir(getStateDir(repoRoot), "codex"))
+  const backupDir = fs58.realpathSync(
+    path57.resolve(ensureBackupDir(getStateDir(repoRoot), "codex"))
   );
-  const realBackupPath = fs57.realpathSync(resolvedBackupPath);
+  const realBackupPath = fs58.realpathSync(resolvedBackupPath);
   if (!isSubpath(realBackupPath, backupDir)) {
     return `Invalid --backup: expected a file under ${backupDir}.`;
   }
@@ -26075,14 +26173,18 @@ async function permissionsCommand(args) {
   const profile = parseRestoreProfile(flags);
   if (profile === "invalid") {
     return invalidArgument2(
-      "Invalid --profile: expected sumback-yoon or mac-jun-ssh-tui."
+      "Invalid --profile: expected a reviewed local permissions profile id."
     );
   }
   const reloadProfile = parseReloadProfile(flags);
   if (reloadProfile === "invalid") {
     return invalidArgument2(
-      "Invalid --reload-profile: expected sumback-yoon-appserver."
+      "Invalid --reload-profile: expected a reviewed local reload profile id."
     );
+  }
+  const profilePackPath = typeof flags["profile-pack"] === "string" ? flags["profile-pack"].trim() : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return invalidArgument2("Missing --profile-pack <path> value.");
   }
   const targetPath = getCodexConfigPath();
   const apply = flags.apply === true;
@@ -26095,7 +26197,7 @@ async function permissionsCommand(args) {
     runtimeReloadRequired: false,
     profile,
     reloadProfile,
-    reloadProfileAction: reloadProfile ? buildWouldApplyReloadProfileAction(reloadProfile) : null,
+    reloadProfileAction: reloadProfile ? buildWouldApplyReloadProfileAction(reloadProfile, profilePackPath) : null,
     nextActions: []
   };
   if (!apply) {
@@ -26108,23 +26210,27 @@ async function permissionsCommand(args) {
       data
     };
   }
-  fs57.mkdirSync(path56.dirname(targetPath), { recursive: true });
-  if (fs57.existsSync(targetPath)) {
+  fs58.mkdirSync(path57.dirname(targetPath), { recursive: true });
+  if (fs58.existsSync(targetPath)) {
     data.preRestoreBackupPath = backupFile(
       targetPath,
       ensureBackupDir(getStateDir(repoRoot), "codex")
     );
   }
   const tmp = `${targetPath}.tmp.${process.pid}`;
-  fs57.copyFileSync(backupPath, tmp);
-  fs57.renameSync(tmp, targetPath);
+  fs58.copyFileSync(backupPath, tmp);
+  fs58.renameSync(tmp, targetPath);
   data.restored = true;
   data.runtimeReloadRequired = true;
-  data.nextActions = buildReloadNextActions(profile);
+  data.nextActions = buildReloadNextActions(profile, profilePackPath);
   if (reloadProfile) {
-    const reloadResult = await applyReloadProfile(reloadProfile);
+    const reloadResult = await applyReloadProfile(
+      reloadProfile,
+      profilePackPath
+    );
     data.reloadProfileAction = summarizeReloadProfileAction(
       reloadProfile,
+      profilePackPath,
       reloadResult
     );
     if (!isReloadProfileReady(reloadResult)) {
@@ -26151,38 +26257,38 @@ async function permissionsCommand(args) {
 
 // src/commands/reviews.ts
 init_utils();
-import * as fs59 from "fs";
+import * as fs60 from "fs";
 import { createHash as createHash8 } from "crypto";
 import * as os7 from "os";
-import * as path58 from "path";
+import * as path59 from "path";
 
 // src/reviews/registration.ts
 import { createHash as createHash7 } from "crypto";
-import * as fs58 from "fs";
-import * as path57 from "path";
-var DEFAULT_OUTPUT_SUBDIR = path57.join("reviews", "registered");
+import * as fs59 from "fs";
+import * as path58 from "path";
+var DEFAULT_OUTPUT_SUBDIR = path58.join("reviews", "registered");
 function collectReviewRegistrationSources(input) {
-  const explicit = input.sourcePaths.map((entry) => path57.resolve(entry));
+  const explicit = input.sourcePaths.map((entry) => path58.resolve(entry));
   if (explicit.length > 0) return [...new Set(explicit)].sort();
   if (input.prNumbers.length === 0) return [];
-  const root = path57.resolve(input.root);
+  const root = path58.resolve(input.root);
   const requested = new Set(input.prNumbers);
-  return ["inbox", "archive", "reviews"].flatMap((area) => listMarkdownFiles2(path57.join(root, area))).filter((filePath) => !isRegistrationArtifact(root, filePath)).filter((filePath) => {
-    const raw = fs58.readFileSync(filePath, "utf8");
+  return ["inbox", "archive", "reviews"].flatMap((area) => listMarkdownFiles2(path58.join(root, area))).filter((filePath) => !isRegistrationArtifact(root, filePath)).filter((filePath) => {
+    const raw = fs59.readFileSync(filePath, "utf8");
     const { frontmatter, body } = splitFrontmatter2(raw);
-    const subject = frontmatter.subject ?? inferSubjectFromFilename2(path57.basename(filePath)) ?? path57.basename(filePath, ".md");
-    const pr = extractPrNumber3(subject) ?? extractPrNumber3(path57.basename(filePath)) ?? extractPrNumber3(body);
+    const subject = frontmatter.subject ?? inferSubjectFromFilename2(path58.basename(filePath)) ?? path58.basename(filePath, ".md");
+    const pr = extractPrNumber3(subject) ?? extractPrNumber3(path58.basename(filePath)) ?? extractPrNumber3(body);
     return pr !== null && requested.has(pr);
   }).sort();
 }
 function isRegistrationArtifact(root, filePath) {
-  const relative9 = path57.relative(root, filePath).split(path57.sep).join("/");
+  const relative9 = path58.relative(root, filePath).split(path58.sep).join("/");
   return relative9.startsWith("reviews/registered/");
 }
 function buildReviewRegistrationPlan(options) {
-  const root = path57.resolve(options.root);
-  const outputDir = path57.resolve(
-    options.outputDir ?? path57.join(root, DEFAULT_OUTPUT_SUBDIR)
+  const root = path58.resolve(options.root);
+  const outputDir = path58.resolve(
+    options.outputDir ?? path58.join(root, DEFAULT_OUTPUT_SUBDIR)
   );
   const registeredAt = options.registeredAt ?? (/* @__PURE__ */ new Date()).toISOString();
   const sources = options.sources.map((sourcePath) => parseReviewRegistrationSource(sourcePath, root)).filter((source) => source !== null);
@@ -26209,14 +26315,14 @@ function buildReviewRegistrationPlan(options) {
     }
     const dedupeKey = buildRegistrationDedupeKey(source);
     const artifactPath = buildRegistrationArtifactPath(source, outputDir);
-    const artifactRelativePath = path57.relative(root, artifactPath);
+    const artifactRelativePath = path58.relative(root, artifactPath);
     const canonicalArtifactPath = seenDedupeKeys.get(dedupeKey);
     if (canonicalArtifactPath) {
       records.push({
         source,
         status: "duplicate-source",
         artifactPath: canonicalArtifactPath,
-        artifactRelativePath: path57.relative(root, canonicalArtifactPath),
+        artifactRelativePath: path58.relative(root, canonicalArtifactPath),
         dedupeKey,
         reason: "duplicate formal review outcome for this PR, round, outcome, and content"
       });
@@ -26316,13 +26422,13 @@ function buildReviewRegistrationPlan(options) {
   };
 }
 function parseReviewRegistrationSource(sourcePath, root) {
-  const absolutePath = path57.resolve(sourcePath);
-  if (!fs58.existsSync(absolutePath) || !fs58.statSync(absolutePath).isFile()) {
+  const absolutePath = path58.resolve(sourcePath);
+  if (!fs59.existsSync(absolutePath) || !fs59.statSync(absolutePath).isFile()) {
     return null;
   }
-  const raw = fs58.readFileSync(absolutePath, "utf8");
+  const raw = fs59.readFileSync(absolutePath, "utf8");
   const { frontmatter, body } = splitFrontmatter2(raw);
-  const filename = path57.basename(absolutePath);
+  const filename = path58.basename(absolutePath);
   const subject = frontmatter.subject ?? inferSubjectFromFilename2(filename) ?? filename;
   const prNumber = extractPrNumber3(subject) ?? extractPrNumber3(filename) ?? extractPrNumber3(body);
   const severitySummary = summarizeSeverity2(body);
@@ -26336,7 +26442,7 @@ function parseReviewRegistrationSource(sourcePath, root) {
   return {
     absolutePath,
     root,
-    relativePath: path57.relative(root, absolutePath),
+    relativePath: path58.relative(root, absolutePath),
     area: inferArea(root, absolutePath),
     subject,
     body,
@@ -26419,7 +26525,7 @@ function buildRegistrationArtifactPath(source, outputDir) {
   const reviewer = safeSegment(source.from ?? "unknown-reviewer");
   const outcome = safeSegment(source.outcomeType ?? "unknown-outcome");
   const hash = shortHash(buildRegistrationDedupeKey(source));
-  return path57.join(
+  return path58.join(
     outputDir,
     `pr${prNumber}`,
     `${round}-${outcome}-${reviewer}-${hash}.md`
@@ -26512,7 +26618,7 @@ function blockedRecord(source, dedupeKey, reason) {
     status: "blocked",
     artifactPath: source.prNumber && source.outcomeType ? buildRegistrationArtifactPath(
       source,
-      path57.join(source.root, DEFAULT_OUTPUT_SUBDIR)
+      path58.join(source.root, DEFAULT_OUTPUT_SUBDIR)
     ) : null,
     artifactRelativePath: null,
     dedupeKey,
@@ -26520,9 +26626,9 @@ function blockedRecord(source, dedupeKey, reason) {
   };
 }
 function listMarkdownFiles2(directory) {
-  if (!fs58.existsSync(directory)) return [];
-  return fs58.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const filePath = path57.join(directory, entry.name);
+  if (!fs59.existsSync(directory)) return [];
+  return fs59.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const filePath = path58.join(directory, entry.name);
     if (entry.isDirectory()) return listMarkdownFiles2(filePath);
     if (entry.isFile() && entry.name.endsWith(".md")) return [filePath];
     return [];
@@ -26588,25 +26694,25 @@ function stripFencedCodeBlocks2(body) {
   return body.replace(/^```[\s\S]*?^```/gm, "");
 }
 function inferArea(root, filePath) {
-  const relative9 = path57.relative(root, filePath);
-  const first = relative9.split(path57.sep)[0];
+  const relative9 = path58.relative(root, filePath);
+  const first = relative9.split(path58.sep)[0];
   if (first === "inbox" || first === "archive" || first === "reviews") {
     return first;
   }
   return "external";
 }
 function readIfExists2(filePath) {
-  return fs58.existsSync(filePath) ? fs58.readFileSync(filePath, "utf8") : null;
+  return fs59.existsSync(filePath) ? fs59.readFileSync(filePath, "utf8") : null;
 }
 function writeFileAppendOnly(filePath, content) {
-  fs58.mkdirSync(path57.dirname(filePath), { recursive: true });
-  const tempPath = path57.join(
-    path57.dirname(filePath),
-    `.${path57.basename(filePath)}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`
+  fs59.mkdirSync(path58.dirname(filePath), { recursive: true });
+  const tempPath = path58.join(
+    path58.dirname(filePath),
+    `.${path58.basename(filePath)}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`
   );
-  fs58.writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
+  fs59.writeFileSync(tempPath, content, { encoding: "utf8", flag: "wx" });
   try {
-    fs58.linkSync(tempPath, filePath);
+    fs59.linkSync(tempPath, filePath);
     return { ok: true };
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
@@ -26614,7 +26720,7 @@ function writeFileAppendOnly(filePath, content) {
     }
     throw error;
   } finally {
-    fs58.rmSync(tempPath, { force: true });
+    fs59.rmSync(tempPath, { force: true });
   }
 }
 function normalizeBodyHash(body) {
@@ -26766,7 +26872,7 @@ async function reviewsCommand(args) {
   };
 }
 function reviewsRegisterCommand(args) {
-  const root = path58.resolve(resolveCommsDir(args, findRepoRoot(process.cwd())));
+  const root = path59.resolve(resolveCommsDir(args, findRepoRoot(process.cwd())));
   const sourceResult = readRepeatedFlag(args, "source");
   if ("error" in sourceResult) return invalidArgument3(sourceResult.error);
   const prResult = parseOptionalPrNumbers(args);
@@ -26876,7 +26982,7 @@ function parseApplyOptions(args, selectors) {
     return { error: `Invalid --limit value: ${limitResult.value}` };
   }
   return {
-    outputDir: path58.resolve(outputDirResult.value),
+    outputDir: path59.resolve(outputDirResult.value),
     limit,
     recoveredAt: (/* @__PURE__ */ new Date()).toISOString(),
     selectors
@@ -26918,20 +27024,20 @@ function resolveScanRoots(args) {
   const rawRoots = [
     ...repeatedRoots.values,
     ...rootsFlag.values.flatMap(
-      (value) => value.split(value.includes(",") ? "," : path58.delimiter).map((entry) => entry.trim()).filter(Boolean)
+      (value) => value.split(value.includes(",") ? "," : path59.delimiter).map((entry) => entry.trim()).filter(Boolean)
     )
   ];
   const roots = rawRoots.length > 0 ? rawRoots : [resolveCommsDir(args, findRepoRoot(process.cwd()))];
   const host = process.env.TAP_REVIEWS_RECOVERY_HOST ?? os7.hostname();
   return {
-    roots: [...new Set(roots.map((entry) => path58.resolve(entry)))].map(
+    roots: [...new Set(roots.map((entry) => path59.resolve(entry)))].map(
       (root) => ({
         host,
         root,
-        exists: fs59.existsSync(root),
-        inboxPath: path58.join(root, "inbox"),
-        archivePath: path58.join(root, "archive"),
-        reviewsPath: path58.join(root, "reviews")
+        exists: fs60.existsSync(root),
+        inboxPath: path59.join(root, "inbox"),
+        archivePath: path59.join(root, "archive"),
+        reviewsPath: path59.join(root, "reviews")
       })
     )
   };
@@ -26982,18 +27088,18 @@ function scanRoots(roots, prNumbers) {
   return messages;
 }
 function listMarkdownFiles3(directory) {
-  if (!fs59.existsSync(directory)) return [];
-  return fs59.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const filePath = path58.join(directory, entry.name);
+  if (!fs60.existsSync(directory)) return [];
+  return fs60.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const filePath = path59.join(directory, entry.name);
     if (entry.isDirectory()) return listMarkdownFiles3(filePath);
     if (entry.isFile() && entry.name.endsWith(".md")) return [filePath];
     return [];
   }).sort();
 }
 function parseReviewMessage(filePath, root, sourceRootKind) {
-  const raw = fs59.readFileSync(filePath, "utf8");
+  const raw = fs60.readFileSync(filePath, "utf8");
   const { frontmatter, frontmatterRaw, body } = splitFrontmatter3(raw);
-  const filename = path58.basename(filePath);
+  const filename = path59.basename(filePath);
   const subject = frontmatter.subject ?? inferSubjectFromFilename3(filename) ?? filename.replace(/\.md$/, "");
   const prNumber = extractPrNumber4(subject) ?? extractPrNumber4(filename) ?? parseFrontmatterPrNumber(frontmatter.pr ?? frontmatter.prNumber);
   if (!prNumber) return null;
@@ -27003,7 +27109,7 @@ function parseReviewMessage(filePath, root, sourceRootKind) {
     prNumber,
     host: root.host,
     root: root.root,
-    relativePath: path58.relative(root.root, filePath),
+    relativePath: path59.relative(root.root, filePath),
     selectionId: frontmatter.selectionId ?? null,
     sourceKind,
     reviewType,
@@ -27419,13 +27525,13 @@ function existingNormalizedArtifactPath(candidate) {
   const normalizedPath = candidate.sourcePaths.find(
     (sourcePath) => sourcePath.sourceKind === "normalized-artifact"
   );
-  return normalizedPath ? path58.join(normalizedPath.root, normalizedPath.path) : null;
+  return normalizedPath ? path59.join(normalizedPath.root, normalizedPath.path) : null;
 }
 function buildArtifactPath(candidate, outputDir) {
   const round = String(candidate.round).toLowerCase();
   const reviewType = candidate.reviewType.replace(/[^a-z0-9-]/gi, "-");
   const hash = shortHash2(candidate.dedupeKey);
-  return path58.join(
+  return path59.join(
     outputDir,
     `pr${candidate.prNumber}`,
     `${round}-${reviewType}-${hash}.md`
@@ -27457,25 +27563,25 @@ function selectionMatches(candidate, selectors) {
   );
 }
 function writeRecoveryArtifact(candidate, artifactPath, options) {
-  if (fs59.existsSync(artifactPath)) {
+  if (fs60.existsSync(artifactPath)) {
     return applyResult(candidate, "already-normalized", artifactPath, null);
   }
-  const artifactDir = path58.dirname(artifactPath);
-  fs59.mkdirSync(artifactDir, { recursive: true });
-  const tempPath = path58.join(
+  const artifactDir = path59.dirname(artifactPath);
+  fs60.mkdirSync(artifactDir, { recursive: true });
+  const tempPath = path59.join(
     artifactDir,
-    `.${path58.basename(artifactPath)}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`
+    `.${path59.basename(artifactPath)}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`
   );
   try {
-    fs59.writeFileSync(tempPath, renderRecoveryArtifact(candidate, options), {
+    fs60.writeFileSync(tempPath, renderRecoveryArtifact(candidate, options), {
       encoding: "utf8",
       flag: "wx"
     });
-    fs59.linkSync(tempPath, artifactPath);
-    fs59.unlinkSync(tempPath);
+    fs60.linkSync(tempPath, artifactPath);
+    fs60.unlinkSync(tempPath);
     return applyResult(candidate, "applied", artifactPath, null);
   } catch (error) {
-    fs59.rmSync(tempPath, { force: true });
+    fs60.rmSync(tempPath, { force: true });
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
       return applyResult(
         candidate,
@@ -27586,9 +27692,9 @@ function renderSelectedReviewExcerpts(candidate) {
   );
   if (outcomePaths.length === 0) return "- none";
   return outcomePaths.map((sourcePath) => {
-    const filePath = path58.join(sourcePath.root, sourcePath.path);
-    const excerpt = fs59.existsSync(filePath) ? extractReviewExcerpt(
-      splitFrontmatter3(fs59.readFileSync(filePath, "utf8")).body
+    const filePath = path59.join(sourcePath.root, sourcePath.path);
+    const excerpt = fs60.existsSync(filePath) ? extractReviewExcerpt(
+      splitFrontmatter3(fs60.readFileSync(filePath, "utf8")).body
     ) : "[source file not available during recovery render]";
     return [
       `### ${sourcePath.sourceKind}: ${sourcePath.host}:${sourcePath.root}/${sourcePath.path}`,
@@ -27625,9 +27731,9 @@ function yamlScalar4(value) {
 
 // src/commands/sessions.ts
 init_utils();
-import * as fs60 from "fs";
+import * as fs61 from "fs";
 import * as os8 from "os";
-import * as path59 from "path";
+import * as path60 from "path";
 import { createGzip } from "zlib";
 import { pipeline } from "stream/promises";
 import { spawnSync as spawnSync14 } from "child_process";
@@ -27669,10 +27775,10 @@ function invalidArgument4(message) {
   };
 }
 function codexHome() {
-  return process.env.CODEX_HOME ? path59.resolve(process.env.CODEX_HOME) : path59.join(os8.homedir(), ".codex");
+  return process.env.CODEX_HOME ? path60.resolve(process.env.CODEX_HOME) : path60.join(os8.homedir(), ".codex");
 }
 function resolvePathFlag(value) {
-  return typeof value === "string" && value.trim() ? path59.resolve(value) : null;
+  return typeof value === "string" && value.trim() ? path60.resolve(value) : null;
 }
 function resolveOptionalPathFlag(flags, name, fallback) {
   if (!(name in flags)) return fallback;
@@ -27698,13 +27804,13 @@ function extractThreadId(filename) {
 }
 function collectSessionFiles(root) {
   const files = [];
-  if (!fs60.existsSync(root)) return files;
+  if (!fs61.existsSync(root)) return files;
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop();
     if (!dir) continue;
-    for (const entry of fs60.readdirSync(dir, { withFileTypes: true })) {
-      const entryPath = path59.join(dir, entry.name);
+    for (const entry of fs61.readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path60.join(dir, entry.name);
       if (entry.isDirectory()) {
         stack.push(entryPath);
       } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
@@ -27731,14 +27837,14 @@ function getActiveThreadIdsFromProcesses() {
   return ids;
 }
 function buildRecord(sourcePath, sessionsDir, archiveDir, activeThreadIds) {
-  const stat = fs60.statSync(sourcePath);
-  const relativePath = path59.relative(sessionsDir, sourcePath);
-  const threadId = extractThreadId(path59.basename(sourcePath));
+  const stat = fs61.statSync(sourcePath);
+  const relativePath = path60.relative(sessionsDir, sourcePath);
+  const threadId = extractThreadId(path60.basename(sourcePath));
   const active = threadId ? activeThreadIds.has(threadId) : false;
   return {
     sourcePath,
     relativePath,
-    archivePath: path59.join(archiveDir, `${relativePath}.gz`),
+    archivePath: path60.join(archiveDir, `${relativePath}.gz`),
     sizeBytes: stat.size,
     mtime: stat.mtime.toISOString(),
     threadId,
@@ -27760,31 +27866,31 @@ function classifyRecord(record, nowMs, minSizeBytes, minAgeHours, includeActive)
   if (ageHours < minAgeHours) {
     return { ...record, status: "skipped", reason: "below-min-age" };
   }
-  if (fs60.existsSync(record.archivePath)) {
+  if (fs61.existsSync(record.archivePath)) {
     return { ...record, status: "skipped", reason: "archive-exists" };
   }
   return { ...record, status: "would-archive", reason: null };
 }
 async function writeArchive(record) {
-  const archiveParent = path59.dirname(record.archivePath);
-  fs60.mkdirSync(archiveParent, { recursive: true });
-  const tempPath = path59.join(
+  const archiveParent = path60.dirname(record.archivePath);
+  fs61.mkdirSync(archiveParent, { recursive: true });
+  const tempPath = path60.join(
     archiveParent,
-    `.${path59.basename(record.archivePath)}.${process.pid}.${randomUUID7()}.tmp`
+    `.${path60.basename(record.archivePath)}.${process.pid}.${randomUUID7()}.tmp`
   );
   try {
     beforeArchiveWriteHookForTests?.(record);
     await pipeline(
-      fs60.createReadStream(record.sourcePath),
+      fs61.createReadStream(record.sourcePath),
       createGzip({ level: 9 }),
-      fs60.createWriteStream(tempPath, { flags: "wx" })
+      fs61.createWriteStream(tempPath, { flags: "wx" })
     );
-    fs60.linkSync(tempPath, record.archivePath);
-    fs60.rmSync(tempPath, { force: true });
-    const archiveSizeBytes = fs60.statSync(record.archivePath).size;
+    fs61.linkSync(tempPath, record.archivePath);
+    fs61.rmSync(tempPath, { force: true });
+    const archiveSizeBytes = fs61.statSync(record.archivePath).size;
     return { status: "archived", reason: null, archiveSizeBytes };
   } catch (err) {
-    fs60.rmSync(tempPath, { force: true });
+    fs61.rmSync(tempPath, { force: true });
     const message = err instanceof Error ? err.message : String(err);
     return { status: "failed", reason: message, archiveSizeBytes: null };
   }
@@ -27794,8 +27900,8 @@ function appendManifest(manifestPath, record) {
     manifestAppenderForTests(manifestPath, record);
     return;
   }
-  fs60.mkdirSync(path59.dirname(manifestPath), { recursive: true });
-  fs60.appendFileSync(
+  fs61.mkdirSync(path60.dirname(manifestPath), { recursive: true });
+  fs61.appendFileSync(
     manifestPath,
     `${JSON.stringify({ archivedAt: (/* @__PURE__ */ new Date()).toISOString(), ...record })}
 `,
@@ -27841,7 +27947,7 @@ async function sessionsCommand(args) {
   const sessionsDir = resolveOptionalPathFlag(
     flags,
     "sessions-dir",
-    path59.join(home, "sessions")
+    path60.join(home, "sessions")
   );
   if (sessionsDir === "invalid") {
     return invalidArgument4(
@@ -27851,7 +27957,7 @@ async function sessionsCommand(args) {
   const archiveDir = resolveOptionalPathFlag(
     flags,
     "archive-dir",
-    path59.join(home, "session-archives")
+    path60.join(home, "session-archives")
   );
   if (archiveDir === "invalid") {
     return invalidArgument4("Invalid --archive-dir: expected a non-empty path.");
@@ -27861,7 +27967,7 @@ async function sessionsCommand(args) {
   const includeActive = flags["include-active"] === true;
   const activeThreadIds = getActiveThreadIdsFromProcesses();
   const minSizeBytes = Math.floor(minSizeMb * 1024 * 1024);
-  const manifestPath = apply ? path59.join(archiveDir, "manifest.jsonl") : null;
+  const manifestPath = apply ? path60.join(archiveDir, "manifest.jsonl") : null;
   const records = collectSessionFiles(sessionsDir).map(
     (file) => buildRecord(file, sessionsDir, archiveDir, activeThreadIds)
   );
@@ -27899,7 +28005,7 @@ async function sessionsCommand(args) {
           continue;
         }
         if (!keepOriginal) {
-          fs60.unlinkSync(candidate.sourcePath);
+          fs61.unlinkSync(candidate.sourcePath);
           next.originalRemoved = true;
         }
         archived.push(next);
@@ -27938,13 +28044,13 @@ async function sessionsCommand(args) {
 }
 
 // src/commands/infra.ts
-import * as fs61 from "fs";
-import * as path60 from "path";
+import * as fs62 from "fs";
+import * as path61 from "path";
 import { spawnSync as spawnSync15 } from "child_process";
 init_utils();
 var INFRA_HELP = `
 Usage:
-  tap infra status [--profile <current|all|sumback-yoon|sumback-sol|mac-jun-ssh-tui|remote-panel-yoon|windows-app-sol>] [--json]
+  tap infra status [--profile <current|all|profile-id>] [--json]
 
 Description:
   Summarize tap runtime operations from existing read-only probes so operators
@@ -27954,16 +28060,13 @@ Description:
 
 Options:
   --profile <id>        Limit the report to one infra profile. Default: current.
+  --profile-pack <path> Load reviewed local infra/status profile data.
   --fresh-minutes <n>   Freshness window for Windows App durable presence. Default: 30.
   --comms-dir <path>    Override comms directory for durable presence reads.
   --help                Show help.
 `.trim();
-var CURRENT_INFRA_PROFILES = [
-  "sumback-yoon",
-  "mac-jun-ssh-tui",
-  "remote-panel-yoon",
-  "windows-app-sol"
-];
+var DEFAULT_WINDOWS_APP_AGENT = "agent-a";
+var DEFAULT_WINDOWS_APP_PROFILE = "windows-app-agent-a";
 var profileReportBuilderForTests = null;
 var headlessRunnerStatusRunnerForTests2 = null;
 function parsePositiveIntegerFlag(value, fallback, name) {
@@ -27999,22 +28102,26 @@ function runHeadlessRunnerStatus2(profileId2) {
     status: result.status
   };
 }
-function isKnownInfraProfile(value) {
-  return value === "windows-app-sol" || value in AGENT_PROFILES;
+function isKnownInfraProfile(value, profilePackProfiles) {
+  return value === DEFAULT_WINDOWS_APP_PROFILE || value in AGENT_PROFILES || profilePackProfiles.some((profile) => profile.id === value);
 }
-function selectedProfiles(value) {
+function selectedProfiles(value, profilePackProfiles) {
   if (value === void 0 || value === "current") {
-    return [...CURRENT_INFRA_PROFILES];
+    return [
+      ...Object.keys(AGENT_PROFILES),
+      DEFAULT_WINDOWS_APP_PROFILE
+    ];
   }
   if (value === "all") {
     return [
       ...Object.keys(AGENT_PROFILES),
-      "windows-app-sol"
+      ...profilePackProfiles.map((profile) => profile.id),
+      DEFAULT_WINDOWS_APP_PROFILE
     ];
   }
-  if (typeof value !== "string" || !isKnownInfraProfile(value)) {
+  if (typeof value !== "string" || !isKnownInfraProfile(value, profilePackProfiles)) {
     throw new RangeError(
-      `Unknown infra profile. Use current, all, ${Object.keys(AGENT_PROFILES).join(", ")}, or windows-app-sol.`
+      "Unknown infra profile. Use current, all, or a reviewed local profile id."
     );
   }
   return [value];
@@ -28060,8 +28167,11 @@ function workerStatus(active) {
   if (active.length > 1) return "conflict";
   return "single";
 }
-function buildStatusProfileSurface(profileId2) {
-  const profile = AGENT_PROFILES[profileId2];
+function buildStatusProfileSurface(profileId2, profilePackPath) {
+  const profile = AGENT_PROFILES[profileId2] ?? findStatusProfileInProfilePack(profilePackPath, profileId2);
+  if (!profile) {
+    throw new RangeError(`Unknown infra profile: ${profileId2}`);
+  }
   const report = buildReportForProfile(profile);
   const checks = report.checks.map((check) => ({
     name: check.name,
@@ -28074,8 +28184,11 @@ function buildStatusProfileSurface(profileId2) {
     if (report.surfaces.receiverSupervisor?.status === "running") {
       active.push("receiver-supervisor");
     }
-    if (supportsHeadlessRunnerProfile(profile.id)) {
-      const headless = parseHeadlessStatus(runHeadlessRunnerStatus2(profile.id));
+    if (profile.headlessRunner || supportsHeadlessRunnerProfile(profile.id)) {
+      const headlessProfileId = profile.headlessRunner?.profile ?? profile.id;
+      const headless = parseHeadlessStatus(
+        runHeadlessRunnerStatus2(headlessProfileId)
+      );
       checks.push(headless.check);
       if (headless.running) {
         active.push("headless-runner");
@@ -28128,16 +28241,16 @@ function buildStatusProfileSurface(profileId2) {
 }
 function readJsonFile3(filePath) {
   try {
-    if (!fs61.existsSync(filePath)) return null;
-    return JSON.parse(fs61.readFileSync(filePath, "utf8"));
+    if (!fs62.existsSync(filePath)) return null;
+    return JSON.parse(fs62.readFileSync(filePath, "utf8"));
   } catch {
     return null;
   }
 }
-function stringValue3(value) {
+function stringValue4(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
-function numberValue(value) {
+function numberValue2(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function objectValue5(value) {
@@ -28148,13 +28261,17 @@ function presenceRouteTuple(presence) {
   const address = objectValue5(presence?.address);
   const capabilities = objectValue5(presence?.capabilities);
   return {
-    conversationId: stringValue3(address?.conversationId) ?? stringValue3(capabilities?.conversationId) ?? stringValue3(presence?.conversationId),
-    ownerClientId: stringValue3(address?.ownerClientId) ?? stringValue3(capabilities?.ownerClientId) ?? stringValue3(presence?.ownerClientId)
+    conversationId: stringValue4(address?.conversationId) ?? stringValue4(capabilities?.conversationId) ?? stringValue4(presence?.conversationId),
+    ownerClientId: stringValue4(address?.ownerClientId) ?? stringValue4(capabilities?.ownerClientId) ?? stringValue4(presence?.ownerClientId)
   };
 }
 function routeFreshnessStatePath(repoRoot) {
   const stateDir = process.env.TAP_APP_ROUTE_FRESHNESS_STATE_DIR?.trim() || resolveConfig({}, repoRoot).config.stateDir;
-  return path60.join(stateDir, "app-route-freshness", "windows-app-sol.json");
+  return path61.join(
+    stateDir,
+    "app-route-freshness",
+    `${DEFAULT_WINDOWS_APP_PROFILE}.json`
+  );
 }
 function isoAgeMinutes(value) {
   if (!value) return null;
@@ -28164,23 +28281,27 @@ function isoAgeMinutes(value) {
 }
 function freshnessNextActionCommand(classification) {
   if (classification === "refresh-soon" || classification === "ttl-expired-target-ready") {
-    return "tap app-route-freshness --agent \uC194 --apply --json";
+    return `tap app-route-freshness --agent ${DEFAULT_WINDOWS_APP_AGENT} --apply --json`;
   }
-  return "tap app-route-freshness --agent \uC194 --json";
+  return `tap app-route-freshness --agent ${DEFAULT_WINDOWS_APP_AGENT} --json`;
 }
 function schedulerStatusImpact(options) {
   if (!options.state || !options.stateFresh) return "none";
-  const status = stringValue3(options.state.lastStatus);
+  const status = stringValue4(options.state.lastStatus);
   if (status === "blocked") return "blocked";
   if (status === "needs-refresh") return "needs-refresh";
   return "none";
 }
-function buildWindowsAppSolSurface(commsDir, freshMinutes) {
-  const presencePath = path60.join(commsDir, "presence", "\uC194.json");
+function buildWindowsAppDefaultSurface(commsDir, freshMinutes) {
+  const presencePath = path61.join(
+    commsDir,
+    "presence",
+    `${DEFAULT_WINDOWS_APP_AGENT}.json`
+  );
   const presence = readJsonFile3(presencePath);
-  const timestamp = stringValue3(presence?.timestamp);
+  const timestamp = stringValue4(presence?.timestamp);
   const { conversationId, ownerClientId } = presenceRouteTuple(presence);
-  const consentDriveStatus = stringValue3(presence?.consentDriveStatus);
+  const consentDriveStatus = stringValue4(presence?.consentDriveStatus);
   const ageMinutes = timestamp ? Math.max(0, (Date.now() - Date.parse(timestamp)) / 6e4) : null;
   const fresh = ageMinutes !== null && Number.isFinite(ageMinutes) && ageMinutes <= freshMinutes;
   const tupleReady = Boolean(conversationId && ownerClientId);
@@ -28188,7 +28309,7 @@ function buildWindowsAppSolSurface(commsDir, freshMinutes) {
   const routeReady = fresh && tupleReady && consentDriveReady;
   const schedulerPath = routeFreshnessStatePath(findRepoRoot());
   const schedulerState = readJsonFile3(schedulerPath);
-  const schedulerUpdatedAt = stringValue3(schedulerState?.updatedAt);
+  const schedulerUpdatedAt = stringValue4(schedulerState?.updatedAt);
   const schedulerAgeMinutes = isoAgeMinutes(schedulerUpdatedAt);
   const schedulerStateFresh = schedulerAgeMinutes !== null && schedulerAgeMinutes <= freshMinutes;
   const schedulerImpact = schedulerStatusImpact({
@@ -28226,18 +28347,18 @@ function buildWindowsAppSolSurface(commsDir, freshMinutes) {
     }
   ];
   if (schedulerState) {
-    const schedulerStatus = stringValue3(schedulerState.lastStatus);
-    const schedulerClassification2 = stringValue3(
+    const schedulerStatus = stringValue4(schedulerState.lastStatus);
+    const schedulerClassification2 = stringValue4(
       schedulerState.lastClassification
     );
-    const routeAgeSeconds = numberValue(schedulerState.routeAgeSeconds);
-    const routeAgeRatio = numberValue(schedulerState.routeAgeRatio);
-    const nextRefreshAt = stringValue3(schedulerState.nextRefreshAt);
-    const lastRefreshAt = stringValue3(schedulerState.lastRefreshAt);
-    const sourceHost = stringValue3(schedulerState.sourceHost);
-    const sourceHostStatus = stringValue3(schedulerState.sourceHostStatus);
+    const routeAgeSeconds = numberValue2(schedulerState.routeAgeSeconds);
+    const routeAgeRatio = numberValue2(schedulerState.routeAgeRatio);
+    const nextRefreshAt = stringValue4(schedulerState.nextRefreshAt);
+    const lastRefreshAt = stringValue4(schedulerState.lastRefreshAt);
+    const sourceHost = stringValue4(schedulerState.sourceHost);
+    const sourceHostStatus = stringValue4(schedulerState.sourceHostStatus);
     const configuredHostDrift = schedulerState.configuredHostDrift === true;
-    const nextAction = stringValue3(schedulerState.nextAction);
+    const nextAction = stringValue4(schedulerState.nextAction);
     checks.push(
       {
         name: "app-route-freshness-state",
@@ -28272,19 +28393,19 @@ function buildWindowsAppSolSurface(commsDir, freshMinutes) {
       message: `scheduler state missing at ${schedulerPath}`
     });
   }
-  const schedulerClassification = stringValue3(
+  const schedulerClassification = stringValue4(
     schedulerState?.lastClassification
   );
   const schedulerNextAction = freshnessNextActionCommand(
     schedulerClassification
   );
   return {
-    id: "windows-app-sol",
-    label: "Windows App \uC194 consent-drive route",
-    agent: "\uC194",
+    id: DEFAULT_WINDOWS_APP_PROFILE,
+    label: "Windows App agent-a consent-drive route",
+    agent: DEFAULT_WINDOWS_APP_AGENT,
     surface: "windows-app",
     status,
-    summary: status === "ready" ? "Windows App \uC194 route tuple is fresh." : status === "degraded" ? "Windows App \uC194 route tuple is fresh but scheduled refresh is due." : status === "not-observed" ? "Windows App \uC194 route tuple is not observed." : "Windows App \uC194 route tuple is blocked or stale.",
+    summary: status === "ready" ? "Windows App agent-a route tuple is fresh." : status === "degraded" ? "Windows App agent-a route tuple is fresh but scheduled refresh is due." : status === "not-observed" ? "Windows App agent-a route tuple is not observed." : "Windows App agent-a route tuple is blocked or stale.",
     workerOfRecord: {
       expected: "consent-drive-ipc",
       active,
@@ -28299,7 +28420,7 @@ function buildWindowsAppSolSurface(commsDir, freshMinutes) {
       },
       {
         label: "Inspect Windows App route readiness",
-        command: "tap ready --surface windows-app --agent \uC194 --json"
+        command: `tap ready --surface windows-app --agent ${DEFAULT_WINDOWS_APP_AGENT} --json`
       }
     ],
     source: {
@@ -28329,7 +28450,7 @@ function aggregateStatus(profiles) {
 }
 function buildInfraReport(options) {
   const profiles = options.profiles.map(
-    (profileId2) => profileId2 === "windows-app-sol" ? buildWindowsAppSolSurface(options.commsDir, options.freshMinutes) : buildStatusProfileSurface(profileId2)
+    (profileId2) => profileId2 === DEFAULT_WINDOWS_APP_PROFILE ? buildWindowsAppDefaultSurface(options.commsDir, options.freshMinutes) : buildStatusProfileSurface(profileId2, options.profilePackPath)
   ).sort(
     (a, b) => compareStatus(a.status, b.status) || a.id.localeCompare(b.id)
   );
@@ -28405,14 +28526,20 @@ async function infraCommand(args) {
   }
   try {
     const repoRoot = findRepoRoot();
+    const profilePackPath = typeof parsed.flags["profile-pack"] === "string" ? parsed.flags["profile-pack"].trim() : null;
+    if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+      throw new RangeError("Missing --profile-pack <path> value.");
+    }
+    const profilePackProfiles = profilePackPath ? statusProfilesFromProfilePack(profilePackPath) : [];
     const report = buildInfraReport({
-      profiles: selectedProfiles(parsed.flags.profile),
+      profiles: selectedProfiles(parsed.flags.profile, profilePackProfiles),
       commsDir: resolveCommsDir(args, repoRoot),
       freshMinutes: parsePositiveIntegerFlag(
         parsed.flags["fresh-minutes"],
         30,
         "--fresh-minutes"
-      )
+      ),
+      profilePackPath
     });
     logInfraReport(report);
     return {
@@ -28442,19 +28569,19 @@ async function infraCommand(args) {
 
 // src/commands/windows-route-recover.ts
 init_utils();
-import * as fs62 from "fs";
+import * as fs63 from "fs";
 import * as os9 from "os";
-import * as path61 from "path";
+import * as path62 from "path";
 import { spawnSync as spawnSync16 } from "child_process";
 var HELP2 = `
 Usage:
   tap windows-route-recover --agent <name> [options]
 
 Options:
-  --agent <name>              Target Windows App agent. Default: \uC194.
+  --agent <name>              Target Windows App agent. Default: agent-a.
   --apply                     Apply guarded refresh/publish steps.
   --dry-run                   With --apply, preview recovery without mutation.
-  --source-host <host>        Source host key or alias. Default: devin.
+  --source-host <host>        Source host key or alias. Default: windows-app.
   --source-comms-dir <path>   Override Windows source comms directory.
   --source-platform-dir <path>
                               Override Windows source repo/platform directory.
@@ -28469,20 +28596,7 @@ Options:
   --json                      Machine-readable JSON output.
 `.trim();
 var runnerForTests = null;
-var DEFAULT_HOSTS = {
-  "D:\\HUA\\hua-comms": {
-    ssh: "devin-win-ts",
-    repo: "D:\\HUA\\hua-platform",
-    commsDir: "D:\\HUA\\hua-comms",
-    hostAliases: [
-      "DEVIN",
-      "devin",
-      "devin-win-ts",
-      "windows-app",
-      "windows-app-sol"
-    ]
-  }
-};
+var DEFAULT_HOSTS = {};
 function str(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -28554,12 +28668,12 @@ function parseRemoteHosts(raw) {
   }
 }
 function defaultCodexConfigPath() {
-  return process.env.CODEX_HOME?.trim() ? path61.join(process.env.CODEX_HOME.trim(), "config.toml") : path61.join(os9.homedir(), ".codex", "config.toml");
+  return process.env.CODEX_HOME?.trim() ? path62.join(process.env.CODEX_HOME.trim(), "config.toml") : path62.join(os9.homedir(), ".codex", "config.toml");
 }
 function configuredRemoteHosts(configPath) {
-  if (!fs62.existsSync(configPath)) return { raw: "", error: null };
+  if (!fs63.existsSync(configPath)) return { raw: "", error: null };
   try {
-    const text = fs62.readFileSync(configPath, "utf8");
+    const text = fs63.readFileSync(configPath, "utf8");
     let inTapEnv = false;
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim();
@@ -28629,7 +28743,7 @@ function resolveHost(requestedHost, active, configured, defaults) {
       matchedHostId: defaultConfig.aliasFor ?? defaultConfig.hostId,
       configSource: "profile-default",
       config: defaultConfig,
-      message: "source host resolved from windows-app-sol profile defaults; active MCP env still controls structured delivery proof"
+      message: "source host resolved from package defaults; active MCP env still controls structured delivery proof"
     };
   }
   return {
@@ -28646,7 +28760,7 @@ function isWinPath(value) {
   return /^[A-Za-z]:[\\/]/.test(value);
 }
 function joinRemote(base, ...parts) {
-  return isWinPath(base) ? path61.win32.join(base, ...parts) : [base.replace(/[\\/]+$/, ""), ...parts].join("/");
+  return isWinPath(base) ? path62.win32.join(base, ...parts) : [base.replace(/[\\/]+$/, ""), ...parts].join("/");
 }
 function psQuote(value) {
   return `'${value.replace(/'/g, "''")}'`;
@@ -28834,8 +28948,8 @@ function parseRouteHealth(result) {
 }
 function readJsonFile4(filePath) {
   try {
-    if (!fs62.existsSync(filePath)) return null;
-    return JSON.parse(fs62.readFileSync(filePath, "utf8"));
+    if (!fs63.existsSync(filePath)) return null;
+    return JSON.parse(fs63.readFileSync(filePath, "utf8"));
   } catch {
     return null;
   }
@@ -28983,11 +29097,11 @@ async function windowsRouteRecoverCommand(args) {
     };
   }
   const parsed = parseArgs(args);
-  const agent = getStringFlag(parsed.flags.agent, "\uC194", "--agent");
+  const agent = getStringFlag(parsed.flags.agent, "agent-a", "--agent");
   if (!agent.ok) return invalid(agent.message);
   const sourceHost = getStringFlag(
     parsed.flags["source-host"],
-    "devin",
+    "windows-app",
     "--source-host"
   );
   if (!sourceHost.ok) return invalid(sourceHost.message);
@@ -29003,13 +29117,13 @@ async function windowsRouteRecoverCommand(args) {
   if (smoke && (!smokeSubject || !smokeContent))
     return invalid("--smoke requires --smoke-subject and --smoke-content.");
   const repoRoot = findRepoRoot();
-  const central = path61.resolve(
+  const central = path62.resolve(
     str(parsed.flags.central) ?? resolveCommsDir(args, repoRoot)
   );
   const apply = parsed.flags.apply === true;
   const dryRun = !apply || parsed.flags["dry-run"] === true;
   const forceFreshRouteRefresh = parsed.flags["force-fresh-route-refresh"] === true;
-  const codexConfig = path61.resolve(
+  const codexConfig = path62.resolve(
     str(parsed.flags["codex-config"]) ?? defaultCodexConfigPath()
   );
   const configuredRaw = configuredRemoteHosts(codexConfig);
@@ -29244,7 +29358,7 @@ async function windowsRouteRecoverCommand(args) {
       message: "central presence is already fresh-for-routing"
     });
   }
-  const centralPresencePath = path61.join(
+  const centralPresencePath = path62.join(
     central,
     "presence",
     `${agent.value}.json`
@@ -29329,7 +29443,7 @@ async function windowsRouteRecoverCommand(args) {
   const status = statusFor(classification, apply, dryRun, routeProof, actions);
   const report = {
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    profile: "windows-app-sol",
+    profile: `windows-app-${agent.value}`,
     agent: agent.value,
     status,
     classification,
@@ -29376,22 +29490,22 @@ async function windowsRouteRecoverCommand(args) {
 }
 
 // src/commands/app-route-freshness.ts
-import * as fs63 from "fs";
-import * as path62 from "path";
+import * as fs64 from "fs";
+import * as path63 from "path";
 import { setTimeout as sleep5 } from "timers/promises";
 init_utils();
 var HELP3 = `
 Usage:
-  tap app-route-freshness [--agent \uC194] [--apply] [--watch] [--json]
+  tap app-route-freshness [--agent agent-a] [--apply] [--watch] [--json]
 
 Description:
   Keep a Codex App consent-drive route fresh before durable presence TTL expiry.
-  The first slice targets the Windows App \uC194 profile and reuses the guarded
-  Windows route recovery primitive for target-local IPC observation, selected
+  This uses the guarded Windows route recovery primitive for target-local IPC
+  observation, selected
   presence refresh, and configured-SSOT publish.
 
 Options:
-  --agent <name>              App route agent. Default: \uC194.
+  --agent <name>              App route agent. Default: agent-a.
   --fresh-minutes <n>         Durable presence freshness window. Default: 30.
   --threshold-ratio <n>       Refresh when route age reaches this share of TTL. Default: 0.75.
   --apply                    Refresh/publish when the guarded plan is due.
@@ -29482,22 +29596,21 @@ function invalid2(message) {
   };
 }
 function profileId(agent) {
-  return agent === "\uC194" ? "windows-app-sol" : `windows-app-${agent}`;
+  return `windows-app-${safeAgentLabel(agent)}`;
 }
 function safeAgentLabel(agent) {
-  if (agent === "\uC194") return "sol";
-  const safe = agent.normalize("NFKD").replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const safe = agent.normalize("NFKC").replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 64);
   return safe || "agent";
 }
 function statePathFor(options) {
-  return path62.join(
+  return path63.join(
     options.stateDir,
     "app-route-freshness",
     `windows-app-${safeAgentLabel(options.agent)}.json`
   );
 }
 function lockPathFor(options) {
-  return path62.join(
+  return path63.join(
     options.stateDir,
     "app-route-freshness",
     `windows-app-${safeAgentLabel(options.agent)}.lock.json`
@@ -29508,11 +29621,11 @@ function resolveStateDir(value, repoRoot) {
     if (typeof value !== "string" || !value.trim()) {
       return { ok: false, message: "Invalid --state-dir: expected a value." };
     }
-    return { ok: true, value: path62.resolve(value.trim()) };
+    return { ok: true, value: path63.resolve(value.trim()) };
   }
   const envStateDir = process.env.TAP_APP_ROUTE_FRESHNESS_STATE_DIR;
   if (envStateDir?.trim())
-    return { ok: true, value: path62.resolve(envStateDir) };
+    return { ok: true, value: path63.resolve(envStateDir) };
   return { ok: true, value: resolveConfig({}, repoRoot).config.stateDir };
 }
 function collectPassthroughFlags(flags) {
@@ -29533,7 +29646,7 @@ function collectPassthroughFlags(flags) {
 }
 function parseOptions(args) {
   const parsed = parseArgs(args);
-  const agent = stringFlag(parsed.flags.agent, "\uC194", "--agent");
+  const agent = stringFlag(parsed.flags.agent, "agent-a", "--agent");
   if (!agent.ok) return invalid2(agent.message);
   const freshMinutes = positiveIntegerFlag(
     parsed.flags["fresh-minutes"],
@@ -29567,7 +29680,7 @@ function parseOptions(args) {
   const repoRoot = findRepoRoot();
   const stateDir = resolveStateDir(parsed.flags["state-dir"], repoRoot);
   if (!stateDir.ok) return invalid2(stateDir.message);
-  const central = path62.resolve(
+  const central = path63.resolve(
     str2(parsed.flags.central) ?? resolveCommsDir(args, repoRoot)
   );
   const apply = parsed.flags.apply === true;
@@ -29757,26 +29870,26 @@ function nextActionsFor(classification, options) {
     ];
   }
   return [
-    "inspect tap windows-route-recover --agent \uC194 --json for target-local route details"
+    `inspect tap windows-route-recover --agent ${options.agent} --json for target-local route details`
   ];
 }
 function readPreviousState(statePath) {
   try {
-    if (!fs63.existsSync(statePath)) return null;
-    return JSON.parse(fs63.readFileSync(statePath, "utf8"));
+    if (!fs64.existsSync(statePath)) return null;
+    return JSON.parse(fs64.readFileSync(statePath, "utf8"));
   } catch {
     return null;
   }
 }
 function writeJsonAtomic2(filePath, value) {
-  fs63.mkdirSync(path62.dirname(filePath), { recursive: true });
+  fs64.mkdirSync(path63.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
   try {
-    fs63.writeFileSync(tmpPath, JSON.stringify(value, null, 2), "utf8");
-    fs63.renameSync(tmpPath, filePath);
+    fs64.writeFileSync(tmpPath, JSON.stringify(value, null, 2), "utf8");
+    fs64.renameSync(tmpPath, filePath);
   } catch (error) {
     try {
-      fs63.rmSync(tmpPath, { force: true });
+      fs64.rmSync(tmpPath, { force: true });
     } catch {
     }
     throw error;
@@ -29980,14 +30093,14 @@ function lockAgeSeconds(owner) {
 }
 function readLockOwner(lockPath) {
   try {
-    return JSON.parse(fs63.readFileSync(lockPath, "utf8"));
+    return JSON.parse(fs64.readFileSync(lockPath, "utf8"));
   } catch {
     return null;
   }
 }
 function acquireWorkerLock(options) {
   const lockPath = lockPathFor(options);
-  fs63.mkdirSync(path62.dirname(lockPath), { recursive: true });
+  fs64.mkdirSync(path63.dirname(lockPath), { recursive: true });
   const owner = {
     pid: process.pid,
     agent: options.agent,
@@ -29996,18 +30109,18 @@ function acquireWorkerLock(options) {
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const fd = fs63.openSync(lockPath, "wx");
+      const fd = fs64.openSync(lockPath, "wx");
       try {
-        fs63.writeFileSync(fd, JSON.stringify(owner, null, 2), "utf8");
+        fs64.writeFileSync(fd, JSON.stringify(owner, null, 2), "utf8");
       } finally {
-        fs63.closeSync(fd);
+        fs64.closeSync(fd);
       }
       return { acquired: true, lockPath, owner };
     } catch (error) {
       const existing = readLockOwner(lockPath);
       const age = lockAgeSeconds(existing);
       if (attempt === 0 && age !== null && age > options.staleWorkerSeconds) {
-        fs63.rmSync(lockPath, { force: true });
+        fs64.rmSync(lockPath, { force: true });
         continue;
       }
       return {
@@ -30092,7 +30205,7 @@ async function runWatch(options) {
     }
   } finally {
     try {
-      fs63.rmSync(lock.lockPath, { force: true });
+      fs64.rmSync(lock.lockPath, { force: true });
     } catch {
     }
   }
@@ -30136,8 +30249,8 @@ async function appRouteFreshnessCommand(args) {
 }
 
 // src/commands/comms-doctor.ts
-import * as fs64 from "fs";
-import * as path63 from "path";
+import * as fs65 from "fs";
+import * as path64 from "path";
 init_utils();
 var HELP4 = `
 Usage:
@@ -30152,7 +30265,8 @@ Description:
 Options:
   --agent <name>              Target agent to diagnose. Default: agent-a.
   --all-known                 Diagnose local installed instances plus known presence files.
-  --include-profile-pack      Also include bundled operator profile-pack agents.
+  --profile-pack <path>       Load reviewed local profile-pack surfaces.
+  --include-profile-pack      Include agents from --profile-pack when used with --all-known.
   --surface <kind>            Limit surfaces. Default: all.
   --plan-send                 Include a compact safe send plan.
   --evidence-file <path[,p]>  Inspect one or more message/evidence files.
@@ -30199,8 +30313,8 @@ function unique6(values) {
 }
 function readJsonFile5(filePath) {
   try {
-    if (!fs64.existsSync(filePath)) return null;
-    return JSON.parse(fs64.readFileSync(filePath, "utf8"));
+    if (!fs65.existsSync(filePath)) return null;
+    return JSON.parse(fs65.readFileSync(filePath, "utf8"));
   } catch {
     return null;
   }
@@ -30293,28 +30407,27 @@ function resolveStateDir2(value, repoRoot) {
     if (typeof value !== "string" || !value.trim()) {
       return { ok: false, message: "Invalid --state-dir: expected a value." };
     }
-    return { ok: true, value: path63.resolve(value.trim()) };
+    return { ok: true, value: path64.resolve(value.trim()) };
   }
   const envStateDir = process.env.TAP_APP_ROUTE_FRESHNESS_STATE_DIR;
   if (envStateDir?.trim()) {
-    return { ok: true, value: path63.resolve(envStateDir) };
+    return { ok: true, value: path64.resolve(envStateDir) };
   }
   return { ok: true, value: resolveConfig({}, repoRoot).config.stateDir };
 }
 function safeAgentLabel2(agent) {
-  if (agent === "\uC194") return "sol";
-  const safe = agent.normalize("NFKD").replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+  const safe = agent.normalize("NFKC").replace(/[^\p{L}\p{N}_-]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 64);
   return safe || "agent";
 }
 function schedulerStatePath(stateDir, agent) {
-  return path63.join(
+  return path64.join(
     stateDir,
     "app-route-freshness",
     `windows-app-${safeAgentLabel2(agent)}.json`
   );
 }
 function schedulerLockPath(stateDir, agent) {
-  return path63.join(
+  return path64.join(
     stateDir,
     "app-route-freshness",
     `windows-app-${safeAgentLabel2(agent)}.lock.json`
@@ -30322,7 +30435,7 @@ function schedulerLockPath(stateDir, agent) {
 }
 function parseEvidenceFiles(value) {
   if (typeof value !== "string") return [];
-  return value.split(",").map((item) => item.trim()).filter(Boolean).map((item) => path63.resolve(item));
+  return value.split(",").map((item) => item.trim()).filter(Boolean).map((item) => path64.resolve(item));
 }
 function parseOptions2(args) {
   const parsed = parseArgs(args);
@@ -30345,13 +30458,27 @@ function parseOptions2(args) {
   const repoRoot = findRepoRoot();
   const stateDir = resolveStateDir2(parsed.flags["state-dir"], repoRoot);
   if (!stateDir.ok) return invalid3(stateDir.message);
-  const commsDir = path63.resolve(
+  const profilePackPath = typeof parsed.flags["profile-pack"] === "string" ? parsed.flags["profile-pack"].trim() : null;
+  if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+    return invalid3("Missing --profile-pack <path> value.");
+  }
+  let profilePackProfiles = [];
+  if (profilePackPath) {
+    try {
+      profilePackProfiles = statusProfilesFromProfilePack(profilePackPath);
+    } catch (error) {
+      return invalid3(error instanceof Error ? error.message : String(error));
+    }
+  }
+  const commsDir = path64.resolve(
     str3(parsed.flags.central) ?? resolveCommsDir(args, repoRoot)
   );
   const evidenceFiles = parseEvidenceFiles(parsed.flags["evidence-file"]);
+  const includeProfilePack = parsed.flags["include-profile-pack"] === true || Boolean(profilePackPath);
   const agents = parsed.flags["all-known"] === true ? knownAgents(commsDir, {
     fallbackAgent: agent.value,
-    includeProfilePack: parsed.flags["include-profile-pack"] === true,
+    includeProfilePack,
+    profilePackProfiles,
     stateDir: stateDir.value
   }) : [agent.value];
   return {
@@ -30367,18 +30494,23 @@ function parseOptions2(args) {
     stateDir: stateDir.value,
     evidenceFiles,
     appProofFlags: collectAppProofFlags(parsed.flags),
-    includeProfilePack: parsed.flags["include-profile-pack"] === true
+    includeProfilePack,
+    profilePackPath,
+    profilePackProfiles
   };
 }
 function knownAgents(commsDir, options) {
-  const fromProfiles = options.includeProfilePack ? Object.values(AGENT_PROFILES).map((profile) => profile.agent) : [];
+  const fromProfiles = options.includeProfilePack ? [
+    ...Object.values(AGENT_PROFILES).map((profile) => profile.agent),
+    ...options.profilePackProfiles.map((profile) => profile.agent)
+  ] : [];
   const fromState = knownAgentsFromState(options.stateDir);
   const fromPresence = knownAgentsFromPresence(commsDir);
   const known = unique6([...fromState, ...fromPresence, ...fromProfiles]);
   return known.length > 0 ? known : [options.fallbackAgent];
 }
 function knownAgentsFromState(stateDir) {
-  const state = readJsonFile5(path63.join(stateDir, "state.json"));
+  const state = readJsonFile5(path64.join(stateDir, "state.json"));
   const instances = rec3(state?.instances);
   if (!instances) return [];
   const agents = [];
@@ -30392,11 +30524,11 @@ function knownAgentsFromState(stateDir) {
   return agents;
 }
 function knownAgentsFromPresence(commsDir) {
-  const presenceDir = path63.join(commsDir, "presence");
-  if (!fs64.existsSync(presenceDir)) return [];
-  return fs64.readdirSync(presenceDir).filter((file) => file.endsWith(".json")).map((file) => {
+  const presenceDir = path64.join(commsDir, "presence");
+  if (!fs65.existsSync(presenceDir)) return [];
+  return fs65.readdirSync(presenceDir).filter((file) => file.endsWith(".json")).map((file) => {
     const fallback = file.slice(0, -".json".length);
-    const record = readJsonFile5(path63.join(presenceDir, file));
+    const record = readJsonFile5(path64.join(presenceDir, file));
     const address = rec3(record?.address);
     return str3(record?.agent) ?? str3(address?.routingAddress) ?? fallback;
   });
@@ -30421,16 +30553,16 @@ function routeLeaseLegacyFilename(agent) {
   return agent.replace(/[/\\:]/g, "_");
 }
 function routeLeaseCandidatePaths(commsDir, agent) {
-  const leaseDir = path63.join(commsDir, "route-leases");
+  const leaseDir = path64.join(commsDir, "route-leases");
   const filenames = unique6([
     routeLeaseFilename(agent),
     routeLeaseLegacyFilename(agent)
   ]);
-  return filenames.map((filename) => path63.join(leaseDir, `${filename}.json`));
+  return filenames.map((filename) => path64.join(leaseDir, `${filename}.json`));
 }
 function routeLeaseFilePath(commsDir, agent) {
   const filename = routeLeaseFilename(agent);
-  return path63.join(commsDir, "route-leases", `${filename}.json`);
+  return path64.join(commsDir, "route-leases", `${filename}.json`);
 }
 function routeLeaseSummary(commsDir, agent) {
   const fallbackPath = routeLeaseFilePath(commsDir, agent);
@@ -30552,8 +30684,8 @@ function surfaceFromProfile(profile) {
 function buildInboxSurface(agent, commsDir, filter) {
   const kind = "inbox-fallback";
   if (!matchesSurface(kind, filter)) return [];
-  const inboxDir = path63.join(commsDir, "inbox");
-  const exists = fs64.existsSync(inboxDir);
+  const inboxDir = path64.join(commsDir, "inbox");
+  const exists = fs65.existsSync(inboxDir);
   return [
     {
       id: `inbox-${agent}`,
@@ -30606,8 +30738,8 @@ function buildMcpChannelSurface(agent, presence, filter) {
     }
   ];
 }
-function shouldCheckAppSurface(agent, presence, routeLease, filter) {
-  return filter === "app" || filter === "windows-app" || agent === "\uC194" || presence.receiveTransports.includes("consent-drive") || routeLease.receiveTransports.includes("consent-drive");
+function shouldCheckAppSurface(_agent, presence, routeLease, filter) {
+  return filter === "app" || filter === "windows-app" || presence.receiveTransports.includes("consent-drive") || routeLease.receiveTransports.includes("consent-drive");
 }
 function proofFromAppData(data) {
   const recovery = rec3(data.recovery);
@@ -30627,8 +30759,8 @@ function readSchedulerSnapshot(agent, stateDir) {
     lockPath,
     state: readJsonFile5(statePath),
     lockOwner: readJsonFile5(lockPath),
-    stateExists: fs64.existsSync(statePath),
-    lockExists: fs64.existsSync(lockPath)
+    stateExists: fs65.existsSync(statePath),
+    lockExists: fs65.existsSync(lockPath)
   };
 }
 function timestampAgeSeconds2(value) {
@@ -30819,8 +30951,8 @@ async function buildAppSurface(agent, options, presence) {
     }
   ];
 }
-function profileSurfaces(agent, filter) {
-  return Object.values(AGENT_PROFILES).filter((profile) => profile.agent === agent).map((profile) => surfaceFromProfile(profile)).filter((surface) => matchesSurface(surface.kind, filter));
+function profileSurfaces(agent, filter, profilePackProfiles) {
+  return [...Object.values(AGENT_PROFILES), ...profilePackProfiles].filter((profile) => profile.agent === agent).map((profile) => surfaceFromProfile(profile)).filter((surface) => matchesSurface(surface.kind, filter));
 }
 function parseFrontmatter4(content) {
   if (!content.startsWith("---")) return {};
@@ -30836,14 +30968,14 @@ function parseFrontmatter4(content) {
   return fields;
 }
 function isSubpath2(filePath, dirPath) {
-  const relative9 = path63.relative(path63.resolve(dirPath), path63.resolve(filePath));
-  return Boolean(relative9) && !relative9.startsWith("..") && !path63.isAbsolute(relative9);
+  const relative9 = path64.relative(path64.resolve(dirPath), path64.resolve(filePath));
+  return Boolean(relative9) && !relative9.startsWith("..") && !path64.isAbsolute(relative9);
 }
 function evidenceRecord(filePath, commsDir) {
   try {
-    const content = fs64.readFileSync(filePath, "utf8");
+    const content = fs65.readFileSync(filePath, "utf8");
     const fields = parseFrontmatter4(content);
-    const inboxDir = path63.join(commsDir, "inbox");
+    const inboxDir = path64.join(commsDir, "inbox");
     return {
       path: filePath,
       inConfiguredInbox: isSubpath2(filePath, inboxDir),
@@ -30865,11 +30997,11 @@ function evidenceRecord(filePath, commsDir) {
   }
 }
 function recentInboxFiles(commsDir, limit) {
-  const inboxDir = path63.join(commsDir, "inbox");
-  if (limit <= 0 || !fs64.existsSync(inboxDir)) return [];
-  return fs64.readdirSync(inboxDir).filter((file) => file.endsWith(".md")).map((file) => path63.join(inboxDir, file)).map((filePath) => ({
+  const inboxDir = path64.join(commsDir, "inbox");
+  if (limit <= 0 || !fs65.existsSync(inboxDir)) return [];
+  return fs65.readdirSync(inboxDir).filter((file) => file.endsWith(".md")).map((file) => path64.join(inboxDir, file)).map((filePath) => ({
     filePath,
-    mtime: fs64.statSync(filePath).mtimeMs
+    mtime: fs65.statSync(filePath).mtimeMs
   })).sort((a, b) => b.mtime - a.mtime).slice(0, limit).map((item) => item.filePath);
 }
 function readEvidence(options) {
@@ -31005,7 +31137,7 @@ async function buildSurfacesForAgent(agent, options) {
     agent,
     options.freshMinutes
   );
-  const profileSurfaceReports = options.includeProfilePack ? profileSurfaces(agent, options.surface) : [];
+  const profileSurfaceReports = options.includeProfilePack ? profileSurfaces(agent, options.surface, options.profilePackProfiles) : [];
   const surfaces = [
     ...profileSurfaceReports,
     ...buildMcpChannelSurface(agent, presence, options.surface),
@@ -31101,8 +31233,8 @@ async function commsDoctorCommand(args) {
 }
 
 // src/commands/flow-doctor.ts
-import * as fs65 from "fs";
-import * as path64 from "path";
+import * as fs66 from "fs";
+import * as path65 from "path";
 import { execFileSync as execFileSync2 } from "child_process";
 init_utils();
 var DEFAULT_LIVE_PRESENCE_FRESH_MINUTES = 30;
@@ -31123,7 +31255,8 @@ Description:
 
 Options:
   --agent <name>              Expected lane/author identity.
-  --lane-profile <id>         Known runtime lane profile, e.g. mac-jun-ssh-tui.
+  --lane-profile <id>         Runtime lane profile id from --profile-pack.
+  --profile-pack <path>       Load reviewed local lane profile data.
   --runtime-agent <name>      Observed runtime identity. Defaults to TAP_AGENT_NAME/CODEX_TAP_AGENT_NAME.
   --source-comms-dir <path>   Local/source comms dir. Defaults to resolved tap comms dir.
   --target-comms-dir <path>   Return-uplink target comms dir to compare/register against.
@@ -31208,7 +31341,7 @@ function unique7(values) {
   }
   return result;
 }
-function stringValue4(value) {
+function stringValue5(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function recordValue(value) {
@@ -31222,14 +31355,14 @@ function stringArray5(value) {
 }
 function readJsonFile6(filePath) {
   try {
-    if (!fs65.existsSync(filePath)) return null;
-    return JSON.parse(fs65.readFileSync(filePath, "utf8"));
+    if (!fs66.existsSync(filePath)) return null;
+    return JSON.parse(fs66.readFileSync(filePath, "utf8"));
   } catch {
     return null;
   }
 }
 function parseTimeMs(value) {
-  const raw = stringValue4(value);
+  const raw = stringValue5(value);
   if (!raw) return null;
   const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : null;
@@ -31311,7 +31444,7 @@ function parseMetadata3(filename, content) {
 }
 function sameFileContent2(leftPath, rightPath) {
   try {
-    return fs65.readFileSync(leftPath).equals(fs65.readFileSync(rightPath));
+    return fs66.readFileSync(leftPath).equals(fs66.readFileSync(rightPath));
   } catch {
     return false;
   }
@@ -31319,14 +31452,14 @@ function sameFileContent2(leftPath, rightPath) {
 function listFiles(commsDir, dirs, sinceMs) {
   const result = /* @__PURE__ */ new Map();
   for (const dir of dirs) {
-    const fullDir = path64.join(commsDir, dir);
-    if (!fs65.existsSync(fullDir)) continue;
-    for (const filename of fs65.readdirSync(fullDir).sort()) {
+    const fullDir = path65.join(commsDir, dir);
+    if (!fs66.existsSync(fullDir)) continue;
+    for (const filename of fs66.readdirSync(fullDir).sort()) {
       if (!filename.endsWith(".md") && !filename.endsWith(".json")) continue;
-      const fullPath = path64.join(fullDir, filename);
+      const fullPath = path65.join(fullDir, filename);
       let stat;
       try {
-        stat = fs65.statSync(fullPath);
+        stat = fs66.statSync(fullPath);
       } catch {
         continue;
       }
@@ -31334,7 +31467,7 @@ function listFiles(commsDir, dirs, sinceMs) {
       if (sinceMs !== null && stat.mtimeMs < sinceMs) continue;
       let content = "";
       try {
-        content = fs65.readFileSync(fullPath, "utf8").replace(/^\uFEFF/, "");
+        content = fs66.readFileSync(fullPath, "utf8").replace(/^\uFEFF/, "");
       } catch {
         continue;
       }
@@ -31373,9 +31506,9 @@ function normalizeDirs(value) {
   }
   return dirs;
 }
-function lookupLaneProfile(id) {
+function lookupLaneProfile(id, profilePackPath) {
   if (!id) return null;
-  return AGENT_PROFILES[id] ?? null;
+  return AGENT_PROFILES[id] ?? findStatusProfileInProfilePack(profilePackPath, id) ?? null;
 }
 function presenceFreshnessWindowMinutes(receiveTransports, freshMinutes, pollingFreshMinutes) {
   if (receiveTransports.includes("consent-drive")) return freshMinutes;
@@ -31391,8 +31524,8 @@ function classifyPresenceRecord(record, nowMs, freshMinutes, pollingFreshMinutes
     ...stringArray5(record?.receiveTransports),
     ...stringArray5(capabilities?.receiveTransports)
   ]);
-  const conversationId = stringValue4(capabilities?.conversationId) ?? stringValue4(address?.conversationId) ?? stringValue4(record?.conversationId);
-  const ownerClientId = stringValue4(capabilities?.ownerClientId) ?? stringValue4(address?.ownerClientId) ?? stringValue4(record?.ownerClientId);
+  const conversationId = stringValue5(capabilities?.conversationId) ?? stringValue5(address?.conversationId) ?? stringValue5(record?.conversationId);
+  const ownerClientId = stringValue5(capabilities?.ownerClientId) ?? stringValue5(address?.ownerClientId) ?? stringValue5(record?.ownerClientId);
   const activityMs = heartbeatActivityMs(record);
   const ageSeconds = ageSecondsFromMs(activityMs, nowMs);
   const usesConsentDrive = receiveTransports.includes("consent-drive");
@@ -31426,7 +31559,7 @@ function classifyPresenceRecord(record, nowMs, freshMinutes, pollingFreshMinutes
   };
 }
 function presenceFilePath(commsDir, agent) {
-  return path64.join(commsDir, "presence", `${agent}.json`);
+  return path65.join(commsDir, "presence", `${agent}.json`);
 }
 function buildPresenceCheck(options) {
   const filePath = options.commsDir ? presenceFilePath(options.commsDir, options.agent) : "";
@@ -31447,7 +31580,7 @@ function buildPresenceCheck(options) {
       error: "presence comms dir not configured"
     };
   }
-  if (!fs65.existsSync(filePath)) {
+  if (!fs66.existsSync(filePath)) {
     return {
       role: options.role,
       agent: options.agent,
@@ -31521,16 +31654,16 @@ function notConfiguredPresenceCheck(role, agent) {
 function heartbeatRecordMatchesAgent(key, record, aliases) {
   const candidates = [
     key,
-    stringValue4(record.agent),
-    stringValue4(record.name),
-    stringValue4(record.agentName),
-    stringValue4(record.routingAddress),
-    stringValue4(record.id)
+    stringValue5(record.agent),
+    stringValue5(record.name),
+    stringValue5(record.agentName),
+    stringValue5(record.routingAddress),
+    stringValue5(record.id)
   ].filter((value) => Boolean(value));
   return candidates.some((candidate) => matchesAlias(candidate, aliases));
 }
 function buildActiveTurnSummary(options) {
-  const heartbeatsPath = path64.join(options.commsDir, "heartbeats.json");
+  const heartbeatsPath = path65.join(options.commsDir, "heartbeats.json");
   const heartbeats = readJsonFile6(heartbeatsPath);
   if (!heartbeats) {
     return {
@@ -31547,7 +31680,7 @@ function buildActiveTurnSummary(options) {
     if (!record || !heartbeatRecordMatchesAgent(key, record, options.aliases)) {
       continue;
     }
-    const activeTurnId = stringValue4(record.activeTurnId);
+    const activeTurnId = stringValue5(record.activeTurnId);
     const ageSeconds = ageSecondsFromMs(
       parseTimeMs(record.turnStartedAt) ?? parseTimeMs(record.lastActivity) ?? parseTimeMs(record.timestamp),
       options.nowMs
@@ -31582,7 +31715,7 @@ function buildActiveTurnSummary(options) {
   };
 }
 function presenceRecordAgent(filename, record) {
-  return stringValue4(record?.agent) ?? stringValue4(record?.name) ?? stringValue4(record?.routingAddress) ?? filename.replace(/\.json$/i, "");
+  return stringValue5(record?.agent) ?? stringValue5(record?.name) ?? stringValue5(record?.routingAddress) ?? filename.replace(/\.json$/i, "");
 }
 function presenceRecordKeys(filename, record, agent) {
   const identityKey = filename.replace(/\.json$/i, "");
@@ -31590,11 +31723,11 @@ function presenceRecordKeys(filename, record, agent) {
   return unique7(
     [
       identityKey,
-      stringValue4(record?.id),
-      stringValue4(record?.agent),
-      stringValue4(record?.name),
-      stringValue4(record?.routingAddress),
-      stringValue4(address?.routingAddress),
+      stringValue5(record?.id),
+      stringValue5(record?.agent),
+      stringValue5(record?.name),
+      stringValue5(record?.routingAddress),
+      stringValue5(address?.routingAddress),
       ...stringArray5(address?.aliases),
       agent
     ].filter((value) => Boolean(value)).map(normalizeAddress7).filter(Boolean)
@@ -31602,7 +31735,7 @@ function presenceRecordKeys(filename, record, agent) {
 }
 function defaultCleanupArchiveDir(targetCommsDir, now) {
   const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
-  return path64.join(
+  return path65.join(
     targetCommsDir,
     "archive",
     `presence-cleanup-${stamp}-runtime-lane`
@@ -31623,22 +31756,22 @@ function buildStalePresenceCleanup(options) {
       message: "No presence target comms dir configured; stale central presence cleanup was not checked."
     };
   }
-  const presenceDir = path64.join(options.targetCommsDir, "presence");
+  const presenceDir = path65.join(options.targetCommsDir, "presence");
   const archiveDir = options.archiveDir ?? defaultCleanupArchiveDir(options.targetCommsDir, options.now);
   const keep = new Set(options.keepAgents.map(normalizeAddress7));
   const nowMs = options.now.getTime();
   const candidates = [];
   const keptFresh = [];
   const entries = [];
-  if (fs65.existsSync(presenceDir)) {
-    for (const filename of fs65.readdirSync(presenceDir).sort()) {
+  if (fs66.existsSync(presenceDir)) {
+    for (const filename of fs66.readdirSync(presenceDir).sort()) {
       if (!filename.endsWith(".json")) continue;
-      const fullPath = path64.join(presenceDir, filename);
+      const fullPath = path65.join(presenceDir, filename);
       const identityKey = filename.replace(/\.json$/i, "");
       let record = null;
       let invalid4 = false;
       try {
-        record = JSON.parse(fs65.readFileSync(fullPath, "utf8"));
+        record = JSON.parse(fs66.readFileSync(fullPath, "utf8"));
       } catch {
         invalid4 = true;
       }
@@ -31717,7 +31850,7 @@ function buildStalePresenceCleanup(options) {
     status: candidates.length ? "needs-cleanup" : "ready",
     targetCommsDir: options.targetCommsDir,
     archiveDir,
-    manifestPath: candidates.length ? path64.join(archiveDir, "manifest.json") : null,
+    manifestPath: candidates.length ? path65.join(archiveDir, "manifest.json") : null,
     candidates,
     archived: [],
     prunedHeartbeats: [],
@@ -31726,15 +31859,15 @@ function buildStalePresenceCleanup(options) {
     message: candidates.length ? `${candidates.length} stale central presence record(s) can be archived safely with a manifest.` : "No stale non-lane or duplicate central presence cleanup candidates were found."
   };
   if (!options.apply || candidates.length === 0) return result;
-  fs65.mkdirSync(archiveDir, { recursive: true });
+  fs66.mkdirSync(archiveDir, { recursive: true });
   const archived = [];
   for (const candidate of candidates) {
-    const target = path64.join(archiveDir, path64.basename(candidate.path));
-    fs65.copyFileSync(candidate.path, target);
-    fs65.unlinkSync(candidate.path);
+    const target = path65.join(archiveDir, path65.basename(candidate.path));
+    fs66.copyFileSync(candidate.path, target);
+    fs66.unlinkSync(candidate.path);
     archived.push(target);
   }
-  const heartbeatsPath = path64.join(options.targetCommsDir, "heartbeats.json");
+  const heartbeatsPath = path65.join(options.targetCommsDir, "heartbeats.json");
   const prunedHeartbeats = [];
   const heartbeats = readJsonFile6(heartbeatsPath);
   if (heartbeats) {
@@ -31762,7 +31895,7 @@ function buildStalePresenceCleanup(options) {
       changed = true;
     }
     if (changed) {
-      fs65.writeFileSync(
+      fs66.writeFileSync(
         heartbeatsPath,
         `${JSON.stringify(heartbeats, null, 2)}
 `,
@@ -31781,8 +31914,8 @@ function buildStalePresenceCleanup(options) {
     keptFresh,
     safety: "Archived only stale non-lane or duplicate presence records; inbox/archive evidence and fresh/live presence records were not removed."
   };
-  fs65.writeFileSync(
-    path64.join(archiveDir, "manifest.json"),
+  fs66.writeFileSync(
+    path65.join(archiveDir, "manifest.json"),
     `${JSON.stringify(manifest, null, 2)}
 `,
     "utf8"
@@ -31790,7 +31923,7 @@ function buildStalePresenceCleanup(options) {
   return {
     ...result,
     status: "applied",
-    manifestPath: path64.join(archiveDir, "manifest.json"),
+    manifestPath: path65.join(archiveDir, "manifest.json"),
     archived,
     prunedHeartbeats,
     applied: true,
@@ -31798,10 +31931,8 @@ function buildStalePresenceCleanup(options) {
   };
 }
 function inferCurrentHost(cwd) {
-  const resolved = path64.resolve(cwd);
-  if (resolved.startsWith("/home/devin/")) return "sum-back";
-  if (resolved.startsWith("/Users/devin/")) return "mac";
-  return "unknown";
+  void cwd;
+  return process.env.TAP_PROFILE_HOST?.trim() || "unknown";
 }
 function supervisorHostMatches(supervisor, currentHost) {
   if (supervisor.host === "local") return true;
@@ -31867,12 +31998,12 @@ function presenceIdentityValues(record) {
   const address = recordValue(record.address);
   return unique7(
     [
-      stringValue4(record.agent),
-      stringValue4(record.name),
-      stringValue4(record.agentName),
-      stringValue4(record.routingAddress),
-      stringValue4(record.id),
-      stringValue4(address?.routingAddress)
+      stringValue5(record.agent),
+      stringValue5(record.name),
+      stringValue5(record.agentName),
+      stringValue5(record.routingAddress),
+      stringValue5(record.id),
+      stringValue5(address?.routingAddress)
     ].filter((value) => Boolean(value))
   );
 }
@@ -31914,7 +32045,7 @@ function buildPollingPresencePublish(options) {
       error: "source presence is not fresh polling visibility"
     };
   }
-  if (!sourcePath || !fs65.existsSync(sourcePath)) {
+  if (!sourcePath || !fs66.existsSync(sourcePath)) {
     return {
       status: "blocked",
       sourcePath,
@@ -31955,8 +32086,8 @@ function buildPollingPresencePublish(options) {
       error: null
     };
   }
-  fs65.mkdirSync(path64.dirname(targetPath), { recursive: true });
-  fs65.copyFileSync(sourcePath, targetPath);
+  fs66.mkdirSync(path65.dirname(targetPath), { recursive: true });
+  fs66.copyFileSync(sourcePath, targetPath);
   return {
     status: "applied",
     sourcePath,
@@ -32318,8 +32449,31 @@ async function flowDoctorCommand(args) {
   }
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
+  const profilePackPath = typeof flags["profile-pack"] === "string" ? flags["profile-pack"].trim() : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return {
+      ok: false,
+      command: "flow-doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: "Missing --profile-pack <path> value.",
+      warnings: [],
+      data: {}
+    };
+  }
   const laneProfileId = stringFlag3(flags, "lane-profile") ?? stringFlag3(flags, "profile");
-  const laneProfile = lookupLaneProfile(laneProfileId);
+  let laneProfile = null;
+  try {
+    laneProfile = lookupLaneProfile(laneProfileId, profilePackPath);
+  } catch (error) {
+    return {
+      ok: false,
+      command: "flow-doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: error instanceof Error ? error.message : String(error),
+      warnings: [],
+      data: {}
+    };
+  }
   if (laneProfileId && !laneProfile) {
     return {
       ok: false,
@@ -32341,17 +32495,17 @@ async function flowDoctorCommand(args) {
       data: {}
     };
   }
-  const sourceCommsDir = path64.resolve(
+  const sourceCommsDir = path65.resolve(
     stringFlag3(flags, "source-comms-dir") ?? stringFlag3(flags, "comms-dir") ?? (laneProfile?.kind === "codex-cli" ? laneProfile.commsDir : null) ?? config.commsDir
   );
   const targetCommsDir = stringFlag3(flags, "target-comms-dir");
-  const resolvedTargetCommsDir = targetCommsDir ? path64.resolve(targetCommsDir) : laneProfile?.kind === "codex-cli" && laneProfile.sshTarget ? path64.resolve(config.commsDir) : null;
-  const presenceSourceCommsDir = path64.resolve(
+  const resolvedTargetCommsDir = targetCommsDir ? path65.resolve(targetCommsDir) : laneProfile?.kind === "codex-cli" && laneProfile.sshTarget ? path65.resolve(config.commsDir) : null;
+  const presenceSourceCommsDir = path65.resolve(
     stringFlag3(flags, "presence-source-comms-dir") ?? sourceCommsDir
   );
   const presenceTargetCommsDir = stringFlag3(flags, "presence-target-comms-dir");
-  const resolvedPresenceTargetCommsDir = presenceTargetCommsDir ? path64.resolve(presenceTargetCommsDir) : resolvedTargetCommsDir ?? sourceCommsDir;
-  const stateDir = path64.resolve(
+  const resolvedPresenceTargetCommsDir = presenceTargetCommsDir ? path65.resolve(presenceTargetCommsDir) : resolvedTargetCommsDir ?? sourceCommsDir;
+  const stateDir = path65.resolve(
     stringFlag3(flags, "state-dir") ?? config.stateDir
   );
   const freshMinutes = toPositiveInteger(
@@ -32376,7 +32530,7 @@ async function flowDoctorCommand(args) {
   const laneDiagnosticsEnabled = Boolean(
     laneProfile || stringFlag3(flags, "presence-source-comms-dir") || stringFlag3(flags, "presence-target-comms-dir") || stringFlag3(flags, "keep-presence-agent") || stringFlag3(flags, "keep-presence-agents") || applyPollingPresencePublish || applyStalePresenceCleanup
   );
-  const cleanupArchiveDir = stringFlag3(flags, "cleanup-archive-dir") ? path64.resolve(stringFlag3(flags, "cleanup-archive-dir")) : null;
+  const cleanupArchiveDir = stringFlag3(flags, "cleanup-archive-dir") ? path65.resolve(stringFlag3(flags, "cleanup-archive-dir")) : null;
   const limit = Math.max(
     1,
     Math.min(500, Number(stringFlag3(flags, "limit") ?? 100))
@@ -32411,7 +32565,7 @@ async function flowDoctorCommand(args) {
   let uplink = null;
   const warnings2 = [...receiver.warnings];
   if (resolvedTargetCommsDir) {
-    if (path64.resolve(resolvedTargetCommsDir) === path64.resolve(sourceCommsDir)) {
+    if (path65.resolve(resolvedTargetCommsDir) === path65.resolve(sourceCommsDir)) {
       warnings2.push(
         "Skipped return-uplink dry-run because source and target comms dirs are identical."
       );

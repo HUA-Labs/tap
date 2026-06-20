@@ -387,9 +387,7 @@ const STRUCTURED_RECIPIENT_LIVENESS_MS =
 export const POLLING_RECIPIENT_VISIBILITY_MINUTES = 17 * 60;
 const POLLING_RECIPIENT_VISIBILITY_MS =
   POLLING_RECIPIENT_VISIBILITY_MINUTES * 60 * 1000;
-const CODEX_BRIDGE_RUNBOOK =
-  "docs/areas/tap/codex-app-server-bridge-runbook.md";
-const SUMBACK_CODEX_RUNBOOK = "docs/areas/tap/sumback-codex-lifecycle.md";
+const CODEX_RUNTIME_GUIDE = "AI_GUIDE.md";
 
 function compareCandidates(
   a: TapPresenceCandidate,
@@ -904,7 +902,7 @@ function deriveRuntimeHealth(options: {
       reason: "bridge process is stale",
       checkedAt,
       adapter: "codex-bridge",
-      recovery: `restart the bridge/app-server and rerun lifecycle check; see ${CODEX_BRIDGE_RUNBOOK} and ${SUMBACK_CODEX_RUNBOOK}`,
+      recovery: `restart the bridge/app-server and rerun lifecycle check; see ${CODEX_RUNTIME_GUIDE}`,
     };
   }
 
@@ -914,7 +912,7 @@ function deriveRuntimeHealth(options: {
       reason: "bridge/app-server is stopped",
       checkedAt,
       adapter: "codex-bridge",
-      recovery: `start the bridge/app-server; see ${CODEX_BRIDGE_RUNBOOK}`,
+      recovery: `start the bridge/app-server; see ${CODEX_RUNTIME_GUIDE}`,
     };
   }
 
@@ -930,7 +928,7 @@ function deriveRuntimeHealth(options: {
           : "bridge/app-server has no ready thread",
       checkedAt,
       adapter: "codex-bridge",
-      recovery: `wait or restart bridge/app-server if it remains degraded; see ${CODEX_BRIDGE_RUNBOOK}`,
+      recovery: `wait or restart bridge/app-server if it remains degraded; see ${CODEX_RUNTIME_GUIDE}`,
     };
   }
 

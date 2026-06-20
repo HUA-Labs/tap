@@ -9,6 +9,10 @@ import {
   type ProfileConfig,
 } from "./status-profiles.js";
 import {
+  findStatusProfileInProfilePack,
+  statusProfilesFromProfilePack,
+} from "./profile-pack-loader.js";
+import {
   supportsHeadlessRunnerProfile,
   type ReadyProfileId,
 } from "./ready-profiles.js";
@@ -23,7 +27,7 @@ import type { CommandResult } from "../types.js";
 
 const INFRA_HELP = `
 Usage:
-  tap infra status [--profile <current|all|sumback-yoon|sumback-sol|mac-jun-ssh-tui|remote-panel-yoon|windows-app-sol>] [--json]
+  tap infra status [--profile <current|all|profile-id>] [--json]
 
 Description:
   Summarize tap runtime operations from existing read-only probes so operators
@@ -33,22 +37,19 @@ Description:
 
 Options:
   --profile <id>        Limit the report to one infra profile. Default: current.
+  --profile-pack <path> Load reviewed local infra/status profile data.
   --fresh-minutes <n>   Freshness window for Windows App durable presence. Default: 30.
   --comms-dir <path>    Override comms directory for durable presence reads.
   --help                Show help.
 `.trim();
 
-type InfraProfileId = AgentProfileId | "windows-app-sol";
+const DEFAULT_WINDOWS_APP_AGENT = "agent-a";
+const DEFAULT_WINDOWS_APP_PROFILE = "windows-app-agent-a";
+
+type InfraProfileId = AgentProfileId | typeof DEFAULT_WINDOWS_APP_PROFILE;
 type InfraStatus = "ready" | "degraded" | "blocked" | "not-observed";
 type InfraCheckStatus = "pass" | "warn" | "fail" | "block" | "skip";
 type WorkerStatus = "single" | "conflict" | "missing" | "not-applicable";
-
-const CURRENT_INFRA_PROFILES: InfraProfileId[] = [
-  "sumback-yoon",
-  "mac-jun-ssh-tui",
-  "remote-panel-yoon",
-  "windows-app-sol",
-];
 
 interface InfraCheck {
   name: string;
@@ -165,25 +166,40 @@ function runHeadlessRunnerStatus(
   };
 }
 
-function isKnownInfraProfile(value: string): value is InfraProfileId {
-  return value === "windows-app-sol" || value in AGENT_PROFILES;
+function isKnownInfraProfile(
+  value: string,
+  profilePackProfiles: ProfileConfig[],
+): value is InfraProfileId {
+  return (
+    value === DEFAULT_WINDOWS_APP_PROFILE ||
+    value in AGENT_PROFILES ||
+    profilePackProfiles.some((profile) => profile.id === value)
+  );
 }
 
 function selectedProfiles(
   value: string | boolean | undefined,
+  profilePackProfiles: ProfileConfig[],
 ): InfraProfileId[] {
   if (value === undefined || value === "current") {
-    return [...CURRENT_INFRA_PROFILES];
+    return [
+      ...(Object.keys(AGENT_PROFILES) as AgentProfileId[]),
+      DEFAULT_WINDOWS_APP_PROFILE,
+    ];
   }
   if (value === "all") {
     return [
       ...(Object.keys(AGENT_PROFILES) as AgentProfileId[]),
-      "windows-app-sol",
+      ...profilePackProfiles.map((profile) => profile.id),
+      DEFAULT_WINDOWS_APP_PROFILE,
     ];
   }
-  if (typeof value !== "string" || !isKnownInfraProfile(value)) {
+  if (
+    typeof value !== "string" ||
+    !isKnownInfraProfile(value, profilePackProfiles)
+  ) {
     throw new RangeError(
-      `Unknown infra profile. Use current, all, ${Object.keys(AGENT_PROFILES).join(", ")}, or windows-app-sol.`,
+      "Unknown infra profile. Use current, all, or a reviewed local profile id.",
     );
   }
   return [value];
@@ -245,8 +261,14 @@ function workerStatus(active: string[]): WorkerStatus {
 
 function buildStatusProfileSurface(
   profileId: AgentProfileId,
+  profilePackPath: string | null,
 ): InfraSurfaceReport {
-  const profile = AGENT_PROFILES[profileId];
+  const profile =
+    AGENT_PROFILES[profileId] ??
+    findStatusProfileInProfilePack(profilePackPath, profileId);
+  if (!profile) {
+    throw new RangeError(`Unknown infra profile: ${profileId}`);
+  }
   const report = buildReportForProfile(profile);
   const checks: InfraCheck[] = report.checks.map((check) => ({
     name: check.name,
@@ -260,8 +282,15 @@ function buildStatusProfileSurface(
     if (report.surfaces.receiverSupervisor?.status === "running") {
       active.push("receiver-supervisor");
     }
-    if (supportsHeadlessRunnerProfile(profile.id as ReadyProfileId)) {
-      const headless = parseHeadlessStatus(runHeadlessRunnerStatus(profile.id));
+    if (
+      profile.headlessRunner ||
+      supportsHeadlessRunnerProfile(profile.id as ReadyProfileId)
+    ) {
+      const headlessProfileId =
+        profile.headlessRunner?.profile ?? (profile.id as ReadyProfileId);
+      const headless = parseHeadlessStatus(
+        runHeadlessRunnerStatus(headlessProfileId),
+      );
       checks.push(headless.check);
       if (headless.running) {
         active.push("headless-runner");
@@ -374,7 +403,11 @@ function routeFreshnessStatePath(repoRoot: string): string {
   const stateDir =
     process.env.TAP_APP_ROUTE_FRESHNESS_STATE_DIR?.trim() ||
     resolveConfig({}, repoRoot).config.stateDir;
-  return path.join(stateDir, "app-route-freshness", "windows-app-sol.json");
+  return path.join(
+    stateDir,
+    "app-route-freshness",
+    `${DEFAULT_WINDOWS_APP_PROFILE}.json`,
+  );
 }
 
 function isoAgeMinutes(value: string | null): number | null {
@@ -389,9 +422,9 @@ function freshnessNextActionCommand(classification: string | null): string {
     classification === "refresh-soon" ||
     classification === "ttl-expired-target-ready"
   ) {
-    return "tap app-route-freshness --agent 솔 --apply --json";
+    return `tap app-route-freshness --agent ${DEFAULT_WINDOWS_APP_AGENT} --apply --json`;
   }
-  return "tap app-route-freshness --agent 솔 --json";
+  return `tap app-route-freshness --agent ${DEFAULT_WINDOWS_APP_AGENT} --json`;
 }
 
 function schedulerStatusImpact(options: {
@@ -405,11 +438,15 @@ function schedulerStatusImpact(options: {
   return "none";
 }
 
-function buildWindowsAppSolSurface(
+function buildWindowsAppDefaultSurface(
   commsDir: string,
   freshMinutes: number,
 ): InfraSurfaceReport {
-  const presencePath = path.join(commsDir, "presence", "솔.json");
+  const presencePath = path.join(
+    commsDir,
+    "presence",
+    `${DEFAULT_WINDOWS_APP_AGENT}.json`,
+  );
   const presence = readJsonFile(presencePath);
   const timestamp = stringValue(presence?.timestamp);
   const { conversationId, ownerClientId } = presenceRouteTuple(presence);
@@ -562,19 +599,19 @@ function buildWindowsAppSolSurface(
   );
 
   return {
-    id: "windows-app-sol",
-    label: "Windows App 솔 consent-drive route",
-    agent: "솔",
+    id: DEFAULT_WINDOWS_APP_PROFILE,
+    label: "Windows App agent-a consent-drive route",
+    agent: DEFAULT_WINDOWS_APP_AGENT,
     surface: "windows-app",
     status,
     summary:
       status === "ready"
-        ? "Windows App 솔 route tuple is fresh."
+        ? "Windows App agent-a route tuple is fresh."
         : status === "degraded"
-          ? "Windows App 솔 route tuple is fresh but scheduled refresh is due."
+          ? "Windows App agent-a route tuple is fresh but scheduled refresh is due."
           : status === "not-observed"
-            ? "Windows App 솔 route tuple is not observed."
-            : "Windows App 솔 route tuple is blocked or stale.",
+            ? "Windows App agent-a route tuple is not observed."
+            : "Windows App agent-a route tuple is blocked or stale.",
     workerOfRecord: {
       expected: "consent-drive-ipc",
       active,
@@ -592,7 +629,7 @@ function buildWindowsAppSolSurface(
       },
       {
         label: "Inspect Windows App route readiness",
-        command: "tap ready --surface windows-app --agent 솔 --json",
+        command: `tap ready --surface windows-app --agent ${DEFAULT_WINDOWS_APP_AGENT} --json`,
       },
     ],
     source: {
@@ -632,12 +669,13 @@ function buildInfraReport(options: {
   profiles: InfraProfileId[];
   commsDir: string;
   freshMinutes: number;
+  profilePackPath: string | null;
 }): InfraStatusReport {
   const profiles = options.profiles
     .map((profileId) =>
-      profileId === "windows-app-sol"
-        ? buildWindowsAppSolSurface(options.commsDir, options.freshMinutes)
-        : buildStatusProfileSurface(profileId),
+      profileId === DEFAULT_WINDOWS_APP_PROFILE
+        ? buildWindowsAppDefaultSurface(options.commsDir, options.freshMinutes)
+        : buildStatusProfileSurface(profileId, options.profilePackPath),
     )
     .sort(
       (a, b) => compareStatus(a.status, b.status) || a.id.localeCompare(b.id),
@@ -727,14 +765,25 @@ export async function infraCommand(
 
   try {
     const repoRoot = findRepoRoot();
+    const profilePackPath =
+      typeof parsed.flags["profile-pack"] === "string"
+        ? parsed.flags["profile-pack"].trim()
+        : null;
+    if (parsed.flags["profile-pack"] === true || profilePackPath === "") {
+      throw new RangeError("Missing --profile-pack <path> value.");
+    }
+    const profilePackProfiles = profilePackPath
+      ? statusProfilesFromProfilePack(profilePackPath)
+      : [];
     const report = buildInfraReport({
-      profiles: selectedProfiles(parsed.flags.profile),
+      profiles: selectedProfiles(parsed.flags.profile, profilePackProfiles),
       commsDir: resolveCommsDir(args, repoRoot),
       freshMinutes: parsePositiveIntegerFlag(
         parsed.flags["fresh-minutes"],
         30,
         "--fresh-minutes",
       ),
+      profilePackPath,
     });
     logInfraReport(report);
     return {

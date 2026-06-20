@@ -8,6 +8,7 @@ import {
   type FlowSupervisorConfig,
   type ProfileConfig,
 } from "./status-profiles.js";
+import { findStatusProfileInProfilePack } from "./profile-pack-loader.js";
 import {
   runPollingReceiver,
   type RunPollingReceiverResult,
@@ -40,7 +41,8 @@ Description:
 
 Options:
   --agent <name>              Expected lane/author identity.
-  --lane-profile <id>         Known runtime lane profile, e.g. mac-jun-ssh-tui.
+  --lane-profile <id>         Runtime lane profile id from --profile-pack.
+  --profile-pack <path>       Load reviewed local lane profile data.
   --runtime-agent <name>      Observed runtime identity. Defaults to TAP_AGENT_NAME/CODEX_TAP_AGENT_NAME.
   --source-comms-dir <path>   Local/source comms dir. Defaults to resolved tap comms dir.
   --target-comms-dir <path>   Return-uplink target comms dir to compare/register against.
@@ -203,7 +205,7 @@ interface ActiveTurnSummary {
 interface LaneDiagnostics {
   status: LaneStatus;
   profile: string | null;
-  currentHost: "sum-back" | "mac" | "unknown";
+  currentHost: string;
   presence: {
     source: PresenceCheck;
     target: PresenceCheck;
@@ -590,10 +592,15 @@ function normalizeDirs(value: string | undefined): UplinkDir[] {
   return dirs;
 }
 
-function lookupLaneProfile(id: string | undefined): ProfileConfig | null {
+function lookupLaneProfile(
+  id: string | undefined,
+  profilePackPath: string | null,
+): ProfileConfig | null {
   if (!id) return null;
   return (
-    (AGENT_PROFILES as Record<string, ProfileConfig | undefined>)[id] ?? null
+    (AGENT_PROFILES as Record<string, ProfileConfig | undefined>)[id] ??
+    findStatusProfileInProfilePack(profilePackPath, id) ??
+    null
   );
 }
 
@@ -1170,10 +1177,8 @@ function buildStalePresenceCleanup(options: {
 }
 
 function inferCurrentHost(cwd: string): LaneDiagnostics["currentHost"] {
-  const resolved = path.resolve(cwd);
-  if (resolved.startsWith("/home/devin/")) return "sum-back";
-  if (resolved.startsWith("/Users/devin/")) return "mac";
-  return "unknown";
+  void cwd;
+  return process.env.TAP_PROFILE_HOST?.trim() || "unknown";
 }
 
 function supervisorHostMatches(
@@ -1900,9 +1905,35 @@ export async function flowDoctorCommand(
 
   const repoRoot = findRepoRoot();
   const { config } = resolveConfig({}, repoRoot);
+  const profilePackPath =
+    typeof flags["profile-pack"] === "string"
+      ? flags["profile-pack"].trim()
+      : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return {
+      ok: false,
+      command: "flow-doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: "Missing --profile-pack <path> value.",
+      warnings: [],
+      data: {} as FlowDoctorReport,
+    };
+  }
   const laneProfileId =
     stringFlag(flags, "lane-profile") ?? stringFlag(flags, "profile");
-  const laneProfile = lookupLaneProfile(laneProfileId);
+  let laneProfile: ProfileConfig | null = null;
+  try {
+    laneProfile = lookupLaneProfile(laneProfileId, profilePackPath);
+  } catch (error) {
+    return {
+      ok: false,
+      command: "flow-doctor",
+      code: "TAP_INVALID_ARGUMENT",
+      message: error instanceof Error ? error.message : String(error),
+      warnings: [],
+      data: {} as FlowDoctorReport,
+    };
+  }
   if (laneProfileId && !laneProfile) {
     return {
       ok: false,
@@ -1968,12 +1999,12 @@ export async function flowDoctorCommand(
   );
   const laneDiagnosticsEnabled = Boolean(
     laneProfile ||
-    stringFlag(flags, "presence-source-comms-dir") ||
-    stringFlag(flags, "presence-target-comms-dir") ||
-    stringFlag(flags, "keep-presence-agent") ||
-    stringFlag(flags, "keep-presence-agents") ||
-    applyPollingPresencePublish ||
-    applyStalePresenceCleanup,
+      stringFlag(flags, "presence-source-comms-dir") ||
+      stringFlag(flags, "presence-target-comms-dir") ||
+      stringFlag(flags, "keep-presence-agent") ||
+      stringFlag(flags, "keep-presence-agents") ||
+      applyPollingPresencePublish ||
+      applyStalePresenceCleanup,
   );
   const cleanupArchiveDir = stringFlag(flags, "cleanup-archive-dir")
     ? path.resolve(stringFlag(flags, "cleanup-archive-dir") as string)

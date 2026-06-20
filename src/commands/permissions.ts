@@ -8,7 +8,7 @@ import { readyCommand } from "./ready.js";
 
 const PERMISSIONS_HELP = `
 Usage:
-  tap permissions restore --backup <path> [--profile <id>] [--reload-profile <id>] [--apply]
+  tap permissions restore --backup <path> [--profile <id>] [--profile-pack <path>] [--reload-profile <id>] [--apply]
 
 Description:
   Restore a Codex permission config from a tap-managed backup.
@@ -16,6 +16,7 @@ Description:
 Options:
   --backup <path>          Required backup file under .tap-comms/backups/codex/
   --profile <id>           Optional known ready profile for reload/readiness guidance
+  --profile-pack <path>    Reviewed local profile pack for profile guidance
   --reload-profile <id>    Optional reviewed reload profile to apply after restore
   --apply                  Write the restore. Without --apply this is a dry-run.
   --help, -h               Show help
@@ -23,7 +24,7 @@ Options:
 Examples:
   tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak
   tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply
-  tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply --reload-profile sumback-yoon-appserver
+  tap permissions restore --backup .tap-comms/backups/codex/config.toml.abc.bak --apply --reload-profile <profile-id>
 `.trim();
 
 interface PermissionsRestoreData {
@@ -39,8 +40,8 @@ interface PermissionsRestoreData {
   nextActions: PermissionsNextAction[];
 }
 
-type PermissionsProfileId = "sumback-yoon" | "mac-jun-ssh-tui";
-type PermissionsReloadProfileId = "sumback-yoon-appserver";
+type PermissionsProfileId = string;
+type PermissionsReloadProfileId = string;
 
 interface PermissionsNextAction {
   label: string;
@@ -58,6 +59,7 @@ interface PermissionsReloadProfileAction {
 
 type ReloadProfileApplier = (
   profile: PermissionsReloadProfileId,
+  profilePackPath: string | null,
 ) => Promise<CommandResult>;
 
 let reloadProfileApplierForTests: ReloadProfileApplier | null = null;
@@ -104,7 +106,7 @@ function parseRestoreProfile(
 ): PermissionsProfileId | null | "invalid" {
   const value = flags.profile;
   if (value === undefined) return null;
-  if (value === "sumback-yoon" || value === "mac-jun-ssh-tui") return value;
+  if (typeof value === "string" && value.trim()) return value.trim();
   return "invalid";
 }
 
@@ -113,50 +115,65 @@ function parseReloadProfile(
 ): PermissionsReloadProfileId | null | "invalid" {
   const value = flags["reload-profile"];
   if (value === undefined) return null;
-  if (value === "sumback-yoon-appserver") return value;
+  if (typeof value === "string" && value.trim()) return value.trim();
   return "invalid";
 }
 
 function buildReloadNextActions(
   profile: PermissionsProfileId | null,
+  profilePackPath: string | null,
 ): PermissionsNextAction[] {
   if (!profile) return [];
+  const profilePackArg = profilePackPath
+    ? ` --profile-pack ${shellQuote(profilePackPath)}`
+    : "";
   return [
     {
       label: "Verify Codex profile readiness",
-      command: `tap ready --profile ${profile} --json`,
+      command: `tap ready --profile ${profile}${profilePackArg} --json`,
     },
     {
       label: "Apply reviewed ready profile after restore",
-      command: `tap ready --profile ${profile} --apply --json`,
+      command: `tap ready --profile ${profile}${profilePackArg} --apply --json`,
     },
   ];
 }
 
 function buildReloadProfileCommand(
   profile: PermissionsReloadProfileId,
+  profilePackPath: string | null,
 ): string {
-  return `tap ready --profile ${profile} --apply --json`;
+  const profilePackArg = profilePackPath
+    ? ` --profile-pack ${shellQuote(profilePackPath)}`
+    : "";
+  return `tap ready --profile ${profile}${profilePackArg} --apply --json`;
 }
 
 function buildWouldApplyReloadProfileAction(
   profile: PermissionsReloadProfileId,
+  profilePackPath: string | null,
 ): PermissionsReloadProfileAction {
   return {
     profile,
     status: "would-apply",
-    command: buildReloadProfileCommand(profile),
+    command: buildReloadProfileCommand(profile, profilePackPath),
     message: `would apply reload profile ${profile} after restore`,
   };
 }
 
 async function applyReloadProfile(
   profile: PermissionsReloadProfileId,
+  profilePackPath: string | null,
 ): Promise<CommandResult> {
   if (reloadProfileApplierForTests) {
-    return reloadProfileApplierForTests(profile);
+    return reloadProfileApplierForTests(profile, profilePackPath);
   }
-  return readyCommand(["--profile", profile, "--apply"]);
+  return readyCommand([
+    "--profile",
+    profile,
+    ...(profilePackPath ? ["--profile-pack", profilePackPath] : []),
+    "--apply",
+  ]);
 }
 
 function getCommandDataStatus(result: CommandResult): unknown {
@@ -171,19 +188,24 @@ function isReloadProfileReady(result: CommandResult): boolean {
 
 function summarizeReloadProfileAction(
   profile: PermissionsReloadProfileId,
+  profilePackPath: string | null,
   result: CommandResult,
 ): PermissionsReloadProfileAction {
   const ready = isReloadProfileReady(result);
   return {
     profile,
     status: ready ? "applied" : "failed",
-    command: buildReloadProfileCommand(profile),
+    command: buildReloadProfileCommand(profile, profilePackPath),
     message: ready
       ? `applied reload profile ${profile}: ${result.message}`
       : `failed to apply reload profile ${profile}: ${result.message}`,
     resultCode: result.code,
     resultStatus: getCommandDataStatus(result),
   };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function assertTapManagedCodexBackup(
@@ -247,14 +269,21 @@ export async function permissionsCommand(
   const profile = parseRestoreProfile(flags);
   if (profile === "invalid") {
     return invalidArgument(
-      "Invalid --profile: expected sumback-yoon or mac-jun-ssh-tui.",
+      "Invalid --profile: expected a reviewed local permissions profile id.",
     );
   }
   const reloadProfile = parseReloadProfile(flags);
   if (reloadProfile === "invalid") {
     return invalidArgument(
-      "Invalid --reload-profile: expected sumback-yoon-appserver.",
+      "Invalid --reload-profile: expected a reviewed local reload profile id.",
     );
+  }
+  const profilePackPath =
+    typeof flags["profile-pack"] === "string"
+      ? flags["profile-pack"].trim()
+      : null;
+  if (flags["profile-pack"] === true || profilePackPath === "") {
+    return invalidArgument("Missing --profile-pack <path> value.");
   }
 
   const targetPath = getCodexConfigPath();
@@ -270,7 +299,7 @@ export async function permissionsCommand(
     profile,
     reloadProfile,
     reloadProfileAction: reloadProfile
-      ? buildWouldApplyReloadProfileAction(reloadProfile)
+      ? buildWouldApplyReloadProfileAction(reloadProfile, profilePackPath)
       : null,
     nextActions: [],
   };
@@ -299,12 +328,16 @@ export async function permissionsCommand(
   fs.renameSync(tmp, targetPath);
   data.restored = true;
   data.runtimeReloadRequired = true;
-  data.nextActions = buildReloadNextActions(profile);
+  data.nextActions = buildReloadNextActions(profile, profilePackPath);
 
   if (reloadProfile) {
-    const reloadResult = await applyReloadProfile(reloadProfile);
+    const reloadResult = await applyReloadProfile(
+      reloadProfile,
+      profilePackPath,
+    );
     data.reloadProfileAction = summarizeReloadProfileAction(
       reloadProfile,
+      profilePackPath,
       reloadResult,
     );
     if (!isReloadProfileReady(reloadResult)) {

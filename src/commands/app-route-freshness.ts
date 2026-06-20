@@ -14,16 +14,16 @@ import { windowsRouteRecoverCommand } from "./windows-route-recover.js";
 
 const HELP = `
 Usage:
-  tap app-route-freshness [--agent 솔] [--apply] [--watch] [--json]
+  tap app-route-freshness [--agent agent-a] [--apply] [--watch] [--json]
 
 Description:
   Keep a Codex App consent-drive route fresh before durable presence TTL expiry.
-  The first slice targets the Windows App 솔 profile and reuses the guarded
-  Windows route recovery primitive for target-local IPC observation, selected
+  This uses the guarded Windows route recovery primitive for target-local IPC
+  observation, selected
   presence refresh, and configured-SSOT publish.
 
 Options:
-  --agent <name>              App route agent. Default: 솔.
+  --agent <name>              App route agent. Default: agent-a.
   --fresh-minutes <n>         Durable presence freshness window. Default: 30.
   --threshold-ratio <n>       Refresh when route age reaches this share of TTL. Default: 0.75.
   --apply                    Refresh/publish when the guarded plan is due.
@@ -255,13 +255,12 @@ function invalid(message: string): CommandResult<FreshnessReport> {
 }
 
 function profileId(agent: string): string {
-  return agent === "솔" ? "windows-app-sol" : `windows-app-${agent}`;
+  return `windows-app-${safeAgentLabel(agent)}`;
 }
 
 function safeAgentLabel(agent: string): string {
-  if (agent === "솔") return "sol";
   const safe = agent
-    .normalize("NFKD")
+    .normalize("NFKC")
     .replace(/[^\p{L}\p{N}_-]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
@@ -323,7 +322,7 @@ function parseOptions(
   args: string[],
 ): ParsedOptions | CommandResult<FreshnessReport> {
   const parsed = parseArgs(args);
-  const agent = stringFlag(parsed.flags.agent, "솔", "--agent");
+  const agent = stringFlag(parsed.flags.agent, "agent-a", "--agent");
   if (!agent.ok) return invalid(agent.message);
   const freshMinutes = positiveIntegerFlag(
     parsed.flags["fresh-minutes"],
@@ -648,7 +647,7 @@ function nextActionsFor(
     ];
   }
   return [
-    "inspect tap windows-route-recover --agent 솔 --json for target-local route details",
+    `inspect tap windows-route-recover --agent ${options.agent} --json for target-local route details`,
   ];
 }
 
